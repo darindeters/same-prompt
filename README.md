@@ -72,3 +72,58 @@ Note: Claude, Codex and Grok ran this one under the earlier 15-minute cap. All f
 | Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 3:21 | [open](https://darindeters.github.io/same-prompt/lighthouse/codex/) |
 | Gemini (4 Argon) | Antigravity CLI 1.4.5 | 4:53 | [open](https://darindeters.github.io/same-prompt/lighthouse/gemini/) |
 | Grok (4.7) | Grok Build 1.0.62 | 24:12 | [open](https://darindeters.github.io/same-prompt/lighthouse/grok/) |
+
+## Fireworks Over a City
+
+> Build a fireworks show over a city skyline at night, with bursts of different shapes and colors reflected in a river, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 5:06 | [open](https://darindeters.github.io/same-prompt/fireworks/claude/) |
+| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 1:52 | [open](https://darindeters.github.io/same-prompt/fireworks/codex/) |
+| Gemini (4 Argon) | Antigravity CLI 1.4.5 | 3:42 | [open](https://darindeters.github.io/same-prompt/fireworks/gemini/) |
+| Grok (4.7) | Grok Build 1.0.62 | 29:17 | [open](https://darindeters.github.io/same-prompt/fireworks/grok/) |
+
+## Coral Reef Aquarium
+
+> Build a coral reef aquarium with a school of fish that swims together, turns, and scatters, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 4:35 | [open](https://darindeters.github.io/same-prompt/aquarium/claude/) |
+| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:36 | [open](https://darindeters.github.io/same-prompt/aquarium/codex/) |
+| Gemini (4 Argon) | Antigravity CLI 1.4.5 | 3:56 | [open](https://darindeters.github.io/same-prompt/aquarium/gemini/) |
+| Grok (4.7) | Grok Build 1.0.62 | 21:36 | [open](https://darindeters.github.io/same-prompt/aquarium/grok/) |
+
+## Volcano Eruption
+
+> Build a volcano erupting at night, with lava fountains, glowing lava flowing down its slopes, and ash clouds, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 4:13 | [open](https://darindeters.github.io/same-prompt/volcano/claude/) |
+| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:37 | [open](https://darindeters.github.io/same-prompt/volcano/codex/) |
+| Gemini (4 Argon) | Antigravity CLI 1.4.5 | 4:16 | [open](https://darindeters.github.io/same-prompt/volcano/gemini/) |
+| Grok (4.7) | Grok Build 1.0.62 | 14:43 | [open](https://darindeters.github.io/same-prompt/volcano/grok/) |
+
+## Solar System
+
+> Build the solar system with the sun and all eight planets orbiting it, seen from a slowly moving camera, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 2:02 | [open](https://darindeters.github.io/same-prompt/solar-system/claude/) |
+| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:16 | [open](https://darindeters.github.io/same-prompt/solar-system/codex/) |
+| Gemini (4 Argon) | Antigravity CLI 1.4.5 | 3:50 | [open](https://darindeters.github.io/same-prompt/solar-system/gemini/) |
+| Grok (4.7) | Grok Build 1.0.62 | 28:12 | [open](https://darindeters.github.io/same-prompt/solar-system/grok/) |
+
+## Rubik's Cube Solving Itself
+
+> Build a 3D Rubik's cube that scrambles itself and then solves itself, one turn at a time, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 3:39 | [open](https://darindeters.github.io/same-prompt/rubiks/claude/) |
+| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 1:49 | [open](https://darindeters.github.io/same-prompt/rubiks/codex/) |
+| Gemini (4 Argon) | Antigravity CLI 1.4.5 | 3:00 | [open](https://darindeters.github.io/same-prompt/rubiks/gemini/) |
+| Grok (4.7) | Grok Build 1.0.62 | 24:01 | [open](https://darindeters.github.io/same-prompt/rubiks/grok/) |

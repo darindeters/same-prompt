@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10151e">
+  <title>Cube</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    body {
+      background: #10151e;
+      background: radial-gradient(ellipse at 49% 38%, #303e50 0%, #1b2533 36%, #10151e 72%);
+    }
+    .stage {
+      position: absolute;
+      inset: 0;
+      perspective: 1800px;
+      perspective-origin: 50% 44%;
+    }
+    .halo {
+      position: absolute;
+      width: 76vmin;
+      height: 76vmin;
+      left: 50%;
+      top: 47%;
+      transform: translate(-50%, -50%);
+      border-radius: 50%;
+      background: radial-gradient(circle, #6692b514, #6692b506 55%, transparent 71%);
+      filter: blur(24px);
+    }
+    .shadow {
+      position: absolute;
+      left: 50%;
+      top: 77%;
+      width: 54vmin;
+      height: 9vmin;
+      transform: translate(-50%, -50%);
+      border-radius: 50%;
+      background: radial-gradient(ellipse, #0009, #0004 42%, transparent 72%);
+      filter: blur(15px);
+      animation: shadow-breathe 9s ease-in-out infinite;
+    }
+    .float, .view, .cube, .slice, .cubie {
+      position: absolute;
+      width: 0;
+      height: 0;
+      transform-style: preserve-3d;
+    }
+    .float { left: 50%; top: 47%; animation: hover 9s ease-in-out infinite; }
+    .view { transform: rotateX(-24deg) rotateY(-34deg); }
+    .face {
+      position: absolute;
+      left: calc(var(--unit) * -.5);
+      top: calc(var(--unit) * -.5);
+      width: var(--unit);
+      height: var(--unit);
+      padding: calc(var(--unit) * .055);
+      border: 1px solid #06090e;
+      border-radius: calc(var(--unit) * .075);
+      background: linear-gradient(135deg, #20252d, #080c12 78%);
+      backface-visibility: hidden;
+    }
+    .sticker {
+      width: 100%;
+      height: 100%;
+      border-radius: 12%;
+      background: var(--color);
+      background-image: linear-gradient(140deg, #ffffff36, transparent 45%, #0000001f);
+      box-shadow: inset 0 1px 2px #ffffff65, inset 0 -2px 3px #0003, 0 1px 3px #0009;
+    }
+    .front { transform: translateZ(calc(var(--unit) * .5)); }
+    .back { transform: rotateY(180deg) translateZ(calc(var(--unit) * .5)); }
+    .right { transform: rotateY(90deg) translateZ(calc(var(--unit) * .5)); }
+    .left { transform: rotateY(-90deg) translateZ(calc(var(--unit) * .5)); }
+    .up { transform: rotateX(90deg) translateZ(calc(var(--unit) * .5)); }
+    .down { transform: rotateX(-90deg) translateZ(calc(var(--unit) * .5)); }
+    @keyframes hover {
+      0%, 100% { transform: translateY(-7px); }
+      50% { transform: translateY(7px); }
+    }
+    @keyframes shadow-breathe {
+      0%, 100% { opacity: .65; scale: .94; }
+      50% { opacity: .9; scale: 1.04; }
+    }
+  </style>
+</head>
+<body>
+  <div class="halo" aria-hidden="true"></div>
+  <div class="shadow" aria-hidden="true"></div>
+  <main class="stage" role="img" aria-label="An animated three-dimensional Rubik's cube continuously scrambles and solves itself.">
+    <div class="float"><div class="view"><div class="cube" id="cube"></div></div></div>
+  </main>
+  <script>
+    'use strict';
+    const cube = document.getElementById('cube');
+    const cubies = [];
+    const identity = () => [1, 0, 0, 0, 1, 0, 0, 0, 1];
+    const faces = [
+      { name: 'front', axis: 2, side: 1, color: '#20bf91' },
+      { name: 'back', axis: 2, side: -1, color: '#3289ed' },
+      { name: 'right', axis: 0, side: 1, color: '#f45453' },
+      { name: 'left', axis: 0, side: -1, color: '#ff963c' },
+      { name: 'up', axis: 1, side: -1, color: '#f3f2e9' },
+      { name: 'down', axis: 1, side: 1, color: '#ffd34d' }
+    ];
+    let unit;
+
+    function resize() {
+      unit = Math.min(innerWidth, innerHeight) * .145;
+      document.documentElement.style.setProperty('--unit', unit + 'px');
+      document.querySelector('.stage').style.perspective = Math.min(innerWidth, innerHeight) * 2.8 + 'px';
+      cubies.forEach(render);
+    }
+
+    // State uses exact integer coordinates and rotation matrices. No accumulated
+    // floating-point rotations can leave gaps after repeated scramble/solve cycles.
+    function render(cubie) {
+      const m = cubie.orientation;
+      const p = cubie.position.map(n => n * unit);
+      cubie.element.style.transform = `matrix3d(${[
+        m[0], m[3], m[6], 0,
+        m[1], m[4], m[7], 0,
+        m[2], m[5], m[8], 0,
+        p[0], p[1], p[2], 1
+      ].join(',')})`;
+    }
+
+    function multiply(a, b) {
+      return a.map((_, i) => {
+        const row = Math.floor(i / 3), col = i % 3;
+        return a[row * 3] * b[col] + a[row * 3 + 1] * b[col + 3] + a[row * 3 + 2] * b[col + 6];
+      });
+    }
+
+    function rotateVector(m, p) {
+      return [0, 1, 2].map(row => m[row * 3] * p[0] + m[row * 3 + 1] * p[1] + m[row * 3 + 2] * p[2]);
+    }
+
+    function rotation(axis, direction) {
+      const d = direction;
+      return [
+        [1, 0, 0, 0, 0, -d, 0, d, 0],
+        [0, 0, d, 0, 1, 0, -d, 0, 0],
+        [0, -d, 0, d, 0, 0, 0, 0, 1]
+      ][axis];
+    }
+
+    for (let x = -1; x <= 1; x++) {
+      for (let y = -1; y <= 1; y++) {
+        for (let z = -1; z <= 1; z++) {
+          if (x === 0 && y === 0 && z === 0) continue;
+          const position = [x, y, z];
+          const element = document.createElement('div');
+          element.className = 'cubie';
+          for (const face of faces) {
+            const surface = document.createElement('div');
+            surface.className = 'face ' + face.name;
+            if (position[face.axis] === face.side) {
+              const sticker = document.createElement('div');
+              sticker.className = 'sticker';
+              sticker.style.setProperty('--color', face.color);
+              surface.appendChild(sticker);
+            }
+            element.appendChild(surface);
+          }
+          const cubie = { element, position, orientation: identity() };
+          cubies.push(cubie);
+          cube.appendChild(element);
+        }
+      }
+    }
+
+    const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+    async function turn(move, duration) {
+      const slice = document.createElement('div');
+      slice.className = 'slice';
+      cube.appendChild(slice);
+      const selected = cubies.filter(cubie => cubie.position[move.axis] === move.side);
+      selected.forEach(cubie => slice.appendChild(cubie.element));
+      const axisName = ['X', 'Y', 'Z'][move.axis];
+      const animation = slice.animate([
+        { transform: `rotate${axisName}(0deg)` },
+        { transform: `rotate${axisName}(${move.direction * 90}deg)` }
+      ], { duration, easing: 'cubic-bezier(.4, 0, .18, 1)', fill: 'forwards' });
+      await animation.finished;
+      const matrix = rotation(move.axis, move.direction);
+      for (const cubie of selected) {
+        cubie.position = rotateVector(matrix, cubie.position);
+        cubie.orientation = multiply(matrix, cubie.orientation);
+        cube.appendChild(cubie.element);
+        render(cubie);
+      }
+      animation.cancel();
+      slice.remove();
+    }
+
+    function scramble() {
+      const moves = [];
+      for (let i = 0; i < 24; i++) {
+        // Different consecutive axes keep the scramble varied and legible.
+        let axis;
+        do { axis = Math.floor(Math.random() * 3); }
+        while (moves.length && axis === moves[moves.length - 1].axis);
+        moves.push({ axis, side: Math.random() < .5 ? -1 : 1, direction: Math.random() < .5 ? -1 : 1 });
+      }
+      return moves;
+    }
+
+    async function run() {
+      while (true) {
+        const moves = scramble();
+        for (const move of moves) {
+          await turn(move, 440);
+          await pause(95);
+        }
+        await pause(900);
+        // Reversing the scramble gives an exact solution using legal face turns.
+        for (const move of moves.slice().reverse()) {
+          await turn({ ...move, direction: -move.direction }, 560);
+          await pause(130);
+        }
+        await pause(2400);
+      }
+    }
+
+    resize();
+    addEventListener('resize', resize);
+    run();
+  </script>
+</body>
+</html>

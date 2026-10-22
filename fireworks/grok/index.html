@@ -1,0 +1,1535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fireworks</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #000;
+    overflow: hidden;
+  }
+  canvas {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<script>
+'use strict';
+
+const PAL = {
+  gold: ['#ffc233', '#fff1b4', '#fff8e2'],
+  crimson: ['#ff2d4a', '#ffb3a8', '#fff1ee'],
+  pink: ['#ff4ec6', '#ffc0ea', '#fff0fa'],
+  blue: ['#3ec6ff', '#dff5ff', '#ffffff'],
+  green: ['#35e08a', '#c9ffdf', '#f3fff8'],
+  violet: ['#b56bff', '#ead6ff', '#ffffff'],
+  orange: ['#ff7a2a', '#ffd0aa', '#fff2e6'],
+  silver: ['#e7f0ff', '#ffffff', '#fff6d0'],
+  teal: ['#2ee0c8', '#d5fff6', '#ffffff'],
+  carnival: ['#ff3b5c', '#ffd84a', '#fff6d4']
+};
+
+const KINDS = [
+  ['peony', 5], ['chrys', 5], ['willow', 4], ['kamuro', 3],
+  ['ring', 3], ['saturn', 2], ['star', 3], ['heart', 3],
+  ['sparkle', 2], ['palm', 3], ['cross', 3], ['crackle', 2],
+  ['spiral', 2], ['rainbow', 2]
+];
+const KIND_SUM = KINDS.reduce((s, k) => s + k[1], 0);
+
+const WIN_NEAR = ['#ffc56a', '#ffc56a', '#ffc56a', '#ffe0a8', '#fff4d2', '#fffaf0', '#9fd0ff'];
+const WIN_FAR = ['#c48a48', '#e0b57a', '#f0d2a4'];
+
+const MAX_PARTS = 2600;
+
+let dpr = 1, W = 1, H = 1, S = 1, waterline = 1, waterH = 1;
+let view, vctx, scene, sctx, city, cctx;
+let parts = [];
+let free = [];
+let rockets = [];
+let flashes = [];
+let launches = [];
+let stars = [];
+let flickers = [];
+let beacons = [];
+let boats = [];
+let simTime = 0;
+let nextLaunch = 0;
+let nextSalvo = 0;
+let lastTs = 0;
+let bridge0 = 0;
+let bridge1 = 0;
+
+const spriteCache = new Map();
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0;
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function hexAlpha(hex, a) {
+  const [r, g, b] = hexToRgb(hex);
+  return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
+}
+
+function hexShift(hex, d) {
+  const [r, g, b] = hexToRgb(hex);
+  const c = (v) => Math.max(0, Math.min(255, v + d));
+  const rr = c(r), gg = c(g), bb = c(b);
+  return '#' + ((1 << 24) + (rr << 16) + (gg << 8) + bb).toString(16).slice(1);
+}
+
+function toTransparent(color) {
+  if (color.charAt(0) === '#') return hexAlpha(color, 0);
+  const m = color.match(/hsl\(\s*([\d.]+)\s*,\s*([\d.]+)%\s*,\s*([\d.]+)%\s*\)/);
+  if (m) return 'hsla(' + m[1] + ',' + m[2] + '%,' + m[3] + '%,0)';
+  return 'rgba(255,255,255,0)';
+}
+
+function spriteFor(color) {
+  let cnv = spriteCache.get(color);
+  if (cnv) return cnv;
+  const size = 64;
+  cnv = document.createElement('canvas');
+  cnv.width = size;
+  cnv.height = size;
+  const g = cnv.getContext('2d');
+  const r = size / 2;
+  const grd = g.createRadialGradient(r, r, 0, r, r, r);
+  const fade = toTransparent(color);
+  grd.addColorStop(0, '#ffffff');
+  grd.addColorStop(0.07, '#ffffff');
+  grd.addColorStop(0.18, color);
+  grd.addColorStop(0.4, color);
+  grd.addColorStop(1, fade);
+  g.fillStyle = grd;
+  g.fillRect(0, 0, size, size);
+  spriteCache.set(color, cnv);
+  return cnv;
+}
+
+function tune(ctx) {
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'medium';
+}
+
+function drawGlow(ctx, x, y, color, radius, alpha) {
+  if (alpha < 0.02 || radius < 0.4) return;
+  const sp = spriteFor(color);
+  const d = radius * 2;
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(sp, x - radius, y - radius, d, d);
+}
+
+function weightedKind() {
+  let r = Math.random() * KIND_SUM;
+  for (let i = 0; i < KINDS.length; i++) {
+    r -= KINDS[i][1];
+    if (r <= 0) return KINDS[i][0];
+  }
+  return 'peony';
+}
+
+function paletteFor(kind) {
+  const pref = {
+    heart: 'pink', star: 'gold', sparkle: 'silver', kamuro: 'gold',
+    willow: 'gold', palm: 'orange', saturn: 'blue', ring: 'blue',
+    spiral: 'violet', crackle: 'carnival', cross: 'crimson',
+    rainbow: 'silver', peony: 'crimson', chrys: 'gold'
+  };
+  const keys = Object.keys(PAL);
+  if (pref[kind] && Math.random() < 0.78) return PAL[pref[kind]];
+  return PAL[keys[(Math.random() * keys.length) | 0]];
+}
+
+function randomSpec(kind) {
+  kind = kind || weightedKind();
+  const pal = paletteFor(kind);
+  const scale = 0.74 + Math.random() * 0.46;
+  const x = W * (0.1 + Math.random() * 0.8);
+  const y = H * (0.055 + Math.random() * 0.16);
+  let follow = null;
+  let pal2 = null;
+  if ((kind === 'peony' || kind === 'chrys' || kind === 'rainbow') && Math.random() < 0.34) {
+    follow = Math.random() < 0.5 ? 'sparkle' : 'ring';
+    pal2 = Math.random() < 0.5 ? PAL.gold : PAL.silver;
+  }
+  return { kind, pal, scale, x, y, follow, pal2, instant: false, dur: 0 };
+}
+
+function takeParticle() {
+  const p = free.pop();
+  if (p) return p;
+  return { hx: new Float32Array(16), hy: new Float32Array(16) };
+}
+
+function fire(o) {
+  if (parts.length >= MAX_PARTS) return;
+  const p = takeParticle();
+  p.x = o.x;
+  p.y = o.y;
+  p.vx = o.vx;
+  p.vy = o.vy;
+  p.life = o.life;
+  p.max = o.life;
+  p.g = o.g;
+  p.damp = o.damp;
+  p.size = o.size;
+  p.color = o.color;
+  p.flicker = o.flicker || 0;
+  p.trail = o.trail || 0;
+  p.glitter = o.glitter || 0;
+  p.split = o.split || 0;
+  p.splitDone = 0;
+  p.seed = Math.random() * 40;
+  p.hn = 0;
+  parts.push(p);
+}
+
+function burstSplit(p, n, speed, life, color) {
+  const ang0 = Math.atan2(p.vy, p.vx);
+  for (let i = 0; i < n; i++) {
+    if (parts.length >= MAX_PARTS) return;
+    const a = ang0 + (i / n) * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
+    fire({
+      x: p.x,
+      y: p.y,
+      vx: p.vx * 0.2 + Math.cos(a) * speed,
+      vy: p.vy * 0.2 + Math.sin(a) * speed,
+      life: life * (0.75 + Math.random() * 0.4),
+      g: p.g * 0.8,
+      damp: 1.6,
+      size: Math.max(2.2 * S, p.size * 0.62),
+      color: color,
+      flicker: 1
+    });
+  }
+}
+
+function stepOne(p, dt) {
+  if (p.life <= 0) return;
+  const decay = Math.exp(-p.damp * dt);
+  p.vx *= decay;
+  p.vy *= decay;
+  p.vy += p.g * dt;
+  p.vx += Math.sin(simTime * 0.17) * 10 * S * dt;
+  if (p.trail) {
+    const cap = 16;
+    if (p.hn < cap) p.hn++;
+    for (let k = p.hn - 1; k > 0; k--) {
+      p.hx[k] = p.hx[k - 1];
+      p.hy[k] = p.hy[k - 1];
+    }
+    p.hx[0] = p.x;
+    p.hy[0] = p.y;
+  }
+  p.x += p.vx * dt;
+  p.y += p.vy * dt;
+  p.life -= dt;
+  if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) p.life = 0;
+  if (p.glitter && parts.length < 1900 && Math.random() < dt * p.glitter) {
+    fire({
+      x: p.x,
+      y: p.y,
+      vx: (Math.random() - 0.5) * 26 * S,
+      vy: (Math.random() - 0.5) * 26 * S + 12 * S,
+      life: 0.22 + Math.random() * 0.28,
+      g: 40 * S,
+      damp: 1.5,
+      size: (3.2 + Math.random() * 2.2) * S,
+      color: Math.random() < 0.55 ? '#fff6d0' : p.color,
+      flicker: 1
+    });
+  }
+  const age = 1 - p.life / p.max;
+  if (!p.splitDone && p.split === 1 && age > 0.42) {
+    p.splitDone = 1;
+    burstSplit(p, 6, 110 * S, 0.48, p.color);
+    p.life = 0;
+  } else if (!p.splitDone && p.split === 2 && age > 0.74) {
+    p.splitDone = 1;
+    burstSplit(p, 5, 170 * S, 0.3, '#ffffff');
+  }
+}
+
+function removeAt(i) {
+  const p = parts[i];
+  const last = parts.pop();
+  if (i < parts.length) parts[i] = last;
+  p.hn = 0;
+  free.push(p);
+}
+
+function updateParticles(dt) {
+  for (let i = 0; i < parts.length; i++) stepOne(parts[i], dt);
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (parts[i].life <= 0) removeAt(i);
+  }
+}
+
+function explode(x, y, kind, pal, scale) {
+  flashes.push({
+    x: x, y: y,
+    life: 0.28, max: 0.28,
+    color: pal[2] || '#ffffff',
+    r: (16 + 18 * scale) * S
+  });
+  const spd = 500 * S * scale;
+  const shapeV = 470 * S * scale;
+  const main = pal[0];
+  const alt = pal[1];
+  const hot = pal[2];
+
+  function shell(ang, mag, opt) {
+    const j = opt.j || 0;
+    const a = ang + (Math.random() - 0.5) * j;
+    fire({
+      x: x, y: y,
+      vx: Math.cos(a) * mag,
+      vy: Math.sin(a) * mag,
+      life: opt.life * (0.9 + Math.random() * 0.18),
+      g: opt.g,
+      damp: opt.damp,
+      size: opt.size * (0.8 + Math.random() * 0.45),
+      color: opt.color,
+      flicker: opt.flicker || 0,
+      trail: opt.trail || 0,
+      glitter: opt.glitter || 0,
+      split: opt.split || 0
+    });
+  }
+
+  function radial(n, mag, opt) {
+    const vary = opt.vary || 0;
+    const scale = opt.spread || 1;
+    for (let i = 0; i < n; i++) {
+      const m = mag * scale * (1 + (Math.random() - 0.5) * vary);
+      shell((i / n) * Math.PI * 2, m, opt);
+    }
+  }
+
+  function poly(spikes, inner, per, mag, opt) {
+    const pts = [];
+    for (let i = 0; i < spikes; i++) {
+      const oa = -Math.PI / 2 + (i * 2 * Math.PI) / spikes;
+      const ia = oa + Math.PI / spikes;
+      pts.push([Math.cos(oa), Math.sin(oa)]);
+      pts.push([Math.cos(ia) * inner, Math.sin(ia) * inner]);
+    }
+    for (let e = 0; e < pts.length; e++) {
+      const a = pts[e];
+      const b = pts[(e + 1) % pts.length];
+      for (let i = 0; i < per; i++) {
+        const t = i / per;
+        const nx = a[0] + (b[0] - a[0]) * t;
+        const ny = a[1] + (b[1] - a[1]) * t;
+        const jitter = 0.96 + Math.random() * 0.08;
+        const tip = (e % 2 === 0) && (t < 0.12 || t > 0.88);
+        fire({
+          x: x, y: y,
+          vx: nx * mag * jitter,
+          vy: ny * mag * jitter,
+          life: opt.life * (0.92 + Math.random() * 0.12),
+          g: opt.g,
+          damp: opt.damp,
+          size: opt.size * (0.85 + Math.random() * 0.3),
+          color: tip ? hot : (i % 5 === 0 ? alt : main),
+          flicker: Math.random() < 0.35 ? 1 : 0
+        });
+      }
+    }
+  }
+
+  if (kind === 'peony' || kind === 'chrys' || kind === 'crackle' || kind === 'cross') {
+    const chrys = kind === 'chrys';
+    const n = chrys ? 150 : kind === 'cross' ? 44 : kind === 'crackle' ? 86 : 120;
+    const life = kind === 'cross' ? 1.25 : chrys ? 2.05 : 1.85;
+    radial(n, spd * (kind === 'cross' ? 0.85 : 1), {
+      life: life,
+      g: (chrys ? 62 : 78) * S,
+      damp: kind === 'cross' ? 2.2 : 2.7,
+      size: (kind === 'cross' ? 13 : chrys ? 8.5 : 9.5) * S,
+      color: main,
+      flicker: chrys || kind === 'cross' ? 1 : 0,
+      trail: chrys ? 1 : 0,
+      glitter: chrys ? 0.28 : 0,
+      split: kind === 'cross' ? 1 : kind === 'crackle' ? 2 : 0,
+      spread: 0.82 + Math.random() * 0.22,
+      vary: kind === 'cross' ? 0.1 : chrys ? 0.62 : kind === 'crackle' ? 0.4 : 0.5,
+      j: 0.05
+    });
+    if (kind === 'peony' || chrys) {
+      radial(36, spd * 0.38, {
+        life: life * 0.85,
+        g: 70 * S,
+        damp: 2.4,
+        size: 7 * S,
+        color: hot,
+        j: 0.2,
+        spread: 0.7 + Math.random() * 0.5
+      });
+    }
+    return;
+  }
+
+  if (kind === 'rainbow') {
+    const n = 140;
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      const hue = (Math.round(((a * 180 / Math.PI) + 360) % 360 / 8) * 8);
+      shell(a, spd * (0.86 + Math.random() * 0.2), {
+        life: 1.9,
+        g: 68 * S,
+        damp: 2.6,
+        size: 9 * S,
+        color: 'hsl(' + hue + ',100%,62%)',
+        flicker: Math.random() < 0.3 ? 1 : 0,
+        j: 0.02
+      });
+    }
+    return;
+  }
+
+  if (kind === 'willow' || kind === 'kamuro') {
+    const kam = kind === 'kamuro';
+    const n = kam ? 190 : 100;
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const mag = (kam ? 175 : 210) * S * scale * (0.35 + Math.random() * 0.75);
+      fire({
+        x: x, y: y,
+        vx: Math.cos(a) * mag,
+        vy: Math.sin(a) * mag - (kam ? 30 : 10) * S,
+        life: (kam ? 3.05 : 2.55) * (0.85 + Math.random() * 0.25),
+        g: (kam ? 150 : 185) * S,
+        damp: kam ? 0.85 : 1.05,
+        size: (kam ? 6.4 : 7.2) * S * (0.75 + Math.random() * 0.5),
+        color: Math.random() < 0.18 ? hot : Math.random() < 0.25 ? alt : main,
+        flicker: Math.random() < 0.45 ? 1 : 0,
+        trail: 1,
+        glitter: kam ? 0.22 : 0.12
+      });
+    }
+    return;
+  }
+
+  if (kind === 'ring' || kind === 'saturn') {
+    const ringCol = (kind === 'saturn' && main === PAL.gold[0]) ? PAL.blue[0] : main;
+    const coreCol = kind === 'saturn' ? PAL.gold[0] : alt;
+    radial(kind === 'saturn' ? 120 : 100, shapeV, {
+      life: 2.35,
+      g: 34 * S,
+      damp: 2.45,
+      size: 7.2 * S,
+      color: ringCol,
+      flicker: 1,
+      j: 0.012,
+      spread: 0.98,
+      vary: 0.05
+    });
+    radial(kind === 'saturn' ? 70 : 48, shapeV * (kind === 'saturn' ? 0.72 : 0.62), {
+      life: 2.35,
+      g: 34 * S,
+      damp: 2.45,
+      size: 6.2 * S,
+      color: alt,
+      j: 0.02,
+      spread: 1,
+      vary: 0.06
+    });
+    if (kind === 'saturn') {
+      radial(48, shapeV * 0.22, {
+        life: 1.7,
+        g: 48 * S,
+        damp: 2.2,
+        size: 8 * S,
+        color: coreCol,
+        j: 0.4,
+        spread: 0.5 + Math.random() * 0.8
+      });
+    }
+    return;
+  }
+
+  if (kind === 'star') {
+    poly(5, 0.4, 18, shapeV, { life: 2.4, g: 36 * S, damp: 2.35, size: 6.6 * S });
+    poly(5, 0.4, 10, shapeV * 0.82, { life: 2.3, g: 36 * S, damp: 2.35, size: 5.2 * S });
+    return;
+  }
+
+  if (kind === 'sparkle') {
+    poly(4, 0.18, 16, shapeV * 0.95, { life: 2.15, g: 32 * S, damp: 2.4, size: 6.4 * S });
+    radial(24, shapeV * 0.18, {
+      life: 1.5, g: 40 * S, damp: 2.2, size: 6 * S, color: hot, j: 0.5, spread: 1
+    });
+    return;
+  }
+
+  if (kind === 'heart') {
+    const n = 200;
+    for (let i = 0; i < n; i++) {
+      const t = (i / n) * Math.PI * 2;
+      const mathY = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+      const nx = Math.sin(t) ** 3;
+      const ny = -mathY / 17;
+      const layer = i < 140 ? 1 : 0.72;
+      const j = 0.95 + Math.random() * 0.1;
+      fire({
+        x: x, y: y,
+        vx: nx * shapeV * layer * j,
+        vy: ny * shapeV * layer * j,
+        life: 2.45 * (0.92 + Math.random() * 0.1),
+        g: 34 * S,
+        damp: 2.3,
+        size: (layer === 1 ? 6.3 : 5.2) * S,
+        color: Math.random() < 0.14 ? hot : (layer === 1 ? main : alt),
+        flicker: Math.random() < 0.3 ? 1 : 0
+      });
+    }
+    for (let i = 0; i < 36; i++) {
+      const t = Math.random() * Math.PI * 2;
+      const mathY = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+      const nx = Math.sin(t) ** 3;
+      const ny = -mathY / 17;
+      const m = 0.2 + Math.random() * 0.55;
+      fire({
+        x: x, y: y,
+        vx: nx * shapeV * m,
+        vy: ny * shapeV * m,
+        life: 2.1,
+        g: 34 * S,
+        damp: 2.3,
+        size: 5 * S,
+        color: alt,
+        flicker: 1
+      });
+    }
+    return;
+  }
+
+  if (kind === 'palm') {
+    const arms = 8 + ((Math.random() * 3) | 0);
+    for (let a = 0; a < arms; a++) {
+      const ang = -Math.PI / 2 + (a / (arms - 1) - 0.5) * 2.15;
+      const dots = 16;
+      for (let k = 0; k < dots; k++) {
+        const sp = shapeV * (0.28 + 0.72 * (k / (dots - 1)));
+        const spread = (Math.random() - 0.5) * 0.09;
+        fire({
+          x: x, y: y,
+          vx: Math.cos(ang + spread) * sp,
+          vy: Math.sin(ang + spread) * sp,
+          life: 2.15 * (0.85 + Math.random() * 0.25),
+          g: 125 * S,
+          damp: 1.15,
+          size: 6.8 * S,
+          color: Math.random() < 0.2 ? hot : main,
+          trail: 1,
+          flicker: Math.random() < 0.4 ? 1 : 0
+        });
+      }
+    }
+    return;
+  }
+
+  if (kind === 'spiral') {
+    const arms = 2;
+    const dots = 78;
+    for (let arm = 0; arm < arms; arm++) {
+      for (let i = 0; i < dots; i++) {
+        const t = i / (dots - 1);
+        const ang = arm * Math.PI + t * Math.PI * 3.4;
+        const rad = 0.18 + 0.82 * t;
+        fire({
+          x: x, y: y,
+          vx: Math.cos(ang) * rad * shapeV,
+          vy: Math.sin(ang) * rad * shapeV,
+          life: 2.3,
+          g: 30 * S,
+          damp: 2.15,
+          size: 6 * S,
+          color: i % 2 === 0 ? main : alt,
+          flicker: 1
+        });
+      }
+    }
+  }
+}
+
+function startRocket(L) {
+  const dur = L.dur || (0.88 + Math.random() * 0.38);
+  const x1 = Math.max(30 * S, Math.min(W - 30 * S, L.x));
+  const y1 = Math.max(36 * S, Math.min(waterline - 90 * S, L.y));
+  let x0 = x1 + (Math.random() - 0.5) * W * 0.16;
+  x0 = Math.max(10 * S, Math.min(W - 10 * S, x0));
+  rockets.push({
+    x0: x0,
+    y0: waterline - S,
+    x1: x1,
+    y1: y1,
+    dur: dur,
+    t: 0,
+    x: x0,
+    y: waterline,
+    kind: L.kind,
+    pal: L.pal,
+    scale: L.scale,
+    follow: L.follow || null,
+    pal2: L.pal2 || null,
+    hx: new Float32Array(12),
+    hy: new Float32Array(12),
+    hn: 0
+  });
+}
+
+function updateRockets(dt) {
+  for (let i = rockets.length - 1; i >= 0; i--) {
+    const r = rockets[i];
+    r.t += dt;
+    const u = Math.min(1, r.t / r.dur);
+    const ease = 1 - (1 - u) * (1 - u);
+    const x = r.x0 + (r.x1 - r.x0) * u;
+    const y = r.y0 + (r.y1 - r.y0) * ease;
+    r.x = x;
+    r.y = y;
+    if (r.hn < 12) r.hn++;
+    for (let k = r.hn - 1; k > 0; k--) {
+      r.hx[k] = r.hx[k - 1];
+      r.hy[k] = r.hy[k - 1];
+    }
+    r.hx[0] = x;
+    r.hy[0] = y;
+    if (parts.length < MAX_PARTS - 30) {
+      const nsp = dt > 0.03 ? 3 : 2;
+      for (let s = 0; s < nsp; s++) {
+        fire({
+          x: x + (Math.random() - 0.5) * 2 * S,
+          y: y + (Math.random() - 0.5) * 2 * S,
+          vx: (Math.random() - 0.5) * 22 * S,
+          vy: 16 * S + Math.random() * 36 * S,
+          life: 0.25 + Math.random() * 0.28,
+          g: 36 * S,
+          damp: 1.3,
+          size: (4 + Math.random() * 3) * S,
+          color: Math.random() < 0.45 ? '#fff3d4' : '#ffb050',
+          flicker: 1
+        });
+      }
+    }
+    if (u >= 1) {
+      explode(r.x1, r.y1, r.kind, r.pal, r.scale);
+      if (r.follow) {
+        launches.push({
+          at: simTime + 0.12 + Math.random() * 0.1,
+          instant: true,
+          x: r.x1,
+          y: r.y1,
+          kind: r.follow,
+          pal: r.pal2 || PAL.gold,
+          scale: r.scale * 0.56,
+          follow: null
+        });
+      }
+      rockets.splice(i, 1);
+    }
+  }
+}
+
+function updateFlashes(dt) {
+  for (let i = flashes.length - 1; i >= 0; i--) {
+    flashes[i].life -= dt;
+    if (flashes[i].life <= 0) flashes.splice(i, 1);
+  }
+}
+
+function updateEmbers(dt) {
+  for (let i = 0; i < stars.length; i++) {
+    const e = stars[i];
+    if (!e.ember) continue;
+    e.y -= e.vy * dt;
+    e.x += Math.sin(simTime * 0.8 + e.phase) * 10 * S * dt;
+    if (e.y < -8) {
+      e.y = waterline - 6 * S;
+      e.x = Math.random() * W;
+    }
+  }
+}
+
+function updateBoats(dt) {
+  for (let i = 0; i < boats.length; i++) {
+    const b = boats[i];
+    b.x += b.v * dt;
+    if (b.x > 1.12) b.x = -0.12;
+    if (b.x < -0.12) b.x = 1.12;
+  }
+}
+
+function scheduleShells(at, n, forced) {
+  for (let i = 0; i < n; i++) {
+    const spec = forced ? randomSpec(forced[i % forced.length]) : randomSpec();
+    spec.at = at + i * (forced ? 0.11 : 0.08);
+    spec.instant = false;
+    launches.push(spec);
+  }
+}
+
+function updateAll(dt) {
+  simTime += dt;
+  if (simTime >= nextLaunch) {
+    const n = 1 + (Math.random() < 0.28 ? 1 : 0);
+    if (parts.length < 2000) scheduleShells(simTime, n, null);
+    nextLaunch = simTime + 1.35 + Math.random() * 1.35;
+  }
+  if (simTime >= nextSalvo) {
+    if (parts.length < 1500) {
+      scheduleShells(simTime, 6, ['star', 'heart', 'chrys', 'palm', 'ring', 'kamuro']);
+    }
+    nextSalvo = simTime + 13 + Math.random() * 4;
+  }
+  for (let i = launches.length - 1; i >= 0; i--) {
+    const L = launches[i];
+    if (L.at > simTime) continue;
+    if (parts.length > MAX_PARTS - 350) {
+      L.at = simTime + 0.25;
+      continue;
+    }
+    launches.splice(i, 1);
+    if (L.instant) explode(L.x, L.y, L.kind, L.pal, L.scale);
+    else startRocket(L);
+  }
+  updateRockets(dt);
+  updateParticles(dt);
+  updateFlashes(dt);
+  updateEmbers(dt);
+  updateBoats(dt);
+}
+
+function particleAlpha(p) {
+  const u = p.life / p.max;
+  if (u <= 0) return 0;
+  let a = u < 0.32 ? u / 0.32 : 1;
+  if (p.flicker) a *= 0.62 + 0.38 * Math.abs(Math.sin(p.seed + simTime * 26));
+  return a;
+}
+
+function paintWindows(ctx, x, y, w, h, rng, lit, palette, off, flickerChance, bloom) {
+  if (w < 6 || h < 10) return;
+  const gapX = Math.max(4.4 * S, Math.min(9 * S, w / 5.5));
+  const gapY = Math.max(5.4 * S, 7.2 * S);
+  const ww = Math.max(1.25 * S, gapX * 0.4);
+  const wh = Math.max(1.7 * S, gapY * 0.44);
+  for (let yy = y + gapY * 0.45; yy < y + h - wh; yy += gapY) {
+    for (let xx = x + gapX * 0.45; xx < x + w - ww; xx += gapX) {
+      ctx.fillStyle = 'rgba(0,0,0,0.42)';
+      ctx.fillRect(xx, yy, ww, wh);
+      if (rng() < lit) {
+        const col = palette[(rng() * palette.length) | 0];
+        if (bloom) {
+          ctx.fillStyle = hexAlpha(col, 0.3);
+          ctx.fillRect(xx - S * 0.8, yy - S * 0.8, ww + 1.6 * S, wh + 1.6 * S);
+        }
+        ctx.fillStyle = col;
+        ctx.fillRect(xx, yy, ww, wh);
+        if (rng() < flickerChance) {
+          flickers.push({
+            x: xx, y: yy, w: ww, h: wh, on: col, off: off,
+            phase: rng() * 6.28, speed: 0.7 + rng() * 2.6, gate: -0.2 + rng() * 0.85
+          });
+        }
+      } else if (rng() < flickerChance * 0.45) {
+        const col = palette[(rng() * palette.length) | 0];
+        flickers.push({
+          x: xx, y: yy, w: ww, h: wh, on: col, off: off,
+          phase: rng() * 6.28, speed: 0.4 + rng() * 1.6, gate: 0.62
+        });
+      }
+    }
+  }
+}
+
+function edgeLight(ctx, x, top, h) {
+  ctx.fillStyle = 'rgba(255,255,255,0.05)';
+  ctx.fillRect(x, top, Math.max(1, S * 0.75), h);
+}
+
+function drawTower(ctx, x, base, w, h, style, color, rng, lit, palette, flickerChance, bloom) {
+  if (w < 2 || h < 4) return;
+  const top = base - h;
+  ctx.fillStyle = color;
+  if (style === 'flat' || style === 'glass') {
+    ctx.fillRect(x, top, w, h);
+    if (style === 'glass') {
+      ctx.fillRect(x + w * 0.55, top - 5 * S, Math.max(2, w * 0.08), 5 * S);
+    }
+    edgeLight(ctx, x, top, h);
+    paintWindows(ctx, x + 2 * S, top + 4 * S, w - 4 * S, h - 12 * S, rng, style === 'glass' ? Math.max(lit, 0.7) : lit, palette, color, flickerChance, bloom);
+  } else if (style === 'step') {
+    const u = Math.max(2, w * 0.14);
+    ctx.fillRect(x, base - h * 0.62, w, h * 0.62);
+    ctx.fillRect(x + u, base - h * 0.84, w - 2 * u, h * 0.24);
+    ctx.fillRect(x + u * 2, top, Math.max(2, w - 4 * u), h * 0.18);
+    edgeLight(ctx, x, base - h * 0.62, h * 0.62);
+    paintWindows(ctx, x + 2 * S, base - h * 0.62 + 3 * S, w - 4 * S, h * 0.62 - 8 * S, rng, lit, palette, color, flickerChance, bloom);
+    paintWindows(ctx, x + u + S, base - h * 0.84 + 2 * S, w - 2 * u - 2 * S, h * 0.2, rng, lit, palette, color, flickerChance * 0.5, false);
+  } else if (style === 'roof') {
+    ctx.beginPath();
+    ctx.moveTo(x, base);
+    ctx.lineTo(x, base - h * 0.7);
+    ctx.lineTo(x + w / 2, top);
+    ctx.lineTo(x + w, base - h * 0.7);
+    ctx.lineTo(x + w, base);
+    ctx.closePath();
+    ctx.fill();
+    paintWindows(ctx, x + 3 * S, base - h * 0.68, w - 6 * S, h * 0.58, rng, lit * 0.85, palette, color, flickerChance, bloom);
+  } else if (style === 'dome') {
+    const bodyH = h * 0.6;
+    const bodyTop = base - bodyH;
+    ctx.fillRect(x, bodyTop, w, bodyH);
+    ctx.beginPath();
+    ctx.ellipse(x + w / 2, bodyTop, w * 0.52, h * 0.4, 0, Math.PI, 0);
+    ctx.fill();
+    ctx.fillStyle = '#ffd7a0';
+    ctx.fillRect(x + w * 0.12, bodyTop - S, w * 0.76, Math.max(1.4, 1.6 * S));
+    edgeLight(ctx, x, bodyTop, bodyH);
+    paintWindows(ctx, x + 2 * S, bodyTop + 4 * S, w - 4 * S, bodyH - 10 * S, rng, lit, palette, color, flickerChance, bloom);
+  } else if (style === 'deco') {
+    ctx.fillStyle = color;
+    ctx.fillRect(x, base - h * 0.56, w, h * 0.56);
+    const w2 = w * 0.62;
+    const x2 = x + (w - w2) / 2;
+    ctx.fillRect(x2, base - h * 0.78, w2, h * 0.24);
+    const w3 = Math.max(3, w * 0.26);
+    const x3 = x + (w - w3) / 2;
+    ctx.fillRect(x3, base - h * 0.9, w3, h * 0.14);
+    ctx.beginPath();
+    ctx.moveTo(x3, base - h * 0.9);
+    ctx.lineTo(x + w / 2, top);
+    ctx.lineTo(x3 + w3, base - h * 0.9);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#ffe0a4';
+    ctx.fillRect(x3, base - h * 0.885, w3, Math.max(1.5, 2 * S));
+    edgeLight(ctx, x, base - h * 0.56, h * 0.56);
+    paintWindows(ctx, x + 2 * S, base - h * 0.56 + 3 * S, w - 4 * S, h * 0.5, rng, lit, palette, color, flickerChance, bloom);
+    paintWindows(ctx, x2 + S, base - h * 0.76, w2 - 2 * S, h * 0.16, rng, lit, palette, color, flickerChance * 0.4, false);
+    beacons.push({ x: x + w / 2, y: top, phase: rng() * 4, kind: 'red' });
+  } else if (style === 'mast') {
+    const shaftTop = base - h * 0.74;
+    ctx.fillRect(x, shaftTop, w, h * 0.74);
+    const w2 = Math.max(2 * S, w * 0.16);
+    ctx.fillRect(x + (w - w2) / 2, base - h * 0.92, w2, h * 0.2);
+    ctx.fillRect(x + w / 2 - Math.max(0.6, S * 0.45), top, Math.max(1.2, S * 0.9), h * 0.1);
+    edgeLight(ctx, x, shaftTop, h * 0.74);
+    paintWindows(ctx, x + 2 * S, shaftTop + 3 * S, w - 4 * S, h * 0.68, rng, lit, palette, color, flickerChance, bloom);
+    beacons.push({ x: x + w / 2, y: top, phase: rng() * 5, kind: 'red' });
+  }
+}
+
+function qpoint(p0, p1, p2, t) {
+  const u = 1 - t;
+  return u * u * p0 + 2 * u * t * p1 + t * t * p2;
+}
+
+function strokeCable(ctx, xA, yA, xB, yB, ySag) {
+  const yCtrl = 2 * ySag - 0.5 * (yA + yB);
+  const xCtrl = (xA + xB) / 2;
+  ctx.beginPath();
+  ctx.moveTo(xA, yA);
+  ctx.quadraticCurveTo(xCtrl, yCtrl, xB, yB);
+  ctx.stroke();
+  return { x0: xA, y0: yA, x1: xCtrl, y1: yCtrl, x2: xB, y2: yB };
+}
+
+function drawBridge(ctx, x0, x1, base, rng) {
+  const span = x1 - x0;
+  if (span < 20) return;
+  const t1 = x0 + span * 0.24;
+  const t2 = x1 - span * 0.24;
+  const deckH = Math.max(5, 6.5 * S);
+  const deckY = base - H * 0.048;
+  const towerTop = base - H * 0.145;
+  const towerW = Math.max(5 * S, span * 0.028);
+  ctx.fillStyle = '#070910';
+  const piers = [x0 + span * 0.1, t1, (t1 + t2) / 2, t2, x1 - span * 0.1];
+  for (let i = 0; i < piers.length; i++) {
+    const pw = i === 1 || i === 3 ? towerW : Math.max(3 * S, 4 * S);
+    ctx.fillRect(piers[i] - pw / 2, deckY, pw, base - deckY);
+  }
+  function tower(tx) {
+    ctx.fillStyle = '#080a12';
+    ctx.fillRect(tx - towerW / 2, towerTop, towerW, (deckY - towerTop) + deckH);
+    ctx.fillRect(tx - towerW, towerTop + 8 * S, towerW * 2, Math.max(2, 3 * S));
+    ctx.fillRect(tx - towerW * 0.75, towerTop, towerW * 1.5, Math.max(3, 4 * S));
+    beacons.push({ x: tx, y: towerTop - 2 * S, phase: tx * 0.01, kind: 'white' });
+  }
+  tower(t1);
+  tower(t2);
+
+  const attach = towerTop + 7 * S;
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = 'rgba(176, 186, 204, 0.55)';
+  ctx.lineWidth = Math.max(1, S);
+  const farSag = deckY - 12 * S;
+  strokeCable(ctx, t1, attach, t2, attach, farSag);
+  ctx.strokeStyle = 'rgba(214, 222, 236, 0.9)';
+  ctx.lineWidth = Math.max(1.1, 1.35 * S);
+  const nearSag = deckY - 3.5 * S;
+  const mainC = strokeCable(ctx, t1, attach, t2, attach, nearSag);
+  const sideSag = Math.min(deckY - 2 * S, (deckY + attach) / 2 + 14 * S);
+  strokeCable(ctx, x0, deckY, t1, attach, sideSag);
+  strokeCable(ctx, t2, attach, x1, deckY, sideSag);
+
+  ctx.strokeStyle = 'rgba(186, 196, 214, 0.38)';
+  ctx.lineWidth = Math.max(0.6, 0.75 * S);
+  const steps = Math.max(8, Math.floor((t2 - t1) / (9 * S)));
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    const hx = qpoint(mainC.x0, mainC.x1, mainC.x2, t);
+    const hy = qpoint(mainC.y0, mainC.y1, mainC.y2, t);
+    if (hy >= deckY) continue;
+    ctx.beginPath();
+    ctx.moveTo(hx, hy);
+    ctx.lineTo(hx, deckY);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = '#0a0c14';
+  ctx.fillRect(x0, deckY, span, deckH);
+  ctx.fillStyle = '#1a2030';
+  ctx.fillRect(x0, deckY, span, Math.max(1, S));
+
+  for (let lx = x0 + 8 * S; lx < x1 - 6 * S; lx += 10 * S) {
+    const col = rng() < 0.82 ? '#ffcc77' : '#fff1cc';
+    ctx.fillStyle = col;
+    const lw = Math.max(1.2, 1.5 * S);
+    ctx.fillRect(lx, deckY + deckH * 0.35, lw, lw);
+    if (rng() < 0.35) {
+      flickers.push({
+        x: lx, y: deckY + deckH * 0.35, w: lw, h: lw,
+        on: col, off: '#24180e',
+        phase: rng() * 6, speed: 2 + rng() * 4, gate: 0.15
+      });
+    }
+  }
+  for (let i = 1; i < 16; i++) {
+    const t = i / 16;
+    const hx = qpoint(mainC.x0, mainC.x1, mainC.x2, t);
+    const hy = qpoint(mainC.y0, mainC.y1, mainC.y2, t);
+    ctx.fillStyle = '#ffd98a';
+    const s = Math.max(1.1, 1.3 * S);
+    ctx.fillRect(hx - s / 2, hy - s / 2, s, s);
+  }
+}
+
+function normalize(specs, total) {
+  let sum = 0;
+  for (let i = 0; i < specs.length; i++) sum += specs[i][1];
+  return specs.map(function (b) { return [b[0], (b[1] / sum) * total, b[2]]; });
+}
+
+function buildCity() {
+  city.width = W;
+  city.height = H;
+  const ctx = cctx;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  flickers = [];
+  beacons = [];
+  const rng = mulberry32(20260311);
+  const base = waterline;
+
+  const LEFT = normalize([
+    ['flat', 0.05, 0.09],
+    ['step', 0.042, 0.14],
+    ['glass', 0.032, 0.11],
+    ['mast', 0.046, 0.185],
+    ['roof', 0.034, 0.12],
+    ['deco', 0.062, 0.20],
+    ['flat', 0.03, 0.085],
+    ['step', 0.044, 0.15],
+    ['dome', 0.05, 0.145]
+  ], 0.40);
+  const RIGHT = normalize([
+    ['step', 0.04, 0.125],
+    ['roof', 0.034, 0.15],
+    ['glass', 0.04, 0.135],
+    ['mast', 0.048, 0.19],
+    ['flat', 0.03, 0.09],
+    ['deco', 0.058, 0.198],
+    ['step', 0.04, 0.15],
+    ['roof', 0.032, 0.11],
+    ['flat', 0.036, 0.10]
+  ], 0.38);
+
+  let edge = 0;
+  const leftPlaced = [];
+  for (let i = 0; i < LEFT.length; i++) {
+    const x0 = Math.round(edge);
+    edge += LEFT[i][1] * W;
+    const x1 = Math.round(edge);
+    leftPlaced.push([LEFT[i][0], x0, x1 - x0, LEFT[i][2]]);
+  }
+  bridge0 = Math.round(edge);
+  edge = W;
+  const rightPlaced = [];
+  for (let i = RIGHT.length - 1; i >= 0; i--) {
+    const x1 = Math.round(edge);
+    edge -= RIGHT[i][1] * W;
+    const x0 = Math.round(edge);
+    rightPlaced.push([RIGHT[i][0], x0, x1 - x0, RIGHT[i][2]]);
+  }
+  bridge1 = Math.round(edge);
+  if (bridge1 < bridge0 + 30) bridge1 = Math.min(W - 10, bridge0 + 30);
+
+  function layer(colorHex, hMin, hMax, lit, flickerChance, bloom, winPal) {
+    let x = 0;
+    while (x < W - 4) {
+      if (x >= bridge0 && x < bridge1) {
+        x = bridge1;
+        continue;
+      }
+      let bw = (16 + rng() * 30) * S;
+      if (x < bridge0 && x + bw > bridge0) bw = bridge0 - x;
+      if (x + bw > W) bw = W - x;
+      if (bw < 7 * S) {
+        x += bw + 1;
+        continue;
+      }
+      const wave = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(x * 0.012));
+      const bh = H * (hMin + (hMax - hMin) * (0.35 + 0.65 * rng()) * wave);
+      const roll = rng();
+      const style = roll < 0.18 ? 'step' : roll < 0.28 ? 'roof' : 'flat';
+      const col = hexShift(colorHex, ((rng() * 10) | 0) - 4);
+      drawTower(ctx, x, base, bw, bh, style, col, rng, lit, winPal, flickerChance, bloom);
+      x += bw;
+    }
+  }
+
+  layer('#1c243c', 0.03, 0.075, 0.22, 0.02, false, WIN_FAR);
+  layer('#12182c', 0.055, 0.12, 0.34, 0.04, false, WIN_FAR);
+
+  drawBridge(ctx, bridge0, bridge1, base, rng);
+
+  function drawRow(list) {
+    for (let i = 0; i < list.length; i++) {
+      const style = list[i][0];
+      const x = list[i][1];
+      const bw = list[i][2];
+      const bh = list[i][3] * H;
+      const col = hexShift('#080b14', ((rng() * 8) | 0) - 3);
+      const lit = style === 'glass' ? 0.74 : 0.46 + rng() * 0.18;
+      drawTower(ctx, x, base, bw, bh, style, col, rng, lit, WIN_NEAR, 0.1, true);
+    }
+  }
+  drawRow(leftPlaced);
+  drawRow(rightPlaced);
+}
+
+function buildStars() {
+  stars = [];
+  const rng = mulberry32(77);
+  const count = Math.round(150 * (W * H) / (1080 * 1080));
+  const mx = W * 0.935;
+  const my = H * 0.125;
+  const mr = 70 * S;
+  for (let i = 0; i < count; i++) {
+    const x = rng() * W;
+    const y = rng() * waterline * 0.92;
+    if ((x - mx) * (x - mx) + (y - my) * (y - my) < mr * mr) continue;
+    const bright = rng() < 0.08;
+    stars.push({
+      x: x, y: y,
+      r: (bright ? 1.7 + rng() * 1.1 : 0.6 + rng() * 1.15) * S,
+      a: bright ? 0.95 : 0.35 + rng() * 0.55,
+      phase: rng() * 6.28,
+      speed: 0.6 + rng() * 2.2,
+      cross: bright && rng() < 0.45,
+      color: rng() < 0.18 ? '#d5e4ff' : '#ffffff',
+      ember: false
+    });
+  }
+  for (let i = 0; i < 18; i++) {
+    stars.push({
+      x: Math.random() * W,
+      y: waterline * (0.2 + Math.random() * 0.75),
+      r: (1.1 + Math.random() * 1.3) * S,
+      a: 0.45,
+      phase: Math.random() * 6,
+      speed: 1,
+      cross: false,
+      color: Math.random() < 0.5 ? '#ffb060' : '#ffd9a0',
+      ember: true,
+      vy: (7 + Math.random() * 16) * S
+    });
+  }
+}
+
+function buildBoats() {
+  boats = [
+    { x: 0.14, y: 0.73, v: 0.012, len: 0.048 },
+    { x: 0.57, y: 0.86, v: -0.009, len: 0.036 },
+    { x: 0.82, y: 0.79, v: 0.007, len: 0.028 }
+  ];
+}
+
+function drawSky(ctx) {
+  const grd = ctx.createLinearGradient(0, 0, 0, H);
+  grd.addColorStop(0, '#02030c');
+  grd.addColorStop(0.2, '#07102c');
+  grd.addColorStop(0.42, '#121c42');
+  grd.addColorStop(0.66, '#1c2448');
+  grd.addColorStop(1, '#2a2218');
+  ctx.fillStyle = grd;
+  ctx.fillRect(0, 0, W, H);
+  const glow = ctx.createRadialGradient(W * 0.5, waterline, H * 0.02, W * 0.5, waterline, W * 0.7);
+  glow.addColorStop(0, 'rgba(255, 164, 78, 0.22)');
+  glow.addColorStop(0.4, 'rgba(160, 80, 40, 0.07)');
+  glow.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, W, waterline);
+  const patches = [
+    [0.18, 0.26, 0.24, 'rgba(48, 70, 130, 0.16)'],
+    [0.78, 0.2, 0.2, 'rgba(70, 55, 110, 0.10)'],
+    [0.48, 0.1, 0.16, 'rgba(40, 60, 120, 0.08)']
+  ];
+  for (let i = 0; i < patches.length; i++) {
+    const p = patches[i];
+    const rg = ctx.createRadialGradient(W * p[0], H * p[1], 0, W * p[0], H * p[1], H * p[2]);
+    rg.addColorStop(0, p[3]);
+    rg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = rg;
+    ctx.fillRect(0, 0, W, waterline);
+  }
+}
+
+function drawMoon(ctx) {
+  const mx = W * 0.935;
+  const my = H * 0.125;
+  const R = 27 * S;
+  const halo = ctx.createRadialGradient(mx, my, R * 0.2, mx, my, R * 4.4);
+  halo.addColorStop(0, 'rgba(255, 244, 220, 0.22)');
+  halo.addColorStop(1, 'rgba(255, 244, 220, 0)');
+  ctx.fillStyle = halo;
+  ctx.beginPath();
+  ctx.arc(mx, my, R * 4.4, 0, Math.PI * 2);
+  ctx.fill();
+  const disk = ctx.createRadialGradient(mx - R * 0.32, my - R * 0.32, R * 0.15, mx, my, R);
+  disk.addColorStop(0, '#fffaf0');
+  disk.addColorStop(0.62, '#f3e6c8');
+  disk.addColorStop(1, '#d9c7a4');
+  ctx.fillStyle = disk;
+  ctx.beginPath();
+  ctx.arc(mx, my, R, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawStars(ctx) {
+  for (let i = 0; i < stars.length; i++) {
+    const s = stars[i];
+    if (s.ember) continue;
+    const tw = 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(simTime * s.speed + s.phase));
+    ctx.globalAlpha = s.a * tw;
+    ctx.fillStyle = s.color;
+    ctx.fillRect(s.x, s.y, s.r, s.r);
+    if (s.cross) {
+      ctx.fillRect(s.x - s.r * 2.4, s.y + s.r * 0.35, s.r * 5.8, Math.max(0.6, s.r * 0.28));
+      ctx.fillRect(s.x + s.r * 0.35, s.y - s.r * 2.4, Math.max(0.6, s.r * 0.28), s.r * 5.8);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawParticles(ctx) {
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    if (!p.trail || p.hn < 1) continue;
+    const a = particleAlpha(p);
+    if (a < 0.03) continue;
+    ctx.globalAlpha = a * 0.4;
+    ctx.strokeStyle = p.color;
+    ctx.lineWidth = Math.max(1, p.size * 0.14);
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    for (let k = 0; k < p.hn; k++) ctx.lineTo(p.hx[k], p.hy[k]);
+    ctx.stroke();
+  }
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    const a = particleAlpha(p);
+    if (a < 0.03) continue;
+    const rad = p.size * (0.82 + 0.18 * (p.life / p.max));
+    drawGlow(ctx, p.x, p.y, p.color, rad, a);
+  }
+}
+
+function drawRockets(ctx) {
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.lineCap = 'round';
+  for (let i = 0; i < rockets.length; i++) {
+    const r = rockets[i];
+    if (r.hn > 1) {
+      ctx.beginPath();
+      ctx.moveTo(r.x, r.y);
+      for (let k = 0; k < r.hn; k++) ctx.lineTo(r.hx[k], r.hy[k]);
+      ctx.strokeStyle = '#ffd7a8';
+      ctx.globalAlpha = 0.75;
+      ctx.lineWidth = Math.max(1, 2 * S);
+      ctx.stroke();
+    }
+    drawGlow(ctx, r.x, r.y, '#fff6e4', 13 * S, 1);
+    drawGlow(ctx, r.x, r.y, '#ffb24a', 22 * S, 0.7);
+  }
+}
+
+function drawFlashes(ctx) {
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < flashes.length; i++) {
+    const f = flashes[i];
+    const u = 1 - f.life / f.max;
+    const a = f.life / f.max;
+    drawGlow(ctx, f.x, f.y, f.color, f.r * (1 + u * 3.2), a * 0.9);
+    ctx.beginPath();
+    ctx.arc(f.x, f.y, f.r * (0.35 + u * 2.6), 0, Math.PI * 2);
+    ctx.strokeStyle = f.color;
+    ctx.globalAlpha = a * 0.55;
+    ctx.lineWidth = Math.max(1, (1.6 - u) * 2.1 * S);
+    ctx.stroke();
+  }
+}
+
+function drawFlickers(ctx) {
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+  for (let i = 0; i < flickers.length; i++) {
+    const f = flickers[i];
+    const on = Math.sin(simTime * f.speed + f.phase) > f.gate;
+    ctx.fillStyle = on ? f.on : f.off;
+    ctx.fillRect(f.x, f.y, f.w, f.h);
+  }
+}
+
+function drawBeacons(ctx) {
+  for (let i = 0; i < beacons.length; i++) {
+    const b = beacons[i];
+    const period = b.kind === 'white' ? 1.1 : 1.7;
+    const duty = b.kind === 'white' ? 0.12 : 0.2;
+    const on = ((simTime * (b.kind === 'white' ? 2.4 : 1) + b.phase) % period) < duty * period;
+    if (!on) continue;
+    ctx.globalCompositeOperation = 'lighter';
+    const col = b.kind === 'white' ? '#ffffff' : '#ff3030';
+    drawGlow(ctx, b.x, b.y, col, 12 * S, 0.95);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(b.x - S, b.y - S, 2 * S, 2 * S);
+  }
+}
+
+function drawEmbers(ctx) {
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < stars.length; i++) {
+    const s = stars[i];
+    if (!s.ember) continue;
+    const tw = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(simTime * 3 + s.phase));
+    drawGlow(ctx, s.x, s.y, s.color, s.r * 3.2, 0.38 * tw);
+  }
+}
+
+function renderScene() {
+  const ctx = sctx;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+  drawSky(ctx);
+  drawStars(ctx);
+  drawMoon(ctx);
+  drawFlashes(ctx);
+  drawRockets(ctx);
+  drawParticles(ctx);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+  ctx.drawImage(city, 0, 0);
+  drawFlickers(ctx);
+  drawBeacons(ctx);
+  drawEmbers(ctx);
+}
+
+function renderWater() {
+  const ctx = vctx;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#03060e';
+  ctx.fillRect(0, waterline, W, waterH);
+
+  const strip = Math.max(2, Math.round(2 * dpr));
+  for (let d = 0; d < waterH; d += strip) {
+    const hgt = Math.min(strip, waterH - d);
+    const srcY = waterline - d - hgt;
+    if (srcY < 0) break;
+    const depth = d / waterH;
+    const amp = S * (1.8 + depth * 8);
+    const shift = Math.round(
+      Math.sin(simTime * 1.25 + d * 0.03) * amp +
+      Math.sin(simTime * 0.46 + d * 0.009) * amp * 0.42
+    );
+    const flick = 0.94 + 0.06 * Math.sin(simTime * 2.4 + d * 0.05);
+    ctx.globalAlpha = (0.62 - depth * 0.12) * flick;
+    ctx.drawImage(scene, 0, srcY, W, hgt, shift, waterline + d, W, hgt);
+  }
+
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+  const tint = ctx.createLinearGradient(0, waterline, 0, H);
+  tint.addColorStop(0, 'rgba(6, 16, 32, 0.10)');
+  tint.addColorStop(0.45, 'rgba(4, 12, 24, 0.16)');
+  tint.addColorStop(1, 'rgba(0, 0, 0, 0.38)');
+  ctx.fillStyle = tint;
+  ctx.fillRect(0, waterline, W, waterH);
+
+  ctx.globalCompositeOperation = 'lighter';
+  const shore = ctx.createLinearGradient(0, waterline, 0, waterline + 22 * S);
+  shore.addColorStop(0, 'rgba(255, 186, 110, 0.16)');
+  shore.addColorStop(1, 'rgba(255, 186, 110, 0)');
+  ctx.fillStyle = shore;
+  ctx.fillRect(0, waterline, W, 22 * S);
+
+  ctx.lineWidth = Math.max(1, S);
+  for (let i = 0; i < 7; i++) {
+    const baseY = waterline + ((i + 0.5) / 7) * waterH;
+    const alpha = 0.018 + 0.02 * (1 - i / 7);
+    ctx.strokeStyle = 'rgba(190, 210, 235,' + alpha + ')';
+    ctx.beginPath();
+    for (let s = 0; s <= 10; s++) {
+      const x = (s / 10) * W;
+      const y = baseY + Math.sin(simTime * 1.3 + s * 0.7 + i) * (1.4 + i * 0.25) * S;
+      if (s === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  const edgeW = 18 * S;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+  const left = ctx.createLinearGradient(0, 0, edgeW, 0);
+  left.addColorStop(0, 'rgba(3,6,14,0.75)');
+  left.addColorStop(1, 'rgba(3,6,14,0)');
+  ctx.fillStyle = left;
+  ctx.fillRect(0, waterline, edgeW, waterH);
+  const right = ctx.createLinearGradient(W, 0, W - edgeW, 0);
+  right.addColorStop(0, 'rgba(3,6,14,0.75)');
+  right.addColorStop(1, 'rgba(3,6,14,0)');
+  ctx.fillStyle = right;
+  ctx.fillRect(W - edgeW, waterline, edgeW, waterH);
+
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#05070d';
+  ctx.fillRect(0, waterline - Math.max(2, 2.2 * S), W, Math.max(3, 3.2 * S));
+  ctx.fillStyle = 'rgba(190, 205, 230, 0.38)';
+  ctx.fillRect(0, waterline - Math.max(2, 2.2 * S), W, Math.max(1, S));
+}
+
+function drawBoats(ctx) {
+  for (let i = 0; i < boats.length; i++) {
+    const b = boats[i];
+    const x = b.x * W;
+    const y = b.y * H;
+    const len = b.len * W;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 0.92;
+    ctx.fillStyle = '#05070e';
+    ctx.beginPath();
+    ctx.moveTo(x - len / 2, y);
+    ctx.lineTo(x + len / 2, y);
+    ctx.lineTo(x + len / 2 - 7 * S, y + 5 * S);
+    ctx.lineTo(x - len / 2 + 7 * S, y + 5 * S);
+    ctx.closePath();
+    ctx.fill();
+    const lights = [
+      [x - len * 0.28, '#ff4a4a'],
+      [x, '#ffd59a'],
+      [x + len * 0.28, '#7dffb2']
+    ];
+    ctx.globalCompositeOperation = 'lighter';
+    for (let k = 0; k < lights.length; k++) {
+      const lx = lights[k][0];
+      const col = lights[k][1];
+      drawGlow(ctx, lx, y - 1.5 * S, col, 5.5 * S, 0.9);
+      const streak = ctx.createLinearGradient(0, y, 0, y + 30 * S);
+      streak.addColorStop(0, hexAlpha(col, 0.28));
+      streak.addColorStop(1, hexAlpha(col, 0));
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = streak;
+      ctx.fillRect(lx - S, y + 4 * S, Math.max(2, 2 * S), 28 * S);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawVignette(ctx) {
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+  const cx = W * 0.5;
+  const cy = H * 0.44;
+  const inner = Math.min(W, H) * 0.42;
+  const outer = Math.max(W, H) * 0.74;
+  const vg = ctx.createRadialGradient(cx, cy, inner, cx, cy, outer);
+  vg.addColorStop(0, 'rgba(0,0,0,0)');
+  vg.addColorStop(1, 'rgba(0,0,0,0.4)');
+  ctx.fillStyle = vg;
+  ctx.fillRect(0, 0, W, H);
+}
+
+function render() {
+  renderScene();
+  vctx.setTransform(1, 0, 0, 1, 0, 0);
+  vctx.globalCompositeOperation = 'source-over';
+  vctx.globalAlpha = 1;
+  vctx.drawImage(scene, 0, 0);
+  renderWater();
+  drawBoats(vctx);
+  drawVignette(vctx);
+}
+
+function bootstrap() {
+  parts.length = 0;
+  rockets.length = 0;
+  flashes.length = 0;
+  launches.length = 0;
+  simTime = 0;
+  nextLaunch = 1e9;
+  nextSalvo = 1e9;
+
+  function instant(kind, xf, yf, scale, pal, at) {
+    launches.push({
+      at: at, instant: true,
+      x: W * xf, y: H * yf,
+      kind: kind, scale: scale, pal: pal, follow: null
+    });
+  }
+  function rocket(kind, xf, yf, scale, pal, at, dur) {
+    launches.push({
+      at: at, instant: false,
+      x: W * xf, y: H * yf,
+      kind: kind, scale: scale, pal: pal, follow: null, dur: dur
+    });
+  }
+
+  instant('star', 0.28, 0.176, 0.98, PAL.gold, 0.02);
+  instant('heart', 0.70, 0.16, 1.0, PAL.pink, 0.02);
+  instant('kamuro', 0.50, 0.27, 0.86, PAL.green, 0.02);
+  rocket('chrys', 0.40, 0.07, 0.9, PAL.crimson, 0.42, 1.2);
+  rocket('palm', 0.60, 0.075, 0.88, PAL.orange, 0.58, 1.25);
+
+  const step = 1 / 48;
+  for (let t = 0; t < 1.12; t += step) updateAll(step);
+
+  const lineup = ['ring', 'spiral', 'sparkle', 'crackle', 'willow', 'rainbow', 'saturn', 'peony'];
+  for (let i = 0; i < lineup.length; i++) {
+    const spec = randomSpec(lineup[i]);
+    spec.at = simTime + 0.55 + i * 1.2;
+    spec.instant = false;
+    launches.push(spec);
+  }
+  nextLaunch = simTime + 1.8;
+  nextSalvo = simTime + 8.5;
+}
+
+function layout() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  W = Math.max(2, Math.round(window.innerWidth * dpr));
+  H = Math.max(2, Math.round(window.innerHeight * dpr));
+  S = H / 1080;
+  view.width = W;
+  view.height = H;
+  scene.width = W;
+  scene.height = H;
+  waterline = Math.round(H * 0.53);
+  waterH = H - waterline;
+  tune(vctx);
+  tune(sctx);
+  tune(cctx);
+  buildCity();
+  buildStars();
+  buildBoats();
+}
+
+function resetWorld() {
+  layout();
+  bootstrap();
+  lastTs = 0;
+  render();
+}
+
+function frame(now) {
+  if (!lastTs) lastTs = now;
+  let dt = (now - lastTs) / 1000;
+  lastTs = now;
+  if (dt > 0.05) dt = 0.05;
+  if (dt < 0) dt = 0;
+  updateAll(dt);
+  render();
+  requestAnimationFrame(frame);
+}
+
+function boot() {
+  view = document.getElementById('view');
+  vctx = view.getContext('2d', { alpha: false });
+  scene = document.createElement('canvas');
+  sctx = scene.getContext('2d', { alpha: false });
+  city = document.createElement('canvas');
+  cctx = city.getContext('2d', { alpha: true });
+  const keys = Object.keys(PAL);
+  for (let i = 0; i < keys.length; i++) {
+    const pal = PAL[keys[i]];
+    for (let j = 0; j < pal.length; j++) spriteFor(pal[j]);
+  }
+  spriteFor('#ffffff');
+  spriteFor('#fff6d0');
+  spriteFor('#fff6e4');
+  spriteFor('#ffb050');
+  spriteFor('#ffb24a');
+  spriteFor('#ff3030');
+  spriteFor('#ffd7a8');
+  resetWorld();
+  requestAnimationFrame(frame);
+}
+
+let resizeQueued = false;
+window.addEventListener('resize', function () {
+  if (resizeQueued) return;
+  resizeQueued = true;
+  requestAnimationFrame(function () {
+    resizeQueued = false;
+    resetWorld();
+  });
+});
+
+boot();
+</script>
+</body>
+</html>

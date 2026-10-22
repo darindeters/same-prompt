@@ -1,0 +1,1292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Volcano Eruption</title>
+<style>
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #050308;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('scene');
+  const ctx = canvas.getContext('2d');
+
+  // Virtual coordinate space optimized for 1080x1080 while filling any aspect ratio seamlessly
+  let width = 1080;
+  let height = 1080;
+  let scale = 1;
+  let cx = 540;
+  let craterX = 540;
+  let craterY = 475;
+  let craterWidth = 108;
+
+  // Deterministic/seeded helper alongside Math.random for static terrain details
+  let seed = 4219;
+  function sRand() {
+    seed = (seed * 1664525 + 1013904223) % 4294967296;
+    return seed / 4294967296;
+  }
+
+  // Stars in the night sky
+  const stars = [];
+  // Distant mountain ridges
+  let bgRidges = [];
+  // Main volcano geometry & ridge facets
+  let volcanoLeftEdge = [];
+  let volcanoRightEdge = [];
+  let volcanoRidges = [];
+  // Lava river spline paths on the slopes
+  let lavaPaths = [];
+  // Flowing magma pulses travelling down the lava rivers
+  const flowPulses = [];
+  // Ash cloud puffs (back and front layers)
+  const ashClouds = [];
+  // Lava fountain core jets & ballistic bombs
+  const lavaJets = [];
+  const lavaBombs = [];
+  // Floating embers and rising sparks
+  const embers = [];
+  // Volcanic lightning bolts in the ash plume
+  const lightnings = [];
+  // Slope fumarole steam/smoke wisps
+  const slopeSmoke = [];
+
+  function initStars() {
+    stars.length = 0;
+    seed = 9001;
+    for (let i = 0; i < 220; i++) {
+      stars.push({
+        x: sRand() * 1600 - 260,
+        y: sRand() * 620,
+        r: 0.5 + sRand() * 1.6,
+        alpha: 0.25 + sRand() * 0.7,
+        phase: sRand() * Math.PI * 2,
+        speed: 0.8 + sRand() * 2.5,
+        tint: sRand() > 0.7 ? '#ffd8b8' : (sRand() > 0.4 ? '#d8e6ff' : '#ffffff')
+      });
+    }
+  }
+
+  function buildTerrain() {
+    seed = 1337;
+    craterX = width * 0.5;
+    craterY = height * 0.445;
+    craterWidth = Math.min(width, height) * 0.098;
+
+    // Background distant mountain silhouettes
+    bgRidges = [
+      { yBase: height * 0.77, color: '#0c060c', points: [] },
+      { yBase: height * 0.83, color: '#11070d', points: [] }
+    ];
+    bgRidges.forEach((ridge, idx) => {
+      const steps = 36;
+      for (let i = 0; i <= steps; i++) {
+        const px = (i / steps) * (width + 200) - 100;
+        const distFromCenter = Math.abs(px - craterX) / (width * 0.5);
+        const wave = Math.sin(i * 0.55 + idx * 2.1) * 38 + Math.cos(i * 1.3 - idx) * 18;
+        const py = ridge.yBase - Math.max(0, (1 - distFromCenter * 0.45)) * 75 + wave;
+        ridge.points.push({ x: px, y: py });
+      }
+    });
+
+    // Main Volcano Cone profile (natural concave volcanic slope + craggy noise)
+    volcanoLeftEdge = [];
+    volcanoRightEdge = [];
+    const halfCrater = craterWidth * 0.5;
+    const steps = 45;
+    const baseSpread = Math.max(width * 0.72, height * 0.68);
+    const bottomY = height * 1.02;
+
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps; // 0 at crater rim, 1 at base
+      // Volcanic stratovolcano curve: steeper near top, flaring out toward base
+      const flare = Math.pow(t, 1.32);
+      const jitterL = (i === 0 || i === steps) ? 0 : (sRand() - 0.5) * 14 * (0.3 + t * 0.7) + Math.sin(t * 16) * 7;
+      const jitterR = (i === 0 || i === steps) ? 0 : (sRand() - 0.5) * 14 * (0.3 + t * 0.7) + Math.cos(t * 15) * 7;
+
+      const lx = craterX - halfCrater - flare * baseSpread + jitterL;
+      const ly = craterY + t * (bottomY - craterY);
+      volcanoLeftEdge.push({ x: lx, y: ly });
+
+      const rx = craterX + halfCrater + flare * baseSpread + jitterR;
+      const ry = craterY + t * (bottomY - craterY);
+      volcanoRightEdge.push({ x: rx, y: ry });
+    }
+
+    // Internal rocky ridge facets for rim lighting on the slopes
+    volcanoRidges = [];
+    const ridgeAngles = [-0.62, -0.35, -0.12, 0.16, 0.42, 0.68];
+    ridgeAngles.forEach((ang) => {
+      const pts = [];
+      const rSteps = 22;
+      for (let i = 0; i <= rSteps; i++) {
+        const t = i / rSteps;
+        const flare = Math.pow(t, 1.28);
+        const rx = craterX + ang * halfCrater * 0.9 + ang * flare * baseSpread * 0.95 + Math.sin(t * 12 + ang * 8) * 14 * t;
+        const ry = craterY + 8 + t * (bottomY - craterY);
+        pts.push({ x: rx, y: ry });
+      }
+      volcanoRidges.push({ angle: ang, points: pts });
+    });
+
+    // Build branching lava river paths down the volcano slopes
+    const S = Math.min(width, height) / 1080;
+    const rawPaths = [
+      // Primary central-left grand lava channel
+      {
+        widthScale: 1.35,
+        speed: 1.0,
+        ctrl: [
+          { x: craterX - halfCrater * 0.28, y: craterY + 6 * S },
+          { x: craterX - 42 * S, y: craterY + 75 * S },
+          { x: craterX - 28 * S, y: craterY + 155 * S },
+          { x: craterX - 78 * S, y: craterY + 255 * S },
+          { x: craterX - 145 * S, y: craterY + 370 * S },
+          { x: craterX - 245 * S, y: craterY + 495 * S },
+          { x: craterX - 360 * S, y: craterY + 625 * S }
+        ]
+      },
+      // Left branch splitting off mid-slope
+      {
+        widthScale: 0.85,
+        speed: 0.82,
+        ctrl: [
+          { x: craterX - 28 * S, y: craterY + 150 * S },
+          { x: craterX - 5 * S, y: craterY + 230 * S },
+          { x: craterX - 38 * S, y: craterY + 335 * S },
+          { x: craterX - 88 * S, y: craterY + 460 * S },
+          { x: craterX - 135 * S, y: craterY + 615 * S }
+        ]
+      },
+      // Main right-side surging lava stream
+      {
+        widthScale: 1.25,
+        speed: 1.08,
+        ctrl: [
+          { x: craterX + halfCrater * 0.25, y: craterY + 4 * S },
+          { x: craterX + 36 * S, y: craterY + 70 * S },
+          { x: craterX + 68 * S, y: craterY + 160 * S },
+          { x: craterX + 52 * S, y: craterY + 260 * S },
+          { x: craterX + 118 * S, y: craterY + 375 * S },
+          { x: craterX + 195 * S, y: craterY + 495 * S },
+          { x: craterX + 295 * S, y: craterY + 625 * S }
+        ]
+      },
+      // Secondary right fork cutting toward center-right base
+      {
+        widthScale: 0.9,
+        speed: 0.9,
+        ctrl: [
+          { x: craterX + 56 * S, y: craterY + 235 * S },
+          { x: craterX + 24 * S, y: craterY + 325 * S },
+          { x: craterX + 55 * S, y: craterY + 435 * S },
+          { x: craterX + 42 * S, y: craterY + 555 * S },
+          { x: craterX + 85 * S, y: craterY + 635 * S }
+        ]
+      },
+      // Upper-left steep spillway stream
+      {
+        widthScale: 0.72,
+        speed: 0.78,
+        ctrl: [
+          { x: craterX - halfCrater * 0.68, y: craterY + 8 * S },
+          { x: craterX - 82 * S, y: craterY + 85 * S },
+          { x: craterX - 140 * S, y: craterY + 185 * S },
+          { x: craterX - 220 * S, y: craterY + 305 * S },
+          { x: craterX - 340 * S, y: craterY + 440 * S }
+        ]
+      },
+      // Upper-right steep flank stream
+      {
+        widthScale: 0.68,
+        speed: 0.74,
+        ctrl: [
+          { x: craterX + halfCrater * 0.66, y: craterY + 10 * S },
+          { x: craterX + 86 * S, y: craterY + 92 * S },
+          { x: craterX + 150 * S, y: craterY + 200 * S },
+          { x: craterX + 235 * S, y: craterY + 330 * S },
+          { x: craterX + 355 * S, y: craterY + 465 * S }
+        ]
+      }
+    ];
+
+    lavaPaths = rawPaths.map((p) => {
+      const sampled = sampleCatmullRom(p.ctrl, 90);
+      return {
+        points: sampled,
+        widthScale: p.widthScale * S,
+        speed: p.speed
+      };
+    });
+
+    // Populate initial flow pulses so lava rivers look fully alive immediately
+    if (flowPulses.length === 0) {
+      for (let i = 0; i < 95; i++) {
+        const pathIdx = i % lavaPaths.length;
+        flowPulses.push({
+          pathIdx,
+          t: Math.random(),
+          speed: (0.045 + Math.random() * 0.055) * lavaPaths[pathIdx].speed,
+          size: 0.65 + Math.random() * 0.9,
+          offset: (Math.random() - 0.5) * 6 * S,
+          heat: 0.7 + Math.random() * 0.3,
+          phase: Math.random() * Math.PI * 2
+        });
+      }
+    }
+  }
+
+  // Smooth spline interpolation for natural winding lava rivers
+  function sampleCatmullRom(pts, numSamples) {
+    const result = [];
+    const n = pts.length;
+    for (let i = 0; i <= numSamples; i++) {
+      const u = (i / numSamples) * (n - 1);
+      const idx = Math.min(Math.floor(u), n - 2);
+      const t = u - idx;
+      const p0 = pts[Math.max(0, idx - 1)];
+      const p1 = pts[idx];
+      const p2 = pts[idx + 1];
+      const p3 = pts[Math.min(n - 1, idx + 2)];
+
+      const t2 = t * t;
+      const t3 = t2 * t;
+      const x = 0.5 * (
+        (2 * p1.x) +
+        (-p0.x + p2.x) * t +
+        (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
+        (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3
+      );
+      const y = 0.5 * (
+        (2 * p1.y) +
+        (-p0.y + p2.y) * t +
+        (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
+        (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3
+      );
+      result.push({ x, y, frac: i / numSamples });
+    }
+    return result;
+  }
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    scale = Math.min(width, height) / 1080;
+    cx = width * 0.5;
+    buildTerrain();
+  }
+
+  // Spawn an ash cloud puff
+  function spawnAshCloud(prewarmProgress = 0) {
+    const S = scale;
+    const layer = Math.random() < 0.45 ? 0 : 1; // 0 = behind fountain, 1 = billowing around/front
+    const sideBias = (Math.random() - 0.5) * 2;
+    const baseRadius = (26 + Math.random() * 34) * S;
+    const puff = {
+      x: craterX + sideBias * craterWidth * 0.38,
+      y: craterY - 8 * S,
+      vx: sideBias * (14 + Math.random() * 28) * S + (8 + Math.random() * 14) * S, // slight high-altitude wind drift
+      vy: -(52 + Math.random() * 48) * S,
+      r: baseRadius,
+      growRate: (22 + Math.random() * 26) * S,
+      age: 0,
+      maxAge: 7.5 + Math.random() * 4.5,
+      layer,
+      rot: Math.random() * Math.PI * 2,
+      rotSpeed: (Math.random() - 0.5) * 0.35,
+      seed: Math.random() * 100,
+      subLobes: [
+        { ang: 0.4, dist: 0.42, rScale: 0.76 },
+        { ang: 2.3, dist: 0.48, rScale: 0.82 },
+        { ang: 4.4, dist: 0.38, rScale: 0.72 }
+      ]
+    };
+
+    if (prewarmProgress > 0) {
+      const steps = 40;
+      const dt = (prewarmProgress * puff.maxAge) / steps;
+      for (let i = 0; i < steps; i++) {
+        updateSingleAsh(puff, dt);
+      }
+    }
+    ashClouds.push(puff);
+  }
+
+  function updateSingleAsh(p, dt) {
+    const S = scale;
+    p.age += dt;
+    const life = p.age / p.maxAge;
+    // Plinian column physics: rises fast near vent, then spreads horizontally into an anvil cloud near top of sky
+    const anvilZone = Math.max(0, (craterY - p.y) / (craterY * 0.82));
+    if (anvilZone > 0.55) {
+      // Spread out into dramatic volcanic umbrella cloud
+      const spreadDir = p.x >= craterX ? 1 : -0.85;
+      p.vx += spreadDir * 18 * S * dt;
+      p.vy *= Math.pow(0.92, dt * 6);
+    }
+    p.x += p.vx * dt + Math.sin(p.age * 1.4 + p.seed) * 9 * S * dt;
+    p.y += p.vy * dt;
+    p.r += p.growRate * (1 - life * 0.45) * dt;
+    p.rot += p.rotSpeed * dt;
+  }
+
+  // Spawn primary vertical lava fountain jet particle
+  function spawnLavaJet(prewarm = 0) {
+    const S = scale;
+    const spread = (Math.random() - 0.5) * craterWidth * 0.76;
+    const centerFactor = 1 - Math.abs(spread) / (craterWidth * 0.5);
+    const angle = -Math.PI * 0.5 + (Math.random() - 0.5) * 0.34;
+    const speed = (220 + Math.random() * 290 + centerFactor * 110) * S;
+    const jet = {
+      x: craterX + spread,
+      y: craterY + (Math.random() - 0.5) * 8 * S,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      r: (4.5 + Math.random() * 9.5) * S,
+      age: 0,
+      maxAge: 1.05 + Math.random() * 0.95,
+      gravity: (320 + Math.random() * 90) * S,
+      stretch: 1.2 + Math.random() * 1.4
+    };
+    if (prewarm > 0) {
+      const dt = prewarm * jet.maxAge;
+      jet.x += jet.vx * dt;
+      jet.y += jet.vy * dt + 0.5 * jet.gravity * dt * dt;
+      jet.vy += jet.gravity * dt;
+      jet.age = dt;
+    }
+    lavaJets.push(jet);
+  }
+
+  // Spawn parabolic ballistic lava bomb with glowing trail
+  function spawnLavaBomb(prewarm = 0) {
+    const S = scale;
+    const dir = Math.random() < 0.5 ? -1 : 1;
+    const launchAngle = -Math.PI * 0.5 + dir * (0.14 + Math.random() * 0.52);
+    const speed = (250 + Math.random() * 290) * S;
+    const startX = craterX + (Math.random() - 0.5) * craterWidth * 0.65;
+    const startY = craterY + 2 * S;
+    const bomb = {
+      x: startX,
+      y: startY,
+      vx: Math.cos(launchAngle) * speed,
+      vy: Math.sin(launchAngle) * speed,
+      r: (2.6 + Math.random() * 4.4) * S,
+      age: 0,
+      maxAge: 1.8 + Math.random() * 1.6,
+      gravity: 270 * S,
+      trail: [{ x: startX, y: startY }]
+    };
+    if (prewarm > 0) {
+      const steps = 16;
+      const dt = (prewarm * bomb.maxAge) / steps;
+      for (let i = 0; i < steps; i++) {
+        bomb.age += dt;
+        bomb.vy += bomb.gravity * dt;
+        bomb.x += bomb.vx * dt;
+        bomb.y += bomb.vy * dt;
+        bomb.trail.push({ x: bomb.x, y: bomb.y });
+        if (bomb.trail.length > 12) bomb.trail.shift();
+      }
+    }
+    lavaBombs.push(bomb);
+  }
+
+  // Spawn floating embers / incandescent ash sparks
+  function spawnEmber(prewarm = 0) {
+    const S = scale;
+    const fromSlope = Math.random() < 0.35 && lavaPaths.length > 0;
+    let x, y, vy, vx;
+    if (fromSlope) {
+      const path = lavaPaths[Math.floor(Math.random() * lavaPaths.length)];
+      const pt = path.points[Math.floor(Math.random() * path.points.length * 0.85)];
+      x = pt.x + (Math.random() - 0.5) * 18 * S;
+      y = pt.y;
+      vx = (Math.random() - 0.45) * 28 * S;
+      vy = -(22 + Math.random() * 55) * S;
+    } else {
+      x = craterX + (Math.random() - 0.5) * craterWidth * 1.8;
+      y = craterY - Math.random() * 60 * S;
+      vx = (Math.random() - 0.42) * 75 * S;
+      vy = -(65 + Math.random() * 135) * S;
+    }
+    const ember = {
+      x,
+      y,
+      vx,
+      vy,
+      r: (1.0 + Math.random() * 2.4) * S,
+      age: prewarm * (2.5 + Math.random() * 3.0),
+      maxAge: 2.5 + Math.random() * 3.5,
+      flickerSpeed: 6 + Math.random() * 10,
+      phase: Math.random() * Math.PI * 2
+    };
+    embers.push(ember);
+  }
+
+  // Spawn slope fumarole smoke rising from flowing lava channels
+  function spawnSlopeSmoke() {
+    if (lavaPaths.length === 0) return;
+    const S = scale;
+    const path = lavaPaths[Math.floor(Math.random() * lavaPaths.length)];
+    const idx = Math.floor(Math.random() * (path.points.length * 0.78));
+    const pt = path.points[idx];
+    slopeSmoke.push({
+      x: pt.x + (Math.random() - 0.5) * 12 * S,
+      y: pt.y - 4 * S,
+      vx: (Math.random() - 0.35) * 14 * S,
+      vy: -(16 + Math.random() * 22) * S,
+      r: (10 + Math.random() * 16) * S,
+      age: 0,
+      maxAge: 2.4 + Math.random() * 2.0
+    });
+  }
+
+  // Spawn volcanic lightning inside the ash plume
+  function spawnLightning() {
+    const S = scale;
+    const startX = craterX + (Math.random() - 0.5) * craterWidth * 1.3;
+    const startY = craterY - (55 + Math.random() * 210) * S;
+    const segments = [];
+    let currX = startX;
+    let currY = startY;
+    const mainSteps = 7 + Math.floor(Math.random() * 6);
+    const dirY = Math.random() < 0.7 ? -1 : 0.4;
+    const dirX = (Math.random() - 0.5) * 1.6;
+
+    for (let i = 0; i < mainSteps; i++) {
+      const nextX = currX + (dirX * 18 + (Math.random() - 0.5) * 46) * S;
+      const nextY = currY + (dirY * (18 + Math.random() * 24) + (Math.random() - 0.5) * 18) * S;
+      segments.push({ x1: currX, y1: currY, x2: nextX, y2: nextY, width: (2.4 - (i / mainSteps) * 1.4) * S });
+
+      // Occasional branch
+      if (Math.random() < 0.42 && i > 1) {
+        let bx = currX;
+        let by = currY;
+        for (let b = 0; b < 3; b++) {
+          const nbx = bx + (Math.random() - 0.5) * 38 * S;
+          const nby = by + (Math.random() - 0.5) * 32 * S;
+          segments.push({ x1: bx, y1: by, x2: nbx, y2: nby, width: 0.9 * S });
+          bx = nbx;
+          by = nby;
+        }
+      }
+      currX = nextX;
+      currY = nextY;
+    }
+
+    lightnings.push({
+      cx: startX,
+      cy: startY,
+      segments,
+      age: 0,
+      maxAge: 0.16 + Math.random() * 0.14
+    });
+  }
+
+  // Pre-warm the simulation so the volcano is mid-eruption on frame 1
+  function prewarmSimulation() {
+    for (let i = 0; i < 85; i++) {
+      spawnAshCloud(i / 85);
+    }
+    for (let i = 0; i < 90; i++) {
+      spawnLavaJet(Math.random());
+    }
+    for (let i = 0; i < 36; i++) {
+      spawnLavaBomb(Math.random());
+    }
+    for (let i = 0; i < 110; i++) {
+      spawnEmber(Math.random());
+    }
+  }
+
+  // Draw the deep night sky, twinkling stars, and volcanic horizon glow
+  function drawSky(time, pulseIntensity) {
+    const S = scale;
+    const skyGrad = ctx.createLinearGradient(0, 0, 0, height);
+    skyGrad.addColorStop(0.0, '#03030a');
+    skyGrad.addColorStop(0.32, '#080512');
+    skyGrad.addColorStop(0.62, '#180814');
+    skyGrad.addColorStop(0.85, '#2b0b12');
+    skyGrad.addColorStop(1.0, '#120408');
+    ctx.fillStyle = skyGrad;
+    ctx.fillRect(0, 0, width, height);
+
+    // Twinkling stars
+    ctx.save();
+    for (let i = 0; i < stars.length; i++) {
+      const st = stars[i];
+      const sx = (st.x / 1080) * width;
+      const sy = (st.y / 1080) * height;
+      if (sy > craterY * 1.15) continue;
+      // Fade stars near the bright ash plume center
+      const distPlume = Math.hypot(sx - craterX, sy - craterY * 0.55);
+      const plumeMask = Math.min(1, Math.max(0, (distPlume - 140 * S) / (260 * S)));
+      if (plumeMask <= 0.02) continue;
+
+      const twinkle = 0.55 + 0.45 * Math.sin(time * st.speed + st.phase);
+      ctx.globalAlpha = st.alpha * twinkle * plumeMask;
+      ctx.fillStyle = st.tint;
+      ctx.beginPath();
+      ctx.arc(sx, sy, st.r * S, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    // Intense ambient magma glow behind the crater and ash column
+    const glowRadius = (460 + pulseIntensity * 55) * S;
+    const craterGlow = ctx.createRadialGradient(
+      craterX, craterY - 30 * S, 15 * S,
+      craterX, craterY - 50 * S, glowRadius
+    );
+    craterGlow.addColorStop(0.0, `rgba(255, 165, 60, ${0.58 + pulseIntensity * 0.14})`);
+    craterGlow.addColorStop(0.28, `rgba(235, 68, 18, ${0.36 + pulseIntensity * 0.1})`);
+    craterGlow.addColorStop(0.62, 'rgba(120, 18, 28, 0.16)');
+    craterGlow.addColorStop(1.0, 'rgba(20, 4, 12, 0)');
+    ctx.fillStyle = craterGlow;
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  // Draw distant silhouetted mountain ranges
+  function drawBackgroundRidges(pulseIntensity) {
+    bgRidges.forEach((ridge, idx) => {
+      ctx.beginPath();
+      ctx.moveTo(ridge.points[0].x, height);
+      for (let i = 0; i < ridge.points.length; i++) {
+        ctx.lineTo(ridge.points[i].x, ridge.points[i].y);
+      }
+      ctx.lineTo(ridge.points[ridge.points.length - 1].x, height);
+      ctx.closePath();
+      ctx.fillStyle = ridge.color;
+      ctx.fill();
+
+      // Subtle warm volcanic rim-light along the ridge crest
+      ctx.save();
+      ctx.strokeStyle = idx === 0
+        ? `rgba(190, 55, 25, ${0.18 + pulseIntensity * 0.08})`
+        : `rgba(140, 35, 20, ${0.12 + pulseIntensity * 0.05})`;
+      ctx.lineWidth = 1.5 * scale;
+      ctx.beginPath();
+      for (let i = 0; i < ridge.points.length; i++) {
+        if (i === 0) ctx.moveTo(ridge.points[i].x, ridge.points[i].y);
+        else ctx.lineTo(ridge.points[i].x, ridge.points[i].y);
+      }
+      ctx.stroke();
+      ctx.restore();
+    });
+  }
+
+  // Render volumetric ash clouds lit from beneath by the crater's incandescent magma
+  function drawAshCloudLayer(targetLayer, pulseIntensity) {
+    const S = scale;
+    // Sort by y descending (bottom to top) or age so clouds layer naturally
+    for (let i = 0; i < ashClouds.length; i++) {
+      const p = ashClouds[i];
+      if (p.layer !== targetLayer) continue;
+
+      const life = p.age / p.maxAge;
+      const fadeIn = Math.min(1, life * 5.5);
+      const fadeOut = Math.max(0, 1 - Math.pow(life, 1.65));
+      const alpha = fadeIn * fadeOut * 0.82;
+      if (alpha <= 0.01) continue;
+
+      // Distance from crater determines how strongly the underside of the ash cloud glows
+      const distY = Math.max(0, craterY - p.y);
+      const distNorm = Math.min(1, distY / (420 * S));
+      const fireLight = Math.pow(1 - distNorm, 1.85) * (0.85 + pulseIntensity * 0.25);
+
+      // Check if any volcanic lightning bolt is flashing near this puff
+      let lightningBoost = 0;
+      for (let l = 0; l < lightnings.length; l++) {
+        const bolt = lightnings[l];
+        const d = Math.hypot(p.x - bolt.cx, p.y - bolt.cy);
+        if (d < 170 * S) {
+          lightningBoost = Math.max(lightningBoost, (1 - d / (170 * S)) * (1 - bolt.age / bolt.maxAge));
+        }
+      }
+
+      // Draw multi-lobed billowing cloud puff
+      for (let k = -1; k < p.subLobes.length; k++) {
+        let lx = p.x;
+        let ly = p.y;
+        let lr = p.r;
+        if (k >= 0) {
+          const lobe = p.subLobes[k];
+          const a = p.rot + lobe.ang;
+          lx += Math.cos(a) * p.r * lobe.dist;
+          ly += Math.sin(a) * p.r * lobe.dist * 0.82;
+          lr = p.r * lobe.rScale;
+        }
+
+        // Offset gradient center toward the bottom-center (crater direction) to simulate under-lighting
+        const lightOffsetX = (craterX - lx) * 0.18;
+        const lightOffsetY = lr * 0.38;
+        const grad = ctx.createRadialGradient(
+          lx + lightOffsetX,
+          ly + lightOffsetY,
+          lr * 0.08,
+          lx,
+          ly,
+          lr
+        );
+
+        const rBottom = Math.min(255, Math.floor(34 + fireLight * 215 + lightningBoost * 160));
+        const gBottom = Math.min(255, Math.floor(22 + fireLight * 88 + lightningBoost * 155));
+        const bBottom = Math.min(255, Math.floor(28 + fireLight * 18 + lightningBoost * 210));
+
+        const rMid = Math.min(255, Math.floor(24 + fireLight * 85 + lightningBoost * 70));
+        const gMid = Math.min(255, Math.floor(17 + fireLight * 24 + lightningBoost * 75));
+        const bMid = Math.min(255, Math.floor(23 + fireLight * 14 + lightningBoost * 110));
+
+        grad.addColorStop(0.0, `rgba(${rBottom}, ${gBottom}, ${bBottom}, ${alpha * 0.92})`);
+        grad.addColorStop(0.46, `rgba(${rMid}, ${gMid}, ${bMid}, ${alpha * 0.78})`);
+        grad.addColorStop(0.78, `rgba(16, 12, 18, ${alpha * 0.45})`);
+        grad.addColorStop(1.0, 'rgba(10, 8, 13, 0)');
+
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(lx, ly, lr, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  // Draw volcanic lightning arcs inside the ash plume
+  function drawLightning() {
+    if (lightnings.length === 0) return;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < lightnings.length; i++) {
+      const bolt = lightnings[i];
+      const life = 1 - bolt.age / bolt.maxAge;
+      const flicker = Math.random() > 0.2 ? 1 : 0.35;
+      const a = life * flicker;
+
+      for (let j = 0; j < bolt.segments.length; j++) {
+        const seg = bolt.segments[j];
+        // Outer warm violet-amber glow
+        ctx.strokeStyle = `rgba(255, 155, 110, ${a * 0.45})`;
+        ctx.lineWidth = seg.width * 4.2;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(seg.x1, seg.y1);
+        ctx.lineTo(seg.x2, seg.y2);
+        ctx.stroke();
+
+        // Bright white-gold core
+        ctx.strokeStyle = `rgba(255, 245, 225, ${a * 0.95})`;
+        ctx.lineWidth = seg.width;
+        ctx.beginPath();
+        ctx.moveTo(seg.x1, seg.y1);
+        ctx.lineTo(seg.x2, seg.y2);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  // Draw the roaring lava fountains and ballistic bombs erupting from the vent
+  function drawLavaFountains(time, pulseIntensity) {
+    const S = scale;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+
+    // Intense crater core magma dome
+    const coreGrad = ctx.createRadialGradient(
+      craterX, craterY + 6 * S, 8 * S,
+      craterX, craterY - 25 * S, craterWidth * (1.25 + pulseIntensity * 0.25)
+    );
+    coreGrad.addColorStop(0.0, 'rgba(255, 250, 200, 0.95)');
+    coreGrad.addColorStop(0.28, 'rgba(255, 165, 35, 0.80)');
+    coreGrad.addColorStop(0.62, 'rgba(230, 45, 10, 0.38)');
+    coreGrad.addColorStop(1.0, 'rgba(140, 10, 0, 0)');
+    ctx.fillStyle = coreGrad;
+    ctx.beginPath();
+    ctx.arc(craterX, craterY - 10 * S, craterWidth * 1.4, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Primary fountain jets
+    for (let i = 0; i < lavaJets.length; i++) {
+      const j = lavaJets[i];
+      const life = j.age / j.maxAge;
+      const heat = Math.max(0, 1 - life);
+      const alpha = Math.sin(life * Math.PI) * 0.92;
+      if (alpha <= 0.01) continue;
+
+      const angle = Math.atan2(j.vy, j.vx);
+      const speedNorm = Math.hypot(j.vx, j.vy) / (300 * S);
+      const rx = j.r * (1 + speedNorm * j.stretch * 0.85);
+      const ry = j.r * 0.65;
+
+      ctx.save();
+      ctx.translate(j.x, j.y);
+      ctx.rotate(angle);
+
+      const g = ctx.createRadialGradient(0, 0, ry * 0.1, 0, 0, rx);
+      if (heat > 0.62) {
+        g.addColorStop(0.0, `rgba(255, 252, 210, ${alpha})`);
+        g.addColorStop(0.45, `rgba(255, 180, 40, ${alpha * 0.85})`);
+        g.addColorStop(1.0, 'rgba(220, 45, 5, 0)');
+      } else if (heat > 0.3) {
+        g.addColorStop(0.0, `rgba(255, 190, 55, ${alpha})`);
+        g.addColorStop(0.5, `rgba(240, 68, 12, ${alpha * 0.8})`);
+        g.addColorStop(1.0, 'rgba(150, 15, 0, 0)');
+      } else {
+        g.addColorStop(0.0, `rgba(235, 75, 18, ${alpha * 0.85})`);
+        g.addColorStop(0.6, `rgba(140, 18, 5, ${alpha * 0.5})`);
+        g.addColorStop(1.0, 'rgba(60, 5, 0, 0)');
+      }
+
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Parabolic ballistic lava bombs with incandescent trails
+    for (let i = 0; i < lavaBombs.length; i++) {
+      const b = lavaBombs[i];
+      const life = b.age / b.maxAge;
+      const alpha = Math.max(0, 1 - Math.pow(life, 1.5));
+      if (b.trail.length > 1) {
+        ctx.beginPath();
+        ctx.moveTo(b.trail[0].x, b.trail[0].y);
+        for (let t = 1; t < b.trail.length; t++) {
+          ctx.lineTo(b.trail[t].x, b.trail[t].y);
+        }
+        ctx.strokeStyle = `rgba(255, 105, 22, ${alpha * 0.55})`;
+        ctx.lineWidth = b.r * 1.15;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+      }
+
+      // Glowing bomb head
+      const bg = ctx.createRadialGradient(b.x, b.y, b.r * 0.15, b.x, b.y, b.r * 2.4);
+      bg.addColorStop(0.0, `rgba(255, 248, 200, ${alpha})`);
+      bg.addColorStop(0.4, `rgba(255, 130, 25, ${alpha * 0.85})`);
+      bg.addColorStop(1.0, 'rgba(190, 25, 0, 0)');
+      ctx.fillStyle = bg;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r * 2.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  // Draw the craggy volcano cone, dark rock facets, and glowing crater rim
+  function drawVolcanoCone(time, pulseIntensity) {
+    const S = scale;
+    ctx.save();
+
+    // Build closed polygon for the main volcano body
+    ctx.beginPath();
+    for (let i = valIndexStart(); i < volcanoLeftEdge.length; i++) {
+      const pt = volcanoLeftEdge[i];
+      if (i === 0) ctx.moveTo(pt.x, pt.y);
+      else ctx.lineTo(pt.x, pt.y);
+    }
+    for (let i = volcanoRightEdge.length - 1; i >= 0; i--) {
+      const pt = volcanoRightEdge[i];
+      ctx.lineTo(pt.x, pt.y);
+    }
+    // Jagged notched crater rim across the top
+    const rimSteps = 14;
+    for (let i = rimSteps; i >= 0; i--) {
+      const u = i / rimSteps;
+      const rx = volcanoLeftEdge[0].x + u * (volcanoRightEdge[0].x - volcanoLeftEdge[0].x);
+      const dip = Math.sin(u * Math.PI) * 14 * S + Math.cos(u * Math.PI * 5) * 3.5 * S;
+      ctx.lineTo(rx, craterY + dip);
+    }
+    ctx.closePath();
+
+    // Base volcanic rock gradient (warm lit near crater, pitch-black basalt toward bottom)
+    const coneGrad = ctx.createLinearGradient(craterX, craterY, craterX, height);
+    coneGrad.addColorStop(0.0, '#2a0e10');
+    coneGrad.addColorStop(0.18, '#19090d');
+    coneGrad.addColorStop(0.55, '#0d060a');
+    coneGrad.addColorStop(1.0, '#050306');
+    ctx.fillStyle = coneGrad;
+    ctx.fill();
+
+    // Clip to the volcano cone so all slope textures, lava flows, and rim lighting stay cleanly on the mountain
+    ctx.clip();
+
+    // Subtle 3D craggy ridge facets catching orange light from the crater and lava channels
+    for (let r = 0; r < volcanoRidges.length; r++) {
+      const ridge = volcanoRidges[r];
+      const nextRidge = volcanoRidges[r + 1];
+      if (!nextRidge) continue;
+
+      ctx.beginPath();
+      for (let i = 0; i < ridge.points.length; i++) {
+        const pt = ridge.points[i];
+        if (i === 0) ctx.moveTo(pt.x, pt.y);
+        else ctx.lineTo(pt.x, pt.y);
+      }
+      for (let i = nextRidge.points.length - 1; i >= 0; i--) {
+        const pt = nextRidge.points[i];
+        ctx.lineTo(pt.x, pt.y);
+      }
+      ctx.closePath();
+
+      const facetGrad = ctx.createLinearGradient(craterX, craterY, craterX, height * 0.9);
+      if (r % 2 === 0) {
+        facetGrad.addColorStop(0.0, `rgba(165, 42, 16, ${0.22 + pulseIntensity * 0.08})`);
+        facetGrad.addColorStop(0.35, 'rgba(65, 16, 14, 0.14)');
+        facetGrad.addColorStop(1.0, 'rgba(10, 4, 8, 0.0)');
+      } else {
+        facetGrad.addColorStop(0.0, 'rgba(12, 4, 8, 0.35)');
+        facetGrad.addColorStop(1.0, 'rgba(4, 2, 5, 0.45)');
+      }
+      ctx.fillStyle = facetGrad;
+      ctx.fill();
+    }
+
+    // Draw the glowing molten lava rivers winding down the slopes
+    drawLavaFlowsOnSlopes(time, pulseIntensity);
+
+    // Draw dark cooling rock islands / craggy overhangs partially bridging the lava channels for realism
+    drawSlopeRockOverhangs();
+
+    // Incandescent crater lip highlight
+    const lipGrad = ctx.createRadialGradient(
+      craterX, craterY, craterWidth * 0.1,
+      craterX, craterY + 12 * S, craterWidth * 0.95
+    );
+    lipGrad.addColorStop(0.0, `rgba(255, 220, 120, ${0.85 + pulseIntensity * 0.15})`);
+    lipGrad.addColorStop(0.45, 'rgba(255, 90, 15, 0.55)');
+    lipGrad.addColorStop(1.0, 'rgba(120, 15, 5, 0)');
+    ctx.fillStyle = lipGrad;
+    ctx.beginPath();
+    ctx.ellipse(craterX, craterY + 6 * S, craterWidth * 0.85, 22 * S, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+
+    // Subtle rim light along the outer upper slopes of the volcano cone
+    ctx.save();
+    const rimEdgeGradL = ctx.createLinearGradient(craterX - craterWidth * 0.5, craterY, craterX - 320 * S, craterY + 340 * S);
+    rimEdgeGradL.addColorStop(0.0, `rgba(255, 115, 35, ${0.65 + pulseIntensity * 0.2})`);
+    rimEdgeGradL.addColorStop(0.45, 'rgba(160, 35, 18, 0.22)');
+    rimEdgeGradL.addColorStop(1.0, 'rgba(40, 8, 12, 0)');
+    ctx.strokeStyle = rimEdgeGradL;
+    ctx.lineWidth = 2.4 * S;
+    ctx.beginPath();
+    for (let i = 0; i < 24; i++) {
+      const pt = volcanoLeftEdge[i];
+      if (i === 0) ctx.moveTo(pt.x, pt.y);
+      else ctx.lineTo(pt.x, pt.y);
+    }
+    ctx.stroke();
+
+    const rimEdgeGradR = ctx.createLinearGradient(craterX + craterWidth * 0.5, craterY, craterX + 320 * S, craterY + 340 * S);
+    rimEdgeGradR.addColorStop(0.0, `rgba(255, 115, 35, ${0.65 + pulseIntensity * 0.2})`);
+    rimEdgeGradR.addColorStop(0.45, 'rgba(160, 35, 18, 0.22)');
+    rimEdgeGradR.addColorStop(1.0, 'rgba(40, 8, 12, 0)');
+    ctx.strokeStyle = rimEdgeGradR;
+    ctx.beginPath();
+    for (let i = 0; i < 24; i++) {
+      const pt = volcanoRightEdge[i];
+      if (i === 0) ctx.moveTo(pt.x, pt.y);
+      else ctx.lineTo(pt.x, pt.y);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function valIndexStart() {
+    return 0;
+  }
+
+  // Render multi-layered molten lava rivers and animated downward magma surges
+  function drawLavaFlowsOnSlopes(time, pulseIntensity) {
+    const S = scale;
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    // 1. Wide ambient red-orange thermal glow illuminating the rock banks beside each lava river
+    for (let p = 0; p < lavaPaths.length; p++) {
+      const path = lavaPaths[p];
+      const pts = path.points;
+      for (let i = 0; i < pts.length - 1; i += 2) {
+        const pt1 = pts[i];
+        const pt2 = pts[Math.min(pts.length - 1, i + 2)];
+        const frac = pt1.frac;
+        const w = (7 + frac * 22) * path.widthScale;
+
+        ctx.beginPath();
+        ctx.moveTo(pt1.x, pt1.y);
+        ctx.lineTo(pt2.x, pt2.y);
+        ctx.strokeStyle = `rgba(185, 24, 6, ${(1 - frac * 0.45) * 0.26})`;
+        ctx.lineWidth = w * 2.6;
+        ctx.stroke();
+      }
+    }
+
+    // 2. Deep crimson-orange molten channel bed
+    for (let p = 0; p < lavaPaths.length; p++) {
+      const path = lavaPaths[p];
+      const pts = path.points;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const pt1 = pts[i];
+        const pt2 = pts[i + 1];
+        const frac = pt1.frac;
+        const wobble = Math.sin(frac * 28 - time * 2.4 * path.speed + p) * 0.22 + 1;
+        const w = (4.5 + frac * 13.5) * path.widthScale * wobble;
+
+        ctx.beginPath();
+        ctx.moveTo(pt1.x, pt1.y);
+        ctx.lineTo(pt2.x, pt2.y);
+        const r = 235;
+        const g = Math.floor(55 - frac * 28);
+        const b = Math.floor(12 - frac * 8);
+        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${0.88 - frac * 0.25})`;
+        ctx.lineWidth = w;
+        ctx.stroke();
+      }
+    }
+
+    // 3. Incandescent yellow-orange hot core thread with animated downward wave motion
+    ctx.globalCompositeOperation = 'lighter';
+    for (let p = 0; p < lavaPaths.length; p++) {
+      const path = lavaPaths[p];
+      const pts = path.points;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const pt1 = pts[i];
+        const pt2 = pts[i + 1];
+        const frac = pt1.frac;
+        const wave = 0.5 + 0.5 * Math.sin(frac * 35 - time * 3.8 * path.speed + p * 1.7);
+        const w = (2.0 + frac * 5.2 + wave * 2.2) * path.widthScale * (1 - frac * 0.25);
+
+        ctx.beginPath();
+        ctx.moveTo(pt1.x, pt1.y);
+        ctx.lineTo(pt2.x, pt2.y);
+        const g = Math.floor(195 - frac * 85 + wave * 35);
+        const b = Math.floor(95 * (1 - frac) * wave);
+        ctx.strokeStyle = `rgba(255, ${g}, ${b}, ${(0.92 - frac * 0.35) * (0.75 + wave * 0.25)})`;
+        ctx.lineWidth = w;
+        ctx.stroke();
+      }
+    }
+
+    // 4. Discrete glowing magma surges & crust-break pulses flowing down the channels
+    for (let i = 0; i < flowPulses.length; i++) {
+      const fp = flowPulses[i];
+      const path = lavaPaths[fp.pathIdx];
+      if (!path) continue;
+      const pts = path.points;
+      const idxFloat = fp.t * (pts.length - 1);
+      const idx = Math.min(pts.length - 2, Math.floor(idxFloat));
+      const rem = idxFloat - idx;
+      const p0 = pts[idx];
+      const p1 = pts[idx + 1];
+
+      const px = p0.x + (p1.x - p0.x) * rem + Math.sin(fp.t * 18 + fp.phase) * fp.offset;
+      const py = p0.y + (p1.y - p0.y) * rem;
+      const angle = Math.atan2(p1.y - p0.y, p1.x - p0.x);
+
+      const env = Math.sin(fp.t * Math.PI);
+      const radius = (4.5 + fp.t * 7.5) * fp.size * path.widthScale * 0.75;
+
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.rotate(angle);
+
+      const pg = ctx.createRadialGradient(0, 0, radius * 0.1, 0, 0, radius * 2.1);
+      pg.addColorStop(0.0, `rgba(255, 248, 185, ${env * 0.85 * fp.heat})`);
+      pg.addColorStop(0.45, `rgba(255, 135, 22, ${env * 0.65})`);
+      pg.addColorStop(1.0, 'rgba(180, 20, 0, 0)');
+
+      ctx.fillStyle = pg;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, radius * 2.1, radius * 0.72, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    ctx.restore();
+  }
+
+  // Dark cooling lava crust patches & rocky outcrops along the slope channels
+  function drawSlopeRockOverhangs() {
+    const S = scale;
+    ctx.save();
+    ctx.fillStyle = 'rgba(14, 5, 8, 0.78)';
+    for (let p = 0; p < lavaPaths.length; p++) {
+      const pts = lavaPaths[p].points;
+      for (let i = 10; i < pts.length - 8; i += 11) {
+        const pt = pts[i];
+        const side = (i % 2 === 0 ? 1 : -1) * (4 + (i / pts.length) * 9) * S;
+        ctx.beginPath();
+        ctx.ellipse(
+          pt.x + side,
+          pt.y + 2 * S,
+          (5 + (i % 5) * 2.2) * S,
+          (2.2 + (i % 3) * 1.4) * S,
+          0.35 * (i % 2 === 0 ? 1 : -1),
+          0,
+          Math.PI * 2
+        );
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
+  // Draw rising fumarole smoke wisps along the lava slopes
+  function drawSlopeSmoke() {
+    for (let i = 0; i < slopeSmoke.length; i++) {
+      const s = slopeSmoke[i];
+      const life = s.age / s.maxAge;
+      const alpha = Math.sin(life * Math.PI) * 0.24;
+      if (alpha <= 0.005) continue;
+
+      const grad = ctx.createRadialGradient(s.x, s.y + s.r * 0.25, s.r * 0.1, s.x, s.y, s.r);
+      grad.addColorStop(0.0, `rgba(215, 78, 32, ${alpha})`);
+      grad.addColorStop(0.55, `rgba(65, 24, 26, ${alpha * 0.65})`);
+      grad.addColorStop(1.0, 'rgba(18, 10, 14, 0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // Draw floating embers and rising incandescent sparks
+  function drawEmbers(time) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < embers.length; i++) {
+      const e = embers[i];
+      const life = e.age / e.maxAge;
+      const flicker = 0.55 + 0.45 * Math.sin(time * e.flickerSpeed + e.phase);
+      const alpha = Math.sin(life * Math.PI) * flicker;
+      if (alpha <= 0.02) continue;
+
+      const eg = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, e.r * 2.8);
+      eg.addColorStop(0.0, `rgba(255, 240, 175, ${alpha})`);
+      eg.addColorStop(0.45, `rgba(255, 115, 25, ${alpha * 0.75})`);
+      eg.addColorStop(1.0, 'rgba(180, 20, 0, 0)');
+
+      ctx.fillStyle = eg;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, e.r * 2.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // Foreground silhouetted volcanic ridge at the bottom edge + atmospheric vignette
+  function drawForegroundAndVignette() {
+    const S = scale;
+    ctx.save();
+
+    // Jagged foreground silhouette ridge along the very bottom
+    ctx.beginPath();
+    ctx.moveTo(0, height);
+    const fgSteps = 28;
+    for (let i = 0; i <= fgSteps; i++) {
+      const u = i / fgSteps;
+      const fx = u * width;
+      // Dip slightly in the center so the lower lava rivers remain dramatic and visible
+      const centerDip = Math.sin(u * Math.PI) * 32 * S;
+      const crag = Math.sin(u * 29) * 7 * S + Math.cos(u * 13) * 5 * S;
+      const fy = height - (42 * S - centerDip + crag);
+      ctx.lineTo(fx, fy);
+    }
+    ctx.lineTo(width, height);
+    ctx.closePath();
+    ctx.fillStyle = '#040205';
+    ctx.fill();
+
+    // Subtle cinematic vignette around the frame edges
+    const vig = ctx.createRadialGradient(
+      width * 0.5, height * 0.5, Math.min(width, height) * 0.36,
+      width * 0.5, height * 0.5, Math.max(width, height) * 0.76
+    );
+    vig.addColorStop(0.0, 'rgba(0, 0, 0, 0)');
+    vig.addColorStop(0.75, 'rgba(4, 2, 6, 0.22)');
+    vig.addColorStop(1.0, 'rgba(2, 1, 4, 0.62)');
+    ctx.fillStyle = vig;
+    ctx.fillRect(0, 0, width, height);
+
+    ctx.restore();
+  }
+
+  // Advance physics for all volcanic systems
+  let ashSpawnAccum = 0;
+  let jetSpawnAccum = 0;
+  let bombSpawnAccum = 0;
+  let emberSpawnAccum = 0;
+  let smokeSpawnAccum = 0;
+
+  function update(dt, time) {
+    const S = scale;
+
+    // 1. Update ash clouds
+    ashSpawnAccum += dt * 13.5;
+    while (ashSpawnAccum >= 1) {
+      ashSpawnAccum -= 1;
+      spawnAshCloud(0);
+    }
+    for (let i = ashClouds.length - 1; i >= 0; i--) {
+      const p = ashClouds[i];
+      updateSingleAsh(p, dt);
+      if (p.age >= p.maxAge) {
+        ashClouds.splice(i, 1);
+      }
+    }
+
+    // 2. Update lava fountain jets
+    jetSpawnAccum += dt * 82;
+    while (jetSpawnAccum >= 1) {
+      jetSpawnAccum -= 1;
+      spawnLavaJet(0);
+    }
+    for (let i = lavaJets.length - 1; i >= 0; i--) {
+      const j = lavaJets[i];
+      j.age += dt;
+      j.vy += j.gravity * dt;
+      j.x += j.vx * dt;
+      j.y += j.vy * dt;
+      if (j.age >= j.maxAge) {
+        lavaJets.splice(i, 1);
+      }
+    }
+
+    // 3. Update ballistic lava bombs
+    bombSpawnAccum += dt * 16;
+    while (bombSpawnAccum >= 1) {
+      bombSpawnAccum -= 1;
+      spawnLavaBomb(0);
+    }
+    for (let i = lavaBombs.length - 1; i >= 0; i--) {
+      const b = lavaBombs[i];
+      b.age += dt;
+      b.vy += b.gravity * dt;
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      b.trail.push({ x: b.x, y: b.y });
+      if (b.trail.length > 13) b.trail.shift();
+      if (b.age >= b.maxAge || b.y > height + 20) {
+        lavaBombs.splice(i, 1);
+      }
+    }
+
+    // 4. Update flowing magma pulses along the slope channels
+    for (let i = 0; i < flowPulses.length; i++) {
+      const fp = flowPulses[i];
+      fp.t += fp.speed * dt;
+      if (fp.t >= 1) {
+        fp.t -= 1;
+        fp.heat = 0.7 + Math.random() * 0.3;
+      }
+    }
+
+    // 5. Update slope fumarole smoke
+    smokeSpawnAccum += dt * 12;
+    while (smokeSpawnAccum >= 1) {
+      smokeSpawnAccum -= 1;
+      spawnSlopeSmoke();
+    }
+    for (let i = slopeSmoke.length - 1; i >= 0; i--) {
+      const s = slopeSmoke[i];
+      s.age += dt;
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+      s.r += 9 * S * dt;
+      if (s.age >= s.maxAge) {
+        slopeSmoke.splice(i, 1);
+      }
+    }
+
+    // 6. Update floating embers
+    emberSpawnAccum += dt * 36;
+    while (emberSpawnAccum >= 1) {
+      emberSpawnAccum -= 1;
+      spawnEmber(0);
+    }
+    for (let i = embers.length - 1; i >= 0; i--) {
+      const e = embers[i];
+      e.age += dt;
+      e.x += (e.vx + Math.sin(time * 2.2 + e.phase) * 18 * S) * dt;
+      e.y += e.vy * dt;
+      if (e.age >= e.maxAge || e.y < -30) {
+        embers.splice(i, 1);
+      }
+    }
+
+    // 7. Occasional volcanic lightning inside the ash cloud
+    if (Math.random() < dt * 1.45 && lightnings.length < 2) {
+      spawnLightning();
+    }
+    for (let i = lightnings.length - 1; i >= 0; i--) {
+      lightnings[i].age += dt;
+      if (lightnings[i].age >= lightnings[i].maxAge) {
+        lightnings.splice(i, 1);
+      }
+    }
+  }
+
+  // Initialize and start animation immediately on load
+  initStars();
+  resize();
+  prewarmSimulation();
+  window.addEventListener('resize', resize);
+
+  let lastTime = performance.now();
+  function animate(now) {
+    const dt = Math.min(0.05, (now - lastTime) * 0.001);
+    lastTime = now;
+    const time = now * 0.001;
+
+    // Organic volcanic harmonic pulse driving the crater glow and fountain intensity
+    const pulseIntensity = 0.5 + 0.3 * Math.sin(time * 2.1) + 0.2 * Math.sin(time * 5.3 + 1.2);
+
+    update(dt, time);
+
+    drawSky(time, pulseIntensity);
+    drawBackgroundRidges(pulseIntensity);
+    drawAshCloudLayer(0, pulseIntensity);
+    drawLavaFountains(time, pulseIntensity);
+    drawAshCloudLayer(1, pulseIntensity);
+    drawLightning();
+    drawVolcanoCone(time, pulseIntensity);
+    drawSlopeSmoke();
+    drawEmbers(time);
+    drawForegroundAndVignette();
+
+    requestAnimationFrame(animate);
+  }
+
+  requestAnimationFrame(animate);
+})();
+</script>
+</body>
+</html>

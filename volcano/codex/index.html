@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Volcano at night</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #03050b; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas aria-label="An erupting volcano at night, with fountains of molten lava, glowing rivers and billowing ash clouds" role="img"></canvas>
+<script>
+(() => {
+  'use strict';
+  const canvas = document.querySelector('canvas');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const SIZE = 1080;
+  let seed = 71839;
+  const rand = () => { seed = (Math.imul(seed, 1664525) + 1013904223) | 0; return (seed >>> 0) / 4294967296; };
+  const range = (a, b) => a + rand() * (b - a);
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const layer = () => { const c = document.createElement('canvas'); c.width = c.height = SIZE; return c; };
+  const background = layer(), mountain = layer(), foreground = layer();
+  let width, height, scale, ox, oy;
+  function resize() {
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    width = innerWidth; height = innerHeight;
+    canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
+    scale = Math.max(width / SIZE, height / SIZE);
+    ox = (width - SIZE * scale) / 2; oy = (height - SIZE * scale) / 2;
+    ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * ox, dpr * oy);
+  }
+  addEventListener('resize', resize); resize();
+
+  function glow(c, x, y, r, color, strength = 1) {
+    const g = c.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, `rgba(${color},${strength})`);
+    g.addColorStop(.25, `rgba(${color},${strength * .42})`);
+    g.addColorStop(1, `rgba(${color},0)`);
+    c.fillStyle = g; c.fillRect(x-r, y-r, r*2, r*2);
+  }
+  function polygon(c, points, fill) {
+    c.beginPath(); points.forEach(([x,y],i) => i ? c.lineTo(x,y) : c.moveTo(x,y));
+    c.closePath(); c.fillStyle = fill; c.fill();
+  }
+  const silhouette = [[-80,1030],[0,921],[96,855],[171,793],[222,738],[278,699],[330,632],[382,584],[425,526],[459,479],[484,453],[508,457],[529,470],[548,462],[568,450],[589,468],[622,519],[670,572],[702,618],[755,657],[795,710],[852,755],[894,817],[977,877],[1100,951],[1160,1100],[-80,1100]];
+  const mountainPath = new Path2D();
+  silhouette.forEach(([x,y],i) => i ? mountainPath.lineTo(x,y) : mountainPath.moveTo(x,y)); mountainPath.closePath();
+  {
+    const c = background.getContext('2d');
+    const sky = c.createLinearGradient(0,0,0,1080);
+    sky.addColorStop(0,'#030713'); sky.addColorStop(.4,'#101624'); sky.addColorStop(.75,'#29202a'); sky.addColorStop(1,'#100b13');
+    c.fillStyle = sky; c.fillRect(0,0,SIZE,SIZE);
+    glow(c,530,490,430,'139,42,27',.23);
+    for(let i=0;i<370;i++) {
+      const x=rand()*1080, y=rand()*710, r=range(.35,1.25);
+      c.globalAlpha=range(.12,.7)*(1-y/900); c.fillStyle=rand()>.8?'#a6b9d7':'#d3d9e5';
+      c.beginPath(); c.arc(x,y,r,0,Math.PI*2); c.fill();
+    }
+    c.globalAlpha=1;
+    glow(c,168,172,95,'111,137,176',.06);
+    c.fillStyle='#939fac'; c.beginPath(); c.arc(168,172,23,0,Math.PI*2); c.fill();
+    c.fillStyle='#0a101d'; c.beginPath(); c.arc(177,164,24,0,Math.PI*2); c.fill();
+    polygon(c,[[0,718],[52,690],[103,705],[165,660],[227,706],[292,680],[352,728],[430,697],[508,746],[597,695],[655,711],[730,664],[785,682],[846,639],[916,689],[987,672],[1080,712],[1080,1080],[0,1080]],'#10131e');
+    polygon(c,[[0,799],[72,756],[134,780],[218,721],[280,756],[356,732],[461,801],[540,747],[655,791],[757,731],[832,763],[916,715],[1001,758],[1080,734],[1080,1080],[0,1080]],'#12121b');
+    glow(c,540,720,350,'184,47,26',.13);
+  }
+  {
+    const c = mountain.getContext('2d');
+    const g=c.createLinearGradient(300,420,600,1080);
+    g.addColorStop(0,'#35252a'); g.addColorStop(.22,'#251d23'); g.addColorStop(.65,'#14141c'); g.addColorStop(1,'#0b0d13');
+    c.fillStyle=g; c.fill(mountainPath); c.save(); c.clip(mountainPath);
+    for(let i=0;i<145;i++) {
+      const startX=range(462,594), endX=range(-220,1330), endY=range(900,1250);
+      const midX=startX+(endX-startX)*.4+range(-65,65);
+      c.beginPath(); c.moveTo(startX,range(451,495)); c.lineTo(midX,range(630,730)); c.lineTo(endX,endY);
+      c.strokeStyle=i%3===0?'rgba(119,71,60,.095)':'rgba(0,2,10,.21)'; c.lineWidth=range(3,24); c.stroke();
+    }
+    for(let i=0;i<17500;i++) {
+      const x=rand()*1080,y=range(450,1080),r=range(.5,2.6);
+      c.fillStyle=rand()>.52?'rgba(146,105,88,.065)':'rgba(0,0,7,.16)'; c.fillRect(x,y,r*2,r);
+    }
+    glow(c,531,467,190,'255,66,19',.26); c.restore();
+  }
+
+  // Smooth, hand-shaped rivers split into tributaries as they descend.
+  function river(points, w, phase) {
+    const samples=[];
+    for(let i=0;i<points.length-1;i++) {
+      const a=points[Math.max(0,i-1)],b=points[i],c=points[i+1],d=points[Math.min(points.length-1,i+2)];
+      const steps=Math.ceil(Math.hypot(c[0]-b[0],c[1]-b[1])/3);
+      for(let j=0;j<steps;j++) {
+        const t=j/steps,t2=t*t,t3=t2*t;
+        const coord=k=>.5*((2*b[k])+(-a[k]+c[k])*t+(2*a[k]-5*b[k]+4*c[k]-d[k])*t2+(-a[k]+3*b[k]-3*c[k]+d[k])*t3);
+        samples.push([coord(0),coord(1)]);
+      }
+    }
+    samples.push(points[points.length-1]);
+    return {samples,w,phase};
+  }
+  const rivers=[
+    river([[528,473],[518,510],[534,551],[521,590],[555,633],[565,679],[600,718],[626,767],[668,802],[695,859],[748,898],[772,947],[841,996],[909,1088]],22,0),
+    river([[535,484],[557,525],[565,570],[600,606],[608,651],[646,691],[655,731],[698,765],[735,807],[789,832],[825,875],[880,906]],9,2),
+    river([[519,477],[492,513],[480,559],[448,598],[445,635],[409,682],[387,738],[352,773],[344,823],[306,865]],9,4),
+    river([[521,585],[490,627],[485,672],[464,713],[480,753],[461,799],[479,850],[463,886],[483,934],[461,990]],13,1),
+    river([[600,718],[573,755],[592,800],[579,833],[602,880],[606,922],[635,960]],6,3),
+    river([[448,608],[420,637],[389,659],[369,697],[337,720],[314,754],[274,783]],4,5),
+    river([[695,858],[676,891],[685,924],[661,967],[690,1010],[701,1085]],8,6),
+    river([[565,569],[588,589],[628,612],[659,653],[687,671],[703,707]],4,7)
+  ];
+  function strokeRiver(c,r,width,color) {
+    c.beginPath(); r.samples.forEach(([x,y],i)=> i?c.lineTo(x,y):c.moveTo(x,y));
+    c.lineWidth=width; c.strokeStyle=color; c.lineCap='round'; c.lineJoin='round'; c.stroke();
+  }
+  const lavaBed=layer();
+  {
+    const c=lavaBed.getContext('2d');
+    for(const r of rivers) {
+      strokeRiver(c,r,r.w*2.2,'#160b0b');
+      c.shadowBlur=25; c.shadowColor='#f53b05'; strokeRiver(c,r,r.w*1.15,'#a32308');
+      c.shadowBlur=9; strokeRiver(c,r,r.w*.75,'#f54b08');
+      c.shadowBlur=0; strokeRiver(c,r,r.w*.3,'#ff9d24');
+    }
+    // Dark plates of cooling crust float over the incandescent channels.
+    for(const r of rivers) for(let i=5;i<r.samples.length-3;i+=3) {
+      const [x,y]=r.samples[i]; const w=r.w*range(.22,.75);
+      c.save(); c.translate(x+range(-r.w*.2,r.w*.2),y); c.rotate(range(-1,1));
+      c.fillStyle=rand()>.5?'#4e190e':'#7c230b';
+      c.fillRect(-w/2,-range(1,4),w,range(2,7)); c.restore();
+    }
+  }
+
+  const smokeSprites=[];
+  for(let k=0;k<7;k++) {
+    const s=document.createElement('canvas'); s.width=s.height=192;
+    const c=s.getContext('2d');
+    for(let j=0;j<18;j++) {
+      const a=rand()*Math.PI*2,dist=range(0,45),x=96+Math.cos(a)*dist,y=96+Math.sin(a)*dist,r=range(27,49);
+      const g=c.createRadialGradient(x-r*.18,y-r*.25,r*.1,x,y,r);
+      const v=Math.floor(range(26,43));
+      g.addColorStop(0,`rgba(${v+7},${v+4},${v+9},.8)`);
+      g.addColorStop(.6,`rgba(${v},${v},${v+5},.67)`); g.addColorStop(1,`rgba(${v},${v},${v+5},0)`);
+      c.fillStyle=g; c.fillRect(x-r,y-r,r*2,r*2);
+    }
+    smokeSprites.push(s);
+  }
+  const smoke=[];
+  function puff(age=0) {
+    return {age,life:range(11,17),x:range(500,566),y:range(437,465),vx:range(5,18),vy:range(-46,-31),size:range(40,65),rot:range(-1,1),spin:range(-.06,.06),sprite:Math.floor(rand()*7)};
+  }
+  for(let i=0;i<115;i++) { const p=puff(); p.age=rand()*p.life; smoke.push(p); }
+  const sparks=[];
+  function spark(prewarm=false) {
+    const angle=range(-.78,.78), speed=range(95,310);
+    const p={x:range(504,560),y:range(454,466),vx:Math.sin(angle)*speed,vy:-Math.cos(angle)*speed,life:range(1.5,3.6),age:0,r:range(.65,2.6),trail:[]};
+    if(prewarm) { const t=range(0,p.life); p.age=t; p.x+=p.vx*t; p.y+=p.vy*t+65*t*t; p.vy+=130*t; }
+    return p;
+  }
+  for(let i=0;i<650;i++) sparks.push(spark(true));
+  const drifting=Array.from({length:100},()=>({x:range(280,840),y:range(180,920),r:range(.4,1.6),speed:range(8,34),phase:range(0,7)}));
+  {
+    const c=foreground.getContext('2d');
+    polygon(c,[[0,974],[55,958],[104,981],[145,967],[213,1003],[262,990],[314,1025],[379,1037],[409,1080],[0,1080]],'#07090e');
+    polygon(c,[[1080,942],[1047,951],[1024,973],[988,962],[969,994],[934,1010],[956,1080],[1080,1080]],'#07080d');
+    for(let i=0;i<90;i++) {
+      const x=rand()*1080,y=range(1010,1100),r=range(3,16);
+      if(x>590 && x<960) continue;
+      polygon(c,[[x-r,y],[x-r*.5,y-r*.7],[x+r*.3,y-r],[x+r,y-r*.2],[x+r*.8,y+r*.4]],'#090a0f');
+    }
+  }
+  let last=0, time=0;
+  function frame(now) {
+    const dt=last?Math.min((now-last)/1000,.035):1/60; last=now; time+=dt;
+    ctx.globalCompositeOperation='source-over'; ctx.globalAlpha=1;
+    ctx.drawImage(background,0,0);
+    // The plume broadens and is carried sideways by the high-altitude wind.
+    smoke.sort((a,b)=>b.age-a.age);
+    for(let i=0;i<smoke.length;i++) {
+      let p=smoke[i]; p.age+=dt; if(p.age>p.life) p=smoke[i]=puff();
+      const a=p.age, expansion=1+a*.19;
+      const x=p.x+p.vx*a+a*a*1.0+Math.sin(a*.65+p.rot)*a*2;
+      const y=p.y+p.vy*a-a*a*.43;
+      const size=p.size*expansion;
+      ctx.save(); ctx.translate(x,y); ctx.rotate(p.rot+p.spin*a);
+      ctx.globalAlpha=Math.min(1,a*1.7)*Math.min(1,(p.life-a)/3)*.88;
+      ctx.drawImage(smokeSprites[p.sprite],-size,-size,size*2,size*2); ctx.restore();
+    }
+    ctx.globalAlpha=1;
+    ctx.globalCompositeOperation='screen';
+    glow(ctx,535,443,165,'220,47,12',.3+.04*Math.sin(time*4));
+    glow(ctx,538,381,95,'172,37,11',.13);
+    ctx.globalCompositeOperation='source-over';
+    ctx.drawImage(mountain,0,0); ctx.drawImage(lavaBed,0,0);
+    ctx.globalCompositeOperation='screen';
+    // Small traveling highlights suggest the turbulence beneath the lava crust.
+    for(const r of rivers) {
+      for(let j=0;j<28;j++) {
+        const pos=((j/28+time*.052+r.phase*.13)%1)*(r.samples.length-1);
+        const i=Math.floor(pos),p=r.samples[i],q=r.samples[Math.min(i+2,r.samples.length-1)];
+        ctx.globalAlpha=(.3+.3*Math.sin(j*4.7+time*2))*(.5+.5*Math.sin(pos*.8+r.phase)**2);
+        ctx.strokeStyle='#ffd16a'; ctx.lineWidth=r.w*range(.08,.2);
+        ctx.beginPath(); ctx.moveTo(p[0]+Math.sin(j*17)*r.w*.2,p[1]); ctx.lineTo(q[0],q[1]+3); ctx.stroke();
+      }
+    }
+    ctx.globalAlpha=1;
+    for(const r of rivers) {
+      const p=r.samples[Math.floor(r.samples.length*.65)]; glow(ctx,p[0],p[1],r.w*5,'255,48,0',.055);
+    }
+    // The elliptical vent sits between the back rim and the near lip.
+    glow(ctx,532,463,75,'255,77,9',.75);
+    ctx.fillStyle='#ff6a0c'; ctx.beginPath(); ctx.ellipse(532,463,39,8,0,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#ffe6a2'; ctx.beginPath(); ctx.ellipse(531,460,26,3.6,0,0,Math.PI*2); ctx.fill();
+    // Ballistic particles carry short, bright streaks and cool as they fall.
+    for(let i=0;i<sparks.length;i++) {
+      let p=sparks[i]; p.age+=dt;
+      if(p.age>p.life || p.y>650) p=sparks[i]=spark();
+      const oldX=p.x,oldY=p.y; p.vx*=1-dt*.12; p.vy+=130*dt; p.x+=p.vx*dt; p.y+=p.vy*dt;
+      const heat=1-p.age/p.life;
+      ctx.globalAlpha=Math.min(1,heat*3);
+      ctx.strokeStyle=heat>.62?'#ffdc79':heat>.28?'#ff6e13':'#b52b09';
+      ctx.lineWidth=p.r*(.5+heat*.5); ctx.beginPath();
+      ctx.moveTo(oldX-(p.x-oldX)*1.4,oldY-(p.y-oldY)*1.4); ctx.lineTo(p.x,p.y); ctx.stroke();
+      if(p.r>1.8 && heat>.35) glow(ctx,p.x,p.y,p.r*4,'255,74,8',.16*heat);
+    }
+    ctx.globalAlpha=1;
+    glow(ctx,531,450,48,'255,130,25',.5+.12*Math.sin(time*11));
+    ctx.globalCompositeOperation='source-over';
+    ctx.strokeStyle='#321a19'; ctx.lineWidth=5; ctx.beginPath(); ctx.moveTo(483,456); ctx.quadraticCurveTo(503,479,528,477); ctx.quadraticCurveTo(555,477,571,454); ctx.stroke();
+    ctx.strokeStyle='#b44019'; ctx.lineWidth=1.2; ctx.beginPath(); ctx.moveTo(488,460); ctx.quadraticCurveTo(505,475,519,474); ctx.moveTo(546,474); ctx.quadraticCurveTo(560,469,568,459); ctx.stroke();
+    ctx.globalCompositeOperation='screen';
+    for(const p of drifting) {
+      p.y-=dt*p.speed; p.x+=dt*(8+Math.sin(time+p.phase)*6);
+      if(p.y<130 || p.x>1000) {p.y=range(490,900);p.x=range(390,740);}
+      ctx.globalAlpha=.25+.3*Math.sin(time*2+p.phase)**2;
+      ctx.fillStyle='#ff8e3e'; ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);ctx.fill();
+    }
+    ctx.globalAlpha=1; ctx.globalCompositeOperation='source-over';
+    ctx.drawImage(foreground,0,0);
+    const vignette=ctx.createRadialGradient(540,540,300,540,540,760);
+    vignette.addColorStop(0,'rgba(0,0,0,0)');vignette.addColorStop(1,'rgba(0,1,8,.65)');
+    ctx.fillStyle=vignette;ctx.fillRect(0,0,1080,1080);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

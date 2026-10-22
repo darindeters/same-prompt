@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Night Eruption</title>
+<style>
+  html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#04040c}
+  canvas{display:block;width:100vw;height:100vh}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+  const cv = document.getElementById('c');
+  const g = cv.getContext('2d');
+  const R = Math.random;
+  const TAU = Math.PI * 2;
+
+  let W = 0, H = 0, S = 0, DPR = 1;
+  let cx = 0, cy = 0, craterW = 0;
+  let profile = [], PN = 400;
+  let mountain = null;
+  let stars = [], flows = [], sparks = [], bombs = [], ash = [];
+  let bolt = null, ashAcc = 0, wind = 0;
+  let time = 0, lastT = 0;
+
+  // deterministic noise for static scenery
+  let seed = 987654321;
+  const rnd = () => { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; };
+
+  const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+  const px = i => -0.1 * W + 1.2 * W * i / PN;
+
+  function surfY(x) {
+    const t = (x + 0.1 * W) / (1.2 * W) * PN;
+    const i = clamp(Math.floor(t), 0, PN - 1);
+    const f = t - i;
+    return profile[i] * (1 - f) + profile[i + 1] * f;
+  }
+
+  function buildProfile() {
+    profile = [];
+    const half = craterW * 0.5;
+    const d0 = half / (0.62 * W);
+    for (let i = 0; i <= PN; i++) {
+      const x = px(i);
+      const dx = Math.abs(x - cx);
+      let y;
+      if (dx < half) {
+        const u = dx / half;
+        y = cy + H * 0.03 * (1 - u * u);
+      } else {
+        const d = clamp((dx / (0.62 * W) - d0) / (1 - d0), 0, 1);
+        y = cy + H * 0.52 * Math.pow(d, 0.72);
+        const k = clamp(d * 6, 0, 1);
+        y += k * (H * 0.014 * Math.sin(i * 0.37 + 1.3) + H * 0.007 * Math.sin(i * 1.31) + H * 0.004 * Math.sin(i * 3.7));
+      }
+      profile.push(y);
+    }
+  }
+
+  function buildMountain() {
+    mountain = document.createElement('canvas');
+    mountain.width = W * DPR; mountain.height = H * DPR;
+    const m = mountain.getContext('2d');
+    m.setTransform(DPR, 0, 0, DPR, 0, 0);
+    m.beginPath();
+    m.moveTo(-0.1 * W, H + 20);
+    for (let i = 0; i <= PN; i++) m.lineTo(px(i), profile[i]);
+    m.lineTo(1.1 * W, H + 20);
+    m.closePath();
+    const lg = m.createLinearGradient(0, cy, 0, H);
+    lg.addColorStop(0, '#2c1b1e');
+    lg.addColorStop(0.45, '#150e12');
+    lg.addColorStop(1, '#06050a');
+    m.fillStyle = lg;
+    m.fill();
+    m.save();
+    m.clip();
+    // rocky streaks down the slopes
+    for (let i = 0; i < 320; i++) {
+      const x0 = cx + (rnd() - 0.5) * W * 1.1;
+      const y0 = surfY(x0) + rnd() * H * 0.45;
+      const dir = x0 < cx ? -1 : 1;
+      const len = S * (0.04 + rnd() * 0.22);
+      const dark = rnd() < 0.6;
+      m.strokeStyle = dark
+        ? `rgba(0,0,5,${0.18 + rnd() * 0.4})`
+        : `rgba(70,40,45,${0.1 + rnd() * 0.25})`;
+      m.lineWidth = 1 + rnd() * 3;
+      m.beginPath();
+      m.moveTo(x0, y0);
+      m.lineTo(x0 + dir * len * 0.75, y0 + len * 0.66);
+      m.stroke();
+    }
+    // warm light on the summit from the crater
+    const rg = m.createRadialGradient(cx, cy, 0, cx, cy, S * 0.38);
+    rg.addColorStop(0, 'rgba(255,120,40,0.6)');
+    rg.addColorStop(0.3, 'rgba(210,70,15,0.28)');
+    rg.addColorStop(1, 'rgba(0,0,0,0)');
+    m.fillStyle = rg;
+    m.fillRect(0, 0, W, H);
+    m.restore();
+  }
+
+  function buildStars() {
+    stars = [];
+    for (let i = 0; i < 360; i++) {
+      stars.push({ x: rnd() * W, y: rnd() * H * 0.75, s: 0.5 + rnd() * 1.6, ph: rnd() * TAU, sp: 0.5 + rnd() * 2 });
+    }
+  }
+
+  function buildFlows() {
+    flows = [];
+    const n = 7;
+    for (let k = 0; k < n; k++) {
+      const side = k % 2 ? 1 : -1;
+      let x = cx + side * craterW * 0.48;
+      const pts = [];
+      const wig = rnd() * 10;
+      let drift = (rnd() - 0.5) * 0.6;
+      const maxY = H * (0.66 + rnd() * 0.26);
+      for (let s = 0; s < 500; s++) {
+        const y = surfY(x);
+        pts.push({ x, y: y + 1.5 });
+        if (y > maxY || x < -0.05 * W || x > 1.05 * W) break;
+        drift += (rnd() - 0.5) * 0.3;
+        drift = clamp(drift, -0.9, 0.9);
+        x += side * S * 0.011 * (1 + Math.sin(s * 0.3 + wig) * 0.3) + drift * S * 0.005;
+      }
+      flows.push({
+        pts,
+        w: S * (0.005 + rnd() * 0.007),
+        len: 0.04 + rnd() * 0.3,
+        speed: 0.02 + rnd() * 0.035,
+        phase: rnd() * 10,
+        pulse: 0.15 + rnd() * 0.2
+      });
+    }
+  }
+
+  function resize() {
+    W = window.innerWidth; H = window.innerHeight;
+    S = Math.min(W, H);
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+    g.setTransform(DPR, 0, 0, DPR, 0, 0);
+    cx = W * 0.5; cy = H * 0.40; craterW = S * 0.08;
+    wind = S * 0.02;
+    seed = 987654321;
+    buildProfile();
+    buildMountain();
+    buildStars();
+    buildFlows();
+    sparks = []; bombs = []; ash = []; bolt = null;
+  }
+
+  // ---------- sky ----------
+  function drawSky(inten) {
+    const lg = g.createLinearGradient(0, 0, 0, H);
+    lg.addColorStop(0, '#02020a');
+    lg.addColorStop(0.55, '#090818');
+    lg.addColorStop(1, '#16101c');
+    g.fillStyle = lg;
+    g.fillRect(0, 0, W, H);
+
+    // stars
+    for (const s of stars) {
+      const tw = 0.55 + 0.45 * Math.sin(time * s.sp + s.ph);
+      g.fillStyle = `rgba(220,225,255,${tw * 0.9})`;
+      g.fillRect(s.x, s.y, s.s, s.s);
+    }
+
+    // moon
+    const mx = W * 0.2, my = H * 0.17, mr = S * 0.035;
+    g.globalCompositeOperation = 'lighter';
+    let rg = g.createRadialGradient(mx, my, mr * 0.5, mx, my, mr * 5);
+    rg.addColorStop(0, 'rgba(180,190,220,0.22)');
+    rg.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = rg;
+    g.fillRect(mx - mr * 5, my - mr * 5, mr * 10, mr * 10);
+    g.globalCompositeOperation = 'source-over';
+    g.fillStyle = '#e8e9f0';
+    g.beginPath(); g.arc(mx, my, mr, 0, TAU); g.fill();
+    g.fillStyle = '#05050f';
+    g.beginPath(); g.arc(mx + mr * 0.45, my - mr * 0.25, mr * 0.9, 0, TAU); g.fill();
+
+    // eruption glow in the sky
+    const fl = 0.85 + 0.15 * Math.sin(time * 11) * Math.sin(time * 3.7);
+    g.globalCompositeOperation = 'lighter';
+    rg = g.createRadialGradient(cx, cy, 0, cx, cy, S * 0.6);
+    rg.addColorStop(0, `rgba(255,100,25,${(0.3 + 0.2 * inten) * fl})`);
+    rg.addColorStop(0.4, `rgba(200,50,10,${(0.14 + 0.1 * inten) * fl})`);
+    rg.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = rg;
+    g.fillRect(0, 0, W, H);
+    g.globalCompositeOperation = 'source-over';
+  }
+
+  // ---------- ash ----------
+  function updateAsh(dt, inten) {
+    ashAcc += dt * (16 + 18 * inten);
+    while (ashAcc > 1) {
+      ashAcc -= 1;
+      if (ash.length > 340) break;
+      ash.push({
+        x: cx + (R() - 0.5) * craterW * 0.8,
+        y: cy + S * 0.005,
+        vx: (R() - 0.5) * S * 0.06,
+        vy: -S * (0.11 + R() * 0.12) * (0.7 + 0.6 * inten),
+        r: S * (0.014 + R() * 0.016),
+        age: 0,
+        life: 10 + R() * 7,
+        ph: R() * TAU
+      });
+    }
+    for (let i = ash.length - 1; i >= 0; i--) {
+      const p = ash[i];
+      p.age += dt;
+      if (p.age > p.life) { ash[i] = ash[ash.length - 1]; ash.pop(); continue; }
+      p.vy += (-S * 0.02 - p.vy) * 0.28 * dt;
+      p.vx += (wind - p.vx) * 0.25 * dt + (R() - 0.5) * S * 0.05 * dt;
+      // mushroom spread once high up
+      const h = clamp((cy - p.y) / (S * 0.3), 0, 1);
+      p.vx += (p.x - cx) / S * S * 0.03 * h * dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.r += S * 0.011 * dt;
+    }
+  }
+
+  function drawAsh(inten, flash) {
+    for (const p of ash) {
+      const a = 0.55 * clamp(p.age * 2, 0, 1) * (1 - p.age / p.life);
+      const dx = p.x - cx, dy = p.y - cy;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const lit = clamp(1 - dist / (S * 0.36), 0, 1) * (0.75 + 0.25 * Math.sin(time * 9 + p.ph)) * (0.7 + 0.5 * inten);
+      let r = 40 + (255 - 40) * lit + 140 * flash;
+      let gg = 36 + (120 - 36) * lit + 140 * flash;
+      let b = 46 + (30 - 46) * lit + 170 * flash;
+      r = Math.min(255, r) | 0; gg = Math.min(255, gg) | 0; b = Math.min(255, b) | 0;
+      const rg = g.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r);
+      rg.addColorStop(0, `rgba(${r},${gg},${b},${a})`);
+      rg.addColorStop(0.55, `rgba(${r},${gg},${b},${a * 0.55})`);
+      rg.addColorStop(1, `rgba(${r},${gg},${b},0)`);
+      g.fillStyle = rg;
+      g.beginPath(); g.arc(p.x, p.y, p.r, 0, TAU); g.fill();
+    }
+  }
+
+  // ---------- lightning ----------
+  function updateLightning(dt) {
+    if (bolt) {
+      bolt.age += dt;
+      if (bolt.age > bolt.life) bolt = null;
+      return;
+    }
+    if (ash.length > 80 && R() < dt * 0.22) {
+      const cand = ash.filter(p => p.age > 2.5 && p.y < cy - S * 0.12);
+      if (!cand.length) return;
+      const o = cand[(R() * cand.length) | 0];
+      const lines = [];
+      const trace = (x, y, n, w) => {
+        const pts = [{ x, y }];
+        for (let i = 0; i < n; i++) {
+          x += (R() - 0.5) * S * 0.045;
+          y += S * 0.012 + R() * S * 0.02;
+          pts.push({ x, y });
+          if (w > 0.4 && R() < 0.18) trace(x, y, (n * 0.5) | 0, w * 0.5);
+        }
+        lines.push({ pts, w });
+      };
+      trace(o.x, o.y, 10 + (R() * 10) | 0, 1);
+      bolt = { lines, age: 0, life: 0.22 + R() * 0.15, x: o.x, y: o.y };
+    }
+  }
+
+  function drawLightning() {
+    if (!bolt) return;
+    const k = 1 - bolt.age / bolt.life;
+    const a = k * (R() < 0.75 ? 1 : 0.35);
+    g.globalCompositeOperation = 'lighter';
+    const rg = g.createRadialGradient(bolt.x, bolt.y, 0, bolt.x, bolt.y, S * 0.25);
+    rg.addColorStop(0, `rgba(190,180,255,${0.35 * a})`);
+    rg.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = rg;
+    g.fillRect(bolt.x - S * 0.25, bolt.y - S * 0.25, S * 0.5, S * 0.5);
+    g.lineCap = 'round'; g.lineJoin = 'round';
+    for (const l of bolt.lines) {
+      g.beginPath();
+      g.moveTo(l.pts[0].x, l.pts[0].y);
+      for (let i = 1; i < l.pts.length; i++) g.lineTo(l.pts[i].x, l.pts[i].y);
+      g.strokeStyle = `rgba(170,150,255,${0.35 * a * l.w})`;
+      g.lineWidth = 7 * l.w;
+      g.stroke();
+      g.strokeStyle = `rgba(240,235,255,${a * l.w})`;
+      g.lineWidth = 1.8 * l.w;
+      g.stroke();
+    }
+    g.globalCompositeOperation = 'source-over';
+  }
+
+  // ---------- lava flows ----------
+  function drawFlows(dt) {
+    g.lineCap = 'round'; g.lineJoin = 'round';
+    for (const f of flows) {
+      f.len = Math.min(1, f.len + dt * f.speed * 0.4);
+      const n = f.pts.length;
+      const m = Math.max(2, Math.floor(f.len * n));
+      const fl = 0.85 + 0.15 * Math.sin(time * 7 + f.phase);
+
+      // outer glow lighting the slope
+      g.globalCompositeOperation = 'lighter';
+      g.beginPath();
+      g.moveTo(f.pts[0].x, f.pts[0].y);
+      for (let i = 1; i < m; i++) g.lineTo(f.pts[i].x, f.pts[i].y);
+      g.strokeStyle = `rgba(255,60,10,${0.08 * fl})`;
+      g.lineWidth = f.w * 7;
+      g.stroke();
+      g.strokeStyle = `rgba(255,110,25,${0.16 * fl})`;
+      g.lineWidth = f.w * 3;
+      g.stroke();
+      g.globalCompositeOperation = 'source-over';
+
+      // molten body, cooling toward the toe
+      for (let i = 1; i < m; i++) {
+        const t = i / n;
+        const r = (255 - 90 * t) | 0;
+        const gg = (200 - 180 * t) | 0;
+        const b = (70 - 70 * t) | 0;
+        const a = 1 - t * 0.3;
+        const wv = 0.9 + 0.1 * Math.sin(i * 0.7 + time * 3 + f.phase);
+        g.strokeStyle = `rgba(${r},${gg},${b},${a})`;
+        g.lineWidth = f.w * (1.35 - 0.75 * t) * wv;
+        g.beginPath();
+        g.moveTo(f.pts[i - 1].x, f.pts[i - 1].y);
+        g.lineTo(f.pts[i].x, f.pts[i].y);
+        g.stroke();
+      }
+
+      // dark crust patches
+      for (let k = 0; k < 6; k++) {
+        const p = ((k / 6) + f.phase * 0.1 + time * 0.004) % 1;
+        if (p > f.len || p < 0.35) continue;
+        const q = f.pts[Math.floor(p * n)];
+        g.fillStyle = `rgba(30,10,8,${0.5 * p})`;
+        g.beginPath(); g.arc(q.x, q.y, f.w * 0.5, 0, TAU); g.fill();
+      }
+
+      // bright pulses travelling downslope
+      g.globalCompositeOperation = 'lighter';
+      const np = 9;
+      for (let k = 0; k < np; k++) {
+        const p = ((k / np) + time * f.pulse * 0.3 + f.phase) % 1;
+        if (p > f.len) continue;
+        const q = f.pts[Math.floor(p * n)];
+        const rg = g.createRadialGradient(q.x, q.y, 0, q.x, q.y, f.w * 2.2);
+        rg.addColorStop(0, `rgba(255,230,140,${0.5 * (1 - p)})`);
+        rg.addColorStop(1, 'rgba(255,120,30,0)');
+        g.fillStyle = rg;
+        g.beginPath(); g.arc(q.x, q.y, f.w * 2.2, 0, TAU); g.fill();
+      }
+      g.globalCompositeOperation = 'source-over';
+    }
+  }
+
+  // ---------- fountain ----------
+  function updateSparks(dt, inten) {
+    const n = Math.round(dt * (220 + 900 * inten));
+    for (let i = 0; i < n; i++) {
+      if (sparks.length > 3200) break;
+      const spread = 0.5 + inten * 0.6;
+      const ang = -Math.PI / 2 + (R() - 0.5) * 0.6 * spread;
+      const sp = S * (0.25 + R() * 0.32) * (0.65 + 0.45 * inten);
+      sparks.push({
+        x: cx + (R() - 0.5) * craterW * 0.5,
+        y: cy + H * 0.015,
+        vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
+        px: 0, py: 0, age: 0,
+        life: 1.2 + R() * 2.2,
+        sz: S * (0.0014 + R() * 0.0026),
+        big: R() < 0.05
+      });
+    }
+    const grav = S * 0.6;
+    for (let i = sparks.length - 1; i >= 0; i--) {
+      const p = sparks[i];
+      p.px = p.x; p.py = p.y;
+      p.vy += grav * dt;
+      p.vx += wind * 0.25 * dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.age += dt;
+      let dead = p.age > p.life;
+      if (!dead && p.vy > 0 && p.age > 0.15 && p.y > surfY(p.x)) {
+        dead = true;
+        if (p.big || R() < 0.08) {
+          bombs.push({ x: p.x, y: surfY(p.x), age: 0, life: 2 + R() * 4, r: p.sz * (p.big ? 5 : 3) });
+        }
+      }
+      if (dead) { sparks[i] = sparks[sparks.length - 1]; sparks.pop(); }
+    }
+    for (let i = bombs.length - 1; i >= 0; i--) {
+      const b = bombs[i];
+      b.age += dt;
+      if (b.age > b.life) { bombs[i] = bombs[bombs.length - 1]; bombs.pop(); }
+    }
+  }
+
+  function drawCraterPool(inten) {
+    const fl = 0.8 + 0.2 * Math.sin(time * 13) * Math.sin(time * 5.1);
+    g.globalCompositeOperation = 'lighter';
+    const rg = g.createRadialGradient(cx, cy + H * 0.02, 0, cx, cy + H * 0.02, craterW * 1.4);
+    rg.addColorStop(0, `rgba(255,160,50,${0.6 * fl})`);
+    rg.addColorStop(1, 'rgba(255,60,0,0)');
+    g.fillStyle = rg;
+    g.fillRect(cx - craterW * 1.5, cy - craterW, craterW * 3, craterW * 2);
+    g.globalCompositeOperation = 'source-over';
+    g.fillStyle = `rgba(255,${(170 + 40 * inten) | 0},60,${0.85 + 0.15 * fl})`;
+    g.beginPath();
+    g.ellipse(cx, cy + H * 0.022, craterW * 0.42, S * 0.011, 0, 0, TAU);
+    g.fill();
+  }
+
+  function drawBombs() {
+    g.globalCompositeOperation = 'lighter';
+    for (const b of bombs) {
+      const k = 1 - b.age / b.life;
+      const rr = b.r * (2 + 2 * k);
+      const rg = g.createRadialGradient(b.x, b.y, 0, b.x, b.y, rr);
+      rg.addColorStop(0, `rgba(255,${(90 + 130 * k) | 0},30,${0.9 * k})`);
+      rg.addColorStop(0.4, `rgba(255,70,10,${0.35 * k})`);
+      rg.addColorStop(1, 'rgba(255,40,0,0)');
+      g.fillStyle = rg;
+      g.beginPath(); g.arc(b.x, b.y, rr, 0, TAU); g.fill();
+    }
+    g.globalCompositeOperation = 'source-over';
+  }
+
+  function drawSparks() {
+    g.globalCompositeOperation = 'lighter';
+    g.lineCap = 'round';
+    for (const p of sparks) {
+      const t = p.age / p.life;
+      let col;
+      if (t < 0.22) col = `rgba(255,245,200,${1 - t * 0.5})`;
+      else if (t < 0.6) col = `rgba(255,${(190 - 160 * (t - 0.22) / 0.38) | 0},25,${1 - t * 0.5})`;
+      else col = `rgba(${(255 - 160 * (t - 0.6) / 0.4) | 0},25,0,${(1 - t) * 1.2})`;
+      g.strokeStyle = col;
+      g.lineWidth = p.sz * (p.big ? 2.6 : 1) * (1.3 - t * 0.7);
+      g.beginPath();
+      g.moveTo(p.px, p.py);
+      g.lineTo(p.x, p.y);
+      g.stroke();
+    }
+    g.globalCompositeOperation = 'source-over';
+  }
+
+  function drawVignette() {
+    const rg = g.createRadialGradient(cx, H * 0.5, S * 0.3, cx, H * 0.5, Math.max(W, H) * 0.78);
+    rg.addColorStop(0, 'rgba(0,0,0,0)');
+    rg.addColorStop(1, 'rgba(0,0,0,0.55)');
+    g.fillStyle = rg;
+    g.fillRect(0, 0, W, H);
+  }
+
+  function frame(ts) {
+    const t = ts / 1000;
+    let dt = t - lastT;
+    if (!(dt > 0) || dt > 0.05) dt = 0.016;
+    lastT = t;
+    time += dt;
+
+    const inten = clamp(0.45 + 0.33 * Math.sin(time * 0.37) + 0.2 * Math.sin(time * 1.9 + 1) + 0.1 * Math.sin(time * 5.3), 0.05, 1);
+    const flash = bolt ? 0.35 * (1 - bolt.age / bolt.life) : 0;
+
+    updateAsh(dt, inten);
+    updateLightning(dt);
+    updateSparks(dt, inten);
+
+    drawSky(inten);
+    drawAsh(inten, flash);
+    drawLightning();
+    g.drawImage(mountain, 0, 0, W, H);
+    drawCraterPool(inten);
+    drawFlows(dt);
+    drawBombs();
+    drawSparks();
+    drawVignette();
+
+    requestAnimationFrame(frame);
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

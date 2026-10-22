@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cube</title>
+<style>
+  :root {
+    --step: 18.2vmin;
+    --size: calc(var(--step) * 0.92);
+  }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #07080c;
+  }
+
+  body {
+    position: fixed;
+    inset: 0;
+  }
+
+  #scene {
+    position: absolute;
+    inset: 0;
+    perspective: 180vmin;
+    perspective-origin: 50% 44%;
+    background:
+      radial-gradient(ellipse 55% 36% at 50% 116%, rgba(22, 32, 54, 0.55), transparent 62%),
+      radial-gradient(ellipse 36% 26% at 14% 6%, rgba(255, 236, 214, 0.06), transparent 70%),
+      radial-gradient(ellipse 32% 24% at 94% 90%, rgba(36, 58, 102, 0.22), transparent 72%),
+      radial-gradient(circle at 50% 46%, #0e1016 0%, #08090d 58%, #05060a 100%);
+  }
+
+  #scene::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 2;
+    background: radial-gradient(circle at 50% 46%, transparent 52%, rgba(0, 0, 0, 0.42) 100%);
+  }
+
+  #shadow {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 46vmin;
+    height: 11vmin;
+    transform: translate(-50%, 32vmin);
+    border-radius: 50%;
+    background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.62) 0%, rgba(0, 0, 0, 0.28) 42%, transparent 72%);
+    filter: blur(10px);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  #tilt {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 0;
+    height: 0;
+    z-index: 1;
+    transform-style: preserve-3d;
+    -webkit-transform-style: preserve-3d;
+    transform: translateY(-2.4vmin) rotateX(-24deg) rotateY(-34deg);
+    animation: drift 20s ease-in-out infinite;
+  }
+
+  @keyframes drift {
+    0%, 100% { transform: translateY(-2.4vmin) rotateX(-24deg) rotateY(-34deg); }
+    50% { transform: translateY(-2.4vmin) rotateX(-30deg) rotateY(-52deg); }
+  }
+
+  #cube {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 0;
+    height: 0;
+    transform-style: preserve-3d;
+    -webkit-transform-style: preserve-3d;
+  }
+
+  .cubie {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: var(--size);
+    height: var(--size);
+    margin-left: calc(var(--size) / -2);
+    margin-top: calc(var(--size) / -2);
+    transform-style: preserve-3d;
+    -webkit-transform-style: preserve-3d;
+  }
+
+  .face {
+    position: absolute;
+    left: -0.5px;
+    top: -0.5px;
+    width: calc(var(--size) + 1px);
+    height: calc(var(--size) + 1px);
+    background: #1b1c22;
+    border-radius: calc(var(--size) * 0.04);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+  }
+
+  .right  { transform: rotateY(90deg) translateZ(calc(var(--size) / 2)); }
+  .left   { transform: rotateY(-90deg) translateZ(calc(var(--size) / 2)); }
+  .top    { transform: rotateX(90deg) translateZ(calc(var(--size) / 2)); }
+  .bottom { transform: rotateX(-90deg) translateZ(calc(var(--size) / 2)); }
+  .front  { transform: translateZ(calc(var(--size) / 2)); }
+  .back   { transform: rotateY(180deg) translateZ(calc(var(--size) / 2)); }
+
+  .sticker {
+    position: absolute;
+    inset: 11%;
+    border-radius: 9%;
+    opacity: 0;
+    background:
+      radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 62%),
+      var(--c, transparent);
+    box-shadow:
+      inset 0 0 0 1px rgba(0, 0, 0, 0.22),
+      inset 0 0 14px rgba(0, 0, 0, 0.1);
+  }
+
+  .sticker.on { opacity: 1; }
+</style>
+</head>
+<body>
+  <div id="scene">
+    <div id="shadow"></div>
+    <div id="tilt"><div id="cube"></div></div>
+  </div>
+  <script>
+"use strict";
+
+var STEP = 100;
+var SIZE_RATIO = 0.92;
+
+var FACES = ["right", "left", "top", "bottom", "front", "back"];
+
+var COLOR = {
+  right: "#d31220",
+  left: "#f15a12",
+  top: "#f4f1ea",
+  bottom: "#f0cc00",
+  front: "#00a35a",
+  back: "#1557d6"
+};
+
+var NORMALS = {
+  right: [1, 0, 0],
+  left: [-1, 0, 0],
+  top: [0, -1, 0],
+  bottom: [0, 1, 0],
+  front: [0, 0, 1],
+  back: [0, 0, -1]
+};
+
+var ROT = {
+  x: [1, 0, 0,  0, 0, -1,  0, 1, 0],
+  y: [0, 0, 1,  0, 1, 0,  -1, 0, 0],
+  z: [0, -1, 0,  1, 0, 0,  0, 0, 1]
+};
+
+var BASE = {
+  R: { axis: "x", layer: 1, sign: 1 },
+  L: { axis: "x", layer: -1, sign: -1 },
+  U: { axis: "y", layer: -1, sign: -1 },
+  D: { axis: "y", layer: 1, sign: 1 },
+  F: { axis: "z", layer: 1, sign: 1 },
+  B: { axis: "z", layer: -1, sign: -1 }
+};
+
+var PULL = {
+  x: pullFromRot(ROT.x),
+  y: pullFromRot(ROT.y),
+  z: pullFromRot(ROT.z)
+};
+
+function applyMat(m, x, y, z) {
+  return [
+    m[0] * x + m[1] * y + m[2] * z,
+    m[3] * x + m[4] * y + m[5] * z,
+    m[6] * x + m[7] * y + m[8] * z
+  ];
+}
+
+function normalName(v) {
+  var key = Math.round(v[0]) + "," + Math.round(v[1]) + "," + Math.round(v[2]);
+  var names = {
+    "1,0,0": "right",
+    "-1,0,0": "left",
+    "0,-1,0": "top",
+    "0,1,0": "bottom",
+    "0,0,1": "front",
+    "0,0,-1": "back"
+  };
+  return names[key];
+}
+
+function pullFromRot(m) {
+  var pull = {};
+  for (var i = 0; i < FACES.length; i++) {
+    var name = FACES[i];
+    var n = NORMALS[name];
+    var dest = normalName(applyMat(m, n[0], n[1], n[2]));
+    pull[dest] = name;
+  }
+  return pull;
+}
+
+function createPieces() {
+  var pieces = [];
+  for (var x = -1; x <= 1; x++) {
+    for (var y = -1; y <= 1; y++) {
+      for (var z = -1; z <= 1; z++) {
+        if (x === 0 && y === 0 && z === 0) continue;
+        pieces.push({
+          x: x,
+          y: y,
+          z: z,
+          busy: false,
+          colors: {
+            right: x === 1 ? COLOR.right : "",
+            left: x === -1 ? COLOR.left : "",
+            top: y === -1 ? COLOR.top : "",
+            bottom: y === 1 ? COLOR.bottom : "",
+            front: z === 1 ? COLOR.front : "",
+            back: z === -1 ? COLOR.back : ""
+          }
+        });
+      }
+    }
+  }
+  return pieces;
+}
+
+function remap(colors, pull) {
+  var next = {};
+  for (var i = 0; i < FACES.length; i++) {
+    var face = FACES[i];
+    next[face] = colors[pull[face]];
+  }
+  return next;
+}
+
+function bake(piece, axis, quarters) {
+  var q = quarters % 4;
+  if (q < 0) q += 4;
+  for (var i = 0; i < q; i++) {
+    var p = applyMat(ROT[axis], piece.x, piece.y, piece.z);
+    piece.x = Math.round(p[0]);
+    piece.y = Math.round(p[1]);
+    piece.z = Math.round(p[2]);
+    piece.colors = remap(piece.colors, PULL[axis]);
+  }
+}
+
+function scramble(count) {
+  var names = ["R", "L", "U", "D", "F", "B"];
+  var turns = [1, 1, -1, -1, 2];
+  var seq = [];
+  var prev = "";
+  var prev2 = "";
+  while (seq.length < count) {
+    var name = names[Math.floor(Math.random() * names.length)];
+    if (name === prev) continue;
+    if (name === prev2 && BASE[name].axis === BASE[prev].axis) continue;
+    var turn = turns[Math.floor(Math.random() * turns.length)];
+    var base = BASE[name];
+    seq.push({
+      axis: base.axis,
+      layer: base.layer,
+      quarters: base.sign * turn
+    });
+    prev2 = prev;
+    prev = name;
+  }
+  return seq;
+}
+
+function invertMove(move) {
+  var q = move.quarters;
+  return {
+    axis: move.axis,
+    layer: move.layer,
+    quarters: q === 2 || q === -2 ? q : -q
+  };
+}
+
+function restTransform(piece, step) {
+  return "rotateX(0deg) rotateY(0deg) rotateZ(0deg) translate3d(" +
+    (piece.x * step) + "px," + (piece.y * step) + "px," + (piece.z * step) + "px)";
+}
+
+function spunTransform(piece, move, step) {
+  var angle = move.quarters * 90;
+  var rx = move.axis === "x" ? angle : 0;
+  var ry = move.axis === "y" ? angle : 0;
+  var rz = move.axis === "z" ? angle : 0;
+  return "rotateX(" + rx + "deg) rotateY(" + ry + "deg) rotateZ(" + rz + "deg) translate3d(" +
+    (piece.x * step) + "px," + (piece.y * step) + "px," + (piece.z * step) + "px)";
+}
+
+function paint(piece) {
+  for (var i = 0; i < FACES.length; i++) {
+    var face = FACES[i];
+    var node = piece.stickers[face];
+    var color = piece.colors[face];
+    if (color) {
+      node.style.setProperty("--c", color);
+      node.classList.add("on");
+    } else {
+      node.classList.remove("on");
+    }
+  }
+}
+
+function mount(piece, parent) {
+  var el = document.createElement("div");
+  el.className = "cubie";
+  var stickers = {};
+  for (var i = 0; i < FACES.length; i++) {
+    var face = FACES[i];
+    var faceEl = document.createElement("div");
+    faceEl.className = "face " + face;
+    var sticker = document.createElement("div");
+    sticker.className = "sticker";
+    faceEl.appendChild(sticker);
+    el.appendChild(faceEl);
+    stickers[face] = sticker;
+  }
+  piece.el = el;
+  piece.stickers = stickers;
+  paint(piece);
+  parent.appendChild(el);
+}
+
+function applyMetrics() {
+  var v = Math.min(window.innerWidth, window.innerHeight);
+  STEP = v * 0.182;
+  document.documentElement.style.setProperty("--step", STEP + "px");
+  document.documentElement.style.setProperty("--size", (STEP * SIZE_RATIO) + "px");
+}
+
+function play(pieces, move) {
+  var step = STEP;
+  var layer = [];
+  for (var i = 0; i < pieces.length; i++) {
+    if (pieces[i][move.axis] === move.layer) layer.push(pieces[i]);
+  }
+  var duration = Math.abs(move.quarters) === 2 ? 700 : 520;
+  var anims = [];
+  for (var j = 0; j < layer.length; j++) {
+    var piece = layer[j];
+    piece.busy = true;
+    anims.push(piece.el.animate(
+      [
+        { transform: restTransform(piece, step) },
+        { transform: spunTransform(piece, move, step) }
+      ],
+      { duration: duration, easing: "cubic-bezier(0.33, 0.02, 0.18, 1)", fill: "forwards" }
+    ));
+  }
+  return new Promise(function (resolve) {
+    var settled = false;
+    function finish() {
+      if (settled) return;
+      settled = true;
+      for (var k = 0; k < layer.length; k++) {
+        var current = layer[k];
+        bake(current, move.axis, move.quarters);
+        paint(current);
+        current.el.style.transform = restTransform(current, STEP);
+        current.busy = false;
+        anims[k].cancel();
+      }
+      resolve();
+    }
+    Promise.all(anims.map(function (anim) { return anim.finished; })).then(finish, finish);
+    setTimeout(finish, duration + 90);
+  });
+}
+
+function wait(ms) {
+  return new Promise(function (resolve) { setTimeout(resolve, ms); });
+}
+
+async function run(pieces) {
+  await wait(220);
+  for (;;) {
+    var seq = scramble(20);
+    for (var i = 0; i < seq.length; i++) {
+      await play(pieces, seq[i]);
+      await wait(110);
+    }
+    await wait(680);
+    for (var j = seq.length - 1; j >= 0; j--) {
+      await play(pieces, invertMove(seq[j]));
+      await wait(110);
+    }
+    await wait(1280);
+  }
+}
+
+function boot() {
+  var pieces = createPieces();
+  applyMetrics();
+  var cube = document.getElementById("cube");
+  for (var i = 0; i < pieces.length; i++) {
+    mount(pieces[i], cube);
+    pieces[i].el.style.transform = restTransform(pieces[i], STEP);
+  }
+  window.addEventListener("resize", function () {
+    applyMetrics();
+    for (var i = 0; i < pieces.length; i++) {
+      if (!pieces[i].busy) {
+        pieces[i].el.style.transform = restTransform(pieces[i], STEP);
+      }
+    }
+  });
+  run(pieces);
+}
+
+function snapshot(pieces) {
+  return pieces.map(function (p) {
+    return p.x + "," + p.y + "," + p.z + "|" + FACES.map(function (f) {
+      return p.colors[f] || ".";
+    }).join(",");
+  }).sort().join(";");
+}
+
+function applySeq(pieces, seq) {
+  for (var i = 0; i < seq.length; i++) {
+    var move = seq[i];
+    for (var j = 0; j < pieces.length; j++) {
+      if (pieces[j][move.axis] === move.layer) bake(pieces[j], move.axis, move.quarters);
+    }
+  }
+}
+
+function occupiedOK(pieces) {
+  var seen = {};
+  for (var i = 0; i < pieces.length; i++) {
+    var key = pieces[i].x + "," + pieces[i].y + "," + pieces[i].z;
+    if (seen[key]) return false;
+    if (Math.abs(pieces[i].x) > 1 || Math.abs(pieces[i].y) > 1 || Math.abs(pieces[i].z) > 1) return false;
+    seen[key] = true;
+  }
+  return Object.keys(seen).length === 26;
+}
+
+function centersOK(pieces) {
+  var want = {
+    "1,0,0": "right",
+    "-1,0,0": "left",
+    "0,-1,0": "top",
+    "0,1,0": "bottom",
+    "0,0,1": "front",
+    "0,0,-1": "back"
+  };
+  for (var i = 0; i < pieces.length; i++) {
+    var key = pieces[i].x + "," + pieces[i].y + "," + pieces[i].z;
+    var face = want[key];
+    if (!face) continue;
+    if (pieces[i].colors[face] !== COLOR[face]) return false;
+    for (var f = 0; f < FACES.length; f++) {
+      if (FACES[f] !== face && pieces[i].colors[FACES[f]]) return false;
+    }
+  }
+  return true;
+}
+
+function faceMove(name, turn) {
+  var base = BASE[name];
+  return { axis: base.axis, layer: base.layer, quarters: base.sign * turn };
+}
+
+function logicTest() {
+  var solved = snapshot(createPieces());
+
+  var quarters = [1, -1, 2, -2];
+  var axes = ["x", "y", "z"];
+  for (var a = 0; a < axes.length; a++) {
+    for (var layer = -1; layer <= 1; layer += 2) {
+      for (var t = 0; t < quarters.length; t++) {
+        var pieces = createPieces();
+        var move = { axis: axes[a], layer: layer, quarters: quarters[t] };
+        applySeq(pieces, [move, invertMove(move)]);
+        if (snapshot(pieces) !== solved) throw new Error("inverse failed " + axes[a] + layer + " " + quarters[t]);
+        if (!occupiedOK(pieces)) throw new Error("occupancy after inverse");
+      }
+    }
+  }
+
+  ["R", "L", "U", "D", "F", "B"].forEach(function (name) {
+    var pieces = createPieces();
+    applySeq(pieces, [faceMove(name, 1), faceMove(name, 1), faceMove(name, 1), faceMove(name, 1)]);
+    if (snapshot(pieces) !== solved) throw new Error(name + " x4");
+    pieces = createPieces();
+    applySeq(pieces, [faceMove(name, 2), faceMove(name, 2)]);
+    if (snapshot(pieces) !== solved) throw new Error(name + "2 x2");
+  });
+
+  var sexy = [faceMove("R", 1), faceMove("U", 1), faceMove("R", -1), faceMove("U", -1)];
+  var piecesSexy = createPieces();
+  for (var n = 0; n < 6; n++) applySeq(piecesSexy, sexy);
+  if (snapshot(piecesSexy) !== solved) throw new Error("sexy x6");
+  if (snapshot(createPieces()) === snapshot(piecesSexy) && n !== 6) throw new Error("sexy early");
+
+  var piecesOnce = createPieces();
+  applySeq(piecesOnce, sexy);
+  if (snapshot(piecesOnce) === solved) throw new Error("sexy should scramble");
+
+  var sune = [
+    faceMove("R", 1), faceMove("U", 1), faceMove("R", -1), faceMove("U", 1),
+    faceMove("R", 1), faceMove("U", 2), faceMove("R", -1)
+  ];
+  var anti = [
+    faceMove("R", 1), faceMove("U", 2), faceMove("R", -1), faceMove("U", -1),
+    faceMove("R", 1), faceMove("U", -1), faceMove("R", -1)
+  ];
+  var piecesSune = createPieces();
+  applySeq(piecesSune, sune.concat(anti));
+  if (snapshot(piecesSune) !== solved) throw new Error("sune + antisune");
+
+  var checker = ["R", "L", "U", "D", "F", "B"].map(function (name) { return faceMove(name, 2); });
+  var piecesChecker = createPieces();
+  applySeq(piecesChecker, checker);
+  if (snapshot(piecesChecker) === solved) throw new Error("checker should scramble");
+  if (!centersOK(piecesChecker)) throw new Error("centers moved");
+  applySeq(piecesChecker, checker);
+  if (snapshot(piecesChecker) !== solved) throw new Error("checker x2");
+
+  for (var trial = 0; trial < 40; trial++) {
+    var seq = scramble(24);
+    var pieces = createPieces();
+    applySeq(pieces, seq);
+    if (snapshot(pieces) === solved) throw new Error("scramble was identity");
+    if (!occupiedOK(pieces) || !centersOK(pieces)) throw new Error("bad scramble geometry");
+    for (var k = seq.length - 1; k >= 0; k--) pieces && applySeq(pieces, [invertMove(seq[k])]);
+    if (snapshot(pieces) !== solved) throw new Error("scramble did not solve on trial " + trial);
+  }
+}
+
+if (typeof document === "undefined") {
+  logicTest();
+} else {
+  boot();
+}
+  </script>
+</body>
+</html>

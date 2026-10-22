@@ -168,5 +168,175 @@
     "elapsed_s": 1451.5
    }
   }
+ },
+ "fireworks": {
+  "title": "Fireworks Over a City",
+  "prompt": "Build a fireworks show over a city skyline at night, with bursts of different shapes and colors reflected in a river, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "claude": {
+    "model": "claude-fable-5-1",
+    "effort": "medium",
+    "cli": "2.1.303 (Claude Code)",
+    "start_utc": "2026-10-22T09:27:39Z",
+    "elapsed_s": 306.3
+   },
+   "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-22T09:27:44Z",
+    "elapsed_s": 112.4
+   },
+   "gemini": {
+    "model": "gemini-4-argon-medium",
+    "effort": "medium",
+    "cli": "1.4.5",
+    "start_utc": "2026-10-22T09:34:30Z",
+    "elapsed_s": 222.2
+   },
+   "grok": {
+    "model": "grok-4.7",
+    "effort": "medium",
+    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
+    "start_utc": "2026-10-22T09:27:49Z",
+    "elapsed_s": 1757.1
+   }
+  }
+ },
+ "aquarium": {
+  "title": "Coral Reef Aquarium",
+  "prompt": "Build a coral reef aquarium with a school of fish that swims together, turns, and scatters, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "claude": {
+    "model": "claude-fable-5-1",
+    "effort": "medium",
+    "cli": "2.1.303 (Claude Code)",
+    "start_utc": "2026-10-22T09:57:06Z",
+    "elapsed_s": 275.2
+   },
+   "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-22T09:57:11Z",
+    "elapsed_s": 155.7
+   },
+   "gemini": {
+    "model": "gemini-4-argon-medium",
+    "effort": "medium",
+    "cli": "1.4.5",
+    "start_utc": "2026-10-22T09:38:12Z",
+    "elapsed_s": 235.5
+   },
+   "grok": {
+    "model": "grok-4.7",
+    "effort": "medium",
+    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
+    "start_utc": "2026-10-22T09:57:16Z",
+    "elapsed_s": 1296.5
+   }
+  }
+ },
+ "volcano": {
+  "title": "Volcano Eruption",
+  "prompt": "Build a volcano erupting at night, with lava fountains, glowing lava flowing down its slopes, and ash clouds, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "claude": {
+    "model": "claude-fable-5-1",
+    "effort": "medium",
+    "cli": "2.1.303 (Claude Code)",
+    "start_utc": "2026-10-22T10:18:53Z",
+    "elapsed_s": 253.3
+   },
+   "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-22T10:18:58Z",
+    "elapsed_s": 156.6
+   },
+   "gemini": {
+    "model": "gemini-4-argon-medium",
+    "effort": "medium",
+    "cli": "1.4.5",
+    "start_utc": "2026-10-22T09:42:08Z",
+    "elapsed_s": 255.5
+   },
+   "grok": {
+    "model": "grok-4.7",
+    "effort": "medium",
+    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
+    "start_utc": "2026-10-22T10:19:03Z",
+    "elapsed_s": 883.2
+   }
+  }
+ },
+ "solar-system": {
+  "title": "Solar System",
+  "prompt": "Build the solar system with the sun and all eight planets orbiting it, seen from a slowly moving camera, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "claude": {
+    "model": "claude-fable-5-1",
+    "effort": "medium",
+    "cli": "2.1.303 (Claude Code)",
+    "start_utc": "2026-10-22T10:33:46Z",
+    "elapsed_s": 121.7
+   },
+   "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-22T10:33:51Z",
+    "elapsed_s": 136.0
+   },
+   "gemini": {
+    "model": "gemini-4-argon-medium",
+    "effort": "medium",
+    "cli": "1.4.5",
+    "start_utc": "2026-10-22T09:46:24Z",
+    "elapsed_s": 230.1
+   },
+   "grok": {
+    "model": "grok-4.7",
+    "effort": "medium",
+    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
+    "start_utc": "2026-10-22T10:33:56Z",
+    "elapsed_s": 1692.4
+   }
+  }
+ },
+ "rubiks": {
+  "title": "Rubik's Cube Solving Itself",
+  "prompt": "Build a 3D Rubik's cube that scrambles itself and then solves itself, one turn at a time, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "claude": {
+    "model": "claude-fable-5-1",
+    "effort": "medium",
+    "cli": "2.1.303 (Claude Code)",
+    "start_utc": "2026-10-22T11:02:09Z",
+    "elapsed_s": 219.3
+   },
+   "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-22T11:02:14Z",
+    "elapsed_s": 108.7
+   },
+   "gemini": {
+    "model": "gemini-4-argon-medium",
+    "effort": "medium",
+    "cli": "1.4.5",
+    "start_utc": "2026-10-22T09:50:14Z",
+    "elapsed_s": 180.3
+   },
+   "grok": {
+    "model": "grok-4.7",
+    "effort": "medium",
+    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
+    "start_utc": "2026-10-22T11:02:19Z",
+    "elapsed_s": 1440.9
+   }
+  }
  }
 }

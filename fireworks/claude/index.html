@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Night Fireworks</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #04060f; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function () {
+  'use strict';
+
+  var TAU = Math.PI * 2;
+  function rnd(a, b) { return a + Math.random() * (b - a); }
+  function ri(a, b) { return Math.floor(rnd(a, b + 1)); }
+  function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+  var cv = document.getElementById('c');
+  var cx = cv.getContext('2d');
+
+  var W, H, S, DPR, HZ, RH;          // size, scale, device pixel ratio, horizon y, river height
+  var bgC, skylineC, skyC, sg, refC, rg;
+  var beacons = [], twinkles = [];
+  var G;                               // gravity px/s^2
+
+  var ps = [];       // particles
+  var rockets = [];
+  var flashes = [];
+  var t = 0, last = 0, launchTimer = 0.4;
+
+  // ---------- offscreen helpers ----------
+  function mk(w, h) {
+    var c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(w * DPR));
+    c.height = Math.max(1, Math.round(h * DPR));
+    var g = c.getContext('2d');
+    g.scale(DPR, DPR);
+    return [c, g];
+  }
+
+  // ---------- static background: sky, stars, moon, water ----------
+  function buildBackground() {
+    var r = mk(W, H), c = r[0], g = r[1];
+
+    var grad = g.createLinearGradient(0, 0, 0, HZ);
+    grad.addColorStop(0, '#02030c');
+    grad.addColorStop(0.5, '#070c26');
+    grad.addColorStop(0.85, '#141236');
+    grad.addColorStop(1, '#2b1b3f');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, W, HZ);
+
+    // stars
+    var n = Math.round(W * H / 2200);
+    for (var i = 0; i < n; i++) {
+      var x = rnd(0, W), y = rnd(0, HZ * 0.92);
+      var rad = rnd(0.25, 1.1) * S;
+      var a = rnd(0.25, 0.95) * (1 - y / HZ) * 0.9;
+      g.fillStyle = 'rgba(255,255,255,' + a.toFixed(3) + ')';
+      g.beginPath(); g.arc(x, y, rad, 0, TAU); g.fill();
+    }
+    twinkles = [];
+    for (i = 0; i < 45; i++) {
+      twinkles.push({ x: rnd(0, W), y: rnd(0, HZ * 0.7), r: rnd(0.8, 1.6) * S, ph: rnd(0, TAU), sp: rnd(1.5, 4) });
+    }
+
+    // moon (gibbous)
+    var mx = W * 0.76, my = H * 0.15, mr = Math.max(12, 34 * S);
+    var mg = g.createRadialGradient(mx, my, mr * 0.5, mx, my, mr * 5);
+    mg.addColorStop(0, 'rgba(255,245,215,0.28)');
+    mg.addColorStop(0.4, 'rgba(255,240,210,0.07)');
+    mg.addColorStop(1, 'rgba(255,240,210,0)');
+    g.fillStyle = mg;
+    g.fillRect(mx - mr * 5, my - mr * 5, mr * 10, mr * 10);
+    g.fillStyle = '#f4edd6';
+    g.beginPath(); g.arc(mx, my, mr, 0, TAU); g.fill();
+    g.save();
+    g.beginPath(); g.arc(mx, my, mr, 0, TAU); g.clip();
+    g.fillStyle = 'rgba(230,220,200,0.35)';
+    g.beginPath(); g.arc(mx - mr * 0.3, my + mr * 0.2, mr * 0.28, 0, TAU); g.fill();
+    g.beginPath(); g.arc(mx + mr * 0.25, my - mr * 0.35, mr * 0.18, 0, TAU); g.fill();
+    g.beginPath(); g.arc(mx + mr * 0.1, my + mr * 0.5, mr * 0.14, 0, TAU); g.fill();
+    g.fillStyle = 'rgba(6,9,30,0.93)';
+    g.beginPath(); g.arc(mx + mr * 0.62, my - mr * 0.12, mr * 0.98, 0, TAU); g.fill();
+    g.restore();
+
+    // city haze at horizon
+    var hg = g.createRadialGradient(W * 0.5, HZ, 0, W * 0.5, HZ, W * 0.75);
+    hg.addColorStop(0, 'rgba(255,150,90,0.22)');
+    hg.addColorStop(0.5, 'rgba(255,130,100,0.07)');
+    hg.addColorStop(1, 'rgba(255,130,100,0)');
+    g.fillStyle = hg;
+    g.fillRect(0, 0, W, HZ);
+
+    // water base
+    var wg = g.createLinearGradient(0, HZ, 0, H);
+    wg.addColorStop(0, '#0d1530');
+    wg.addColorStop(0.3, '#080e22');
+    wg.addColorStop(1, '#03050d');
+    g.fillStyle = wg;
+    g.fillRect(0, HZ, W, RH);
+
+    // moon glint on water
+    g.save();
+    g.translate(mx, HZ + RH * 0.45);
+    g.scale(1, RH / (mr * 2.2));
+    var gl = g.createRadialGradient(0, 0, 0, 0, 0, mr * 2.2);
+    gl.addColorStop(0, 'rgba(255,245,220,0.14)');
+    gl.addColorStop(1, 'rgba(255,245,220,0)');
+    g.fillStyle = gl;
+    g.fillRect(-mr * 2.2, -mr * 2.2, mr * 4.4, mr * 4.4);
+    g.restore();
+
+    bgC = c;
+  }
+
+  // ---------- static skyline ----------
+  function buildSkyline() {
+    var r = mk(W, HZ), c = r[0], g = r[1];
+    beacons = [];
+
+    // far layer: dim silhouettes
+    var x = -rnd(0, 40 * S);
+    while (x < W) {
+      var w = rnd(16, 55) * S;
+      var h = HZ * (0.07 + 0.22 * Math.pow(Math.random(), 1.6));
+      g.fillStyle = '#131a36';
+      g.fillRect(x, HZ - h, w, h);
+      var cols = Math.floor(w / (6 * S)), rows = Math.floor(h / (8 * S));
+      for (var cc = 0; cc < cols; cc++) for (var rr = 0; rr < rows; rr++) {
+        if (Math.random() < 0.22) {
+          g.fillStyle = 'rgba(255,215,160,' + rnd(0.15, 0.4).toFixed(2) + ')';
+          g.fillRect(x + 2 * S + cc * 6 * S, HZ - h + 3 * S + rr * 8 * S, 2 * S, 3 * S);
+        }
+      }
+      x += w + rnd(0, 5) * S;
+    }
+
+    // near layer: dark buildings with lit windows
+    x = -rnd(0, 30 * S);
+    var count = 0;
+    while (x < W) {
+      var bw = rnd(28, 105) * S;
+      var bh = HZ * (0.1 + 0.36 * Math.pow(Math.random(), 1.7));
+      if (count % 7 === 3) bh = HZ * rnd(0.42, 0.56);          // occasional tall tower
+      var bx = x, by = HZ - bh;
+      var shade = pick(['#080a18', '#0a0d1e', '#07091a', '#0b0e22']);
+      g.fillStyle = shade;
+
+      var roof = Math.random();
+      if (roof < 0.22) {                                          // antenna with beacon
+        var ah = rnd(18, 55) * S;
+        g.fillRect(bx + bw / 2 - 1 * S, by - ah, 2 * S, ah);
+        beacons.push({ x: bx + bw / 2, y: by - ah, ph: rnd(0, TAU) });
+      } else if (roof < 0.36) {                                   // spire
+        g.beginPath();
+        g.moveTo(bx + bw * 0.3, by); g.lineTo(bx + bw / 2, by - rnd(15, 40) * S); g.lineTo(bx + bw * 0.7, by);
+        g.closePath(); g.fill();
+      } else if (roof < 0.6) {                                    // stepped top
+        var sw = bw * rnd(0.4, 0.7), sh = rnd(10, 28) * S;
+        g.fillRect(bx + (bw - sw) / 2, by - sh, sw, sh);
+        if (Math.random() < 0.4) {
+          g.fillRect(bx + (bw - sw * 0.5) / 2, by - sh - sh * 0.6, sw * 0.5, sh * 0.6);
+        }
+      }
+      g.fillRect(bx, by, bw, bh);
+
+      // windows
+      var cw = rnd(4.5, 7.5) * S, ch = rnd(6, 10) * S, gx = rnd(2.5, 4) * S, gy = rnd(3.5, 5) * S;
+      var ncol = Math.floor((bw - gx) / (cw + gx)), nrow = Math.floor((bh - gy) / (ch + gy));
+      var litP = rnd(0.25, 0.7);
+      var warm = Math.random() < 0.72;
+      var ox = bx + (bw - (ncol * (cw + gx) - gx)) / 2;
+      for (var r2 = 0; r2 < nrow; r2++) {
+        var floorBias = Math.random() < 0.12 ? 0.08 : 1;
+        for (var c2 = 0; c2 < ncol; c2++) {
+          if (Math.random() < litP * floorBias) {
+            if (warm) g.fillStyle = 'hsla(' + rnd(32, 50).toFixed(0) + ',95%,' + rnd(62, 82).toFixed(0) + '%,' + rnd(0.55, 1).toFixed(2) + ')';
+            else g.fillStyle = 'hsla(' + rnd(185, 215).toFixed(0) + ',75%,' + rnd(70, 88).toFixed(0) + '%,' + rnd(0.5, 1).toFixed(2) + ')';
+            g.fillRect(ox + c2 * (cw + gx), by + gy + r2 * (ch + gy), cw, ch);
+          }
+        }
+      }
+      x += bw + rnd(2, 9) * S;
+      count++;
+    }
+
+    // embankment and waterfront lights
+    g.fillStyle = '#05070f';
+    g.fillRect(0, HZ - 5 * S, W, 5 * S);
+    var lx = rnd(6, 20) * S;
+    while (lx < W) {
+      var lg = g.createRadialGradient(lx, HZ - 6 * S, 0, lx, HZ - 6 * S, 7 * S);
+      lg.addColorStop(0, 'rgba(255,220,150,0.9)');
+      lg.addColorStop(0.3, 'rgba(255,200,120,0.35)');
+      lg.addColorStop(1, 'rgba(255,200,120,0)');
+      g.fillStyle = lg;
+      g.fillRect(lx - 7 * S, HZ - 13 * S, 14 * S, 14 * S);
+      g.fillStyle = '#fff2cc';
+      g.beginPath(); g.arc(lx, HZ - 6 * S, 1.2 * S, 0, TAU); g.fill();
+      lx += rnd(24, 40) * S;
+    }
+
+    skylineC = c;
+  }
+
+  // ---------- sizing ----------
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 1.5);
+    W = Math.max(1, window.innerWidth);
+    H = Math.max(1, window.innerHeight);
+    S = Math.min(W, H) / 1080;
+    cv.width = Math.round(W * DPR);
+    cv.height = Math.round(H * DPR);
+    cx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    HZ = Math.round(H * 0.72);
+    RH = H - HZ;
+    G = 170 * S;
+
+    buildBackground();
+    buildSkyline();
+    var r = mk(W, HZ); skyC = r[0]; sg = r[1];
+    sg.lineCap = 'round';
+    r = mk(W, HZ); refC = r[0]; rg = r[1];
+  }
+
+  // ---------- particles ----------
+  function spawn(x, y, vx, vy, o) {
+    ps.push({
+      x: x, y: y, px: x, py: y, vx: vx, vy: vy,
+      h: o.h, s: o.s === undefined ? 100 : o.s, l: o.l === undefined ? 60 : o.l,
+      h2: o.h2 === undefined ? -1 : o.h2,
+      life: 1, decay: 1 / o.t,
+      size: o.size || 2.4 * S,
+      g: o.g === undefined ? G : o.g,
+      drag: o.drag === undefined ? 1.1 : o.drag,
+      hot: o.hot === undefined ? 1 : o.hot,
+      strobe: !!o.strobe, emit: o.emit || 0,
+      split: !!o.split, splitAt: o.splitAt || 0
+    });
+  }
+
+  var HUES = [0, 18, 35, 48, 95, 125, 165, 190, 210, 235, 270, 290, 320, 345];
+  var TYPES = ['peony', 'peony', 'chrys', 'ring', 'heart', 'star', 'willow', 'palm', 'crossette', 'strobe', 'double', 'saturn', 'shift'];
+
+  function burst(x, y, type, hue, hue2) {
+    flashes.push({ x: x, y: y, r: rnd(140, 260) * S, a: 0.65, h: hue });
+    var v = rnd(230, 360) * S;
+    var i, n, a, z, sp, rot, tilt;
+
+    function sphere(count, speed, o, emitP) {
+      for (var k = 0; k < count; k++) {
+        var ang = rnd(0, TAU), zz = rnd(-1, 1);
+        var s2 = speed * Math.sqrt(1 - zz * zz) * rnd(0.92, 1.08);
+        var opt = {};
+        for (var key in o) opt[key] = o[key];
+        if (emitP && Math.random() < emitP) opt.emit = 0.7;
+        spawn(x, y, Math.cos(ang) * s2, Math.sin(ang) * s2, opt);
+      }
+    }
+
+    switch (type) {
+      case 'peony':
+        sphere(ri(90, 140), v, { h: hue, t: rnd(1.4, 2.0), size: 2.6 * S });
+        break;
+
+      case 'chrys':
+        sphere(ri(80, 110), v * 0.95, { h: hue, t: rnd(1.8, 2.4), size: 2.4 * S, drag: 1.3 }, 0.35);
+        break;
+
+      case 'ring':
+        n = ri(60, 90); sp = v * 1.05;
+        tilt = rnd(0.25, 1); rot = rnd(0, TAU);
+        for (i = 0; i < n; i++) {
+          a = i / n * TAU + rnd(-0.03, 0.03);
+          var rx = Math.cos(a), ry = Math.sin(a) * tilt;
+          var vx = (rx * Math.cos(rot) - ry * Math.sin(rot)) * sp;
+          var vy = (rx * Math.sin(rot) + ry * Math.cos(rot)) * sp;
+          spawn(x, y, vx, vy, { h: hue, t: rnd(1.5, 1.9), size: 3 * S, drag: 1.3 });
+        }
+        if (Math.random() < 0.5) sphere(30, v * 0.3, { h: hue2, t: 1.2, size: 2 * S });
+        break;
+
+      case 'heart':
+        n = ri(80, 110); sp = v * 0.9; rot = rnd(-0.35, 0.35);
+        for (i = 0; i < n; i++) {
+          a = i / n * TAU;
+          var hx = 16 * Math.pow(Math.sin(a), 3);
+          var hy = 13 * Math.cos(a) - 5 * Math.cos(2 * a) - 2 * Math.cos(3 * a) - Math.cos(4 * a);
+          hx /= 17; hy /= 17;
+          var sc = sp * rnd(0.97, 1.03);
+          var fx = (hx * Math.cos(rot) + hy * Math.sin(rot)) * sc;
+          var fy = -(hy * Math.cos(rot) - hx * Math.sin(rot)) * sc;
+          spawn(x, y, fx, fy, { h: hue, t: rnd(1.6, 2.0), size: 3 * S, drag: 1.4 });
+        }
+        for (i = 0; i < 25; i++) {
+          a = rnd(0, TAU); z = rnd(0.1, 0.5) * sp;
+          spawn(x, y, Math.cos(a) * z, Math.sin(a) * z, { h: hue2, t: 1.1, size: 1.8 * S, drag: 1.4 });
+        }
+        break;
+
+      case 'star':
+        n = 10; sp = v * 0.95; rot = rnd(0, TAU);
+        var ptsPerEdge = 9;
+        for (i = 0; i < n; i++) {
+          var r1 = (i % 2 === 0) ? 1 : 0.42, r2 = ((i + 1) % 2 === 0) ? 1 : 0.42;
+          var a1 = rot + i / n * TAU, a2 = rot + (i + 1) / n * TAU;
+          for (var k = 0; k < ptsPerEdge; k++) {
+            var f = k / ptsPerEdge;
+            var px = (Math.cos(a1) * r1) * (1 - f) + (Math.cos(a2) * r2) * f;
+            var py = (Math.sin(a1) * r1) * (1 - f) + (Math.sin(a2) * r2) * f;
+            spawn(x, y, px * sp, py * sp, { h: hue, t: rnd(1.6, 2.0), size: 3 * S, drag: 1.35 });
+          }
+        }
+        sphere(20, v * 0.25, { h: hue2, t: 1.0, size: 2 * S });
+        break;
+
+      case 'willow':
+        sphere(ri(90, 130), v * 0.8, { h: rnd(38, 48), s: 90, l: 62, t: rnd(3.2, 4.2), size: 2.2 * S, g: G * 1.3, drag: 1.6, hot: 0.6 }, 0.2);
+        break;
+
+      case 'palm':
+        n = ri(12, 18); sp = v * 0.85;
+        for (i = 0; i < n; i++) {
+          a = rnd(0, TAU); z = rnd(-1, 1);
+          var s3 = sp * Math.sqrt(1 - z * z) * rnd(0.9, 1.1);
+          spawn(x, y, Math.cos(a) * s3, Math.sin(a) * s3, { h: hue, t: rnd(1.5, 1.9), size: 4.5 * S, g: G * 0.9, drag: 1.3, emit: 2.5 });
+        }
+        break;
+
+      case 'crossette':
+        n = ri(18, 26); sp = v * 0.75;
+        for (i = 0; i < n; i++) {
+          a = rnd(0, TAU); z = rnd(-1, 1);
+          var s4 = sp * Math.sqrt(1 - z * z) * rnd(0.9, 1.1);
+          spawn(x, y, Math.cos(a) * s4, Math.sin(a) * s4, { h: hue, t: 1.7, size: 3.4 * S, drag: 1.4, split: true, splitAt: rnd(0.5, 0.62) });
+        }
+        break;
+
+      case 'strobe':
+        sphere(ri(90, 130), v * 0.85, { h: hue, s: 35, l: 85, t: rnd(2.4, 3.0), size: 3 * S, g: G * 1.2, drag: 1.5, strobe: true, hot: 0.4 });
+        break;
+
+      case 'double':
+        sphere(ri(80, 110), v, { h: hue, t: rnd(1.5, 2.0), size: 2.6 * S });
+        sphere(ri(50, 70), v * 0.5, { h: hue2, t: rnd(1.3, 1.7), size: 2.6 * S });
+        break;
+
+      case 'saturn':
+        sphere(ri(50, 70), v * 0.45, { h: hue, t: 1.5, size: 2.6 * S });
+        n = 70; sp = v * 1.1; tilt = rnd(0.2, 0.45); rot = rnd(-0.4, 0.4);
+        for (i = 0; i < n; i++) {
+          a = i / n * TAU;
+          var qx = Math.cos(a), qy = Math.sin(a) * tilt;
+          spawn(x, y, (qx * Math.cos(rot) - qy * Math.sin(rot)) * sp, (qx * Math.sin(rot) + qy * Math.cos(rot)) * sp, { h: hue2, t: 1.7, size: 3 * S, drag: 1.3 });
+        }
+        break;
+
+      case 'shift':
+        sphere(ri(100, 140), v, { h: hue, h2: hue2, t: rnd(1.8, 2.3), size: 2.6 * S, drag: 1.2 });
+        break;
+    }
+  }
+
+  function launch(count) {
+    for (var i = 0; i < count; i++) {
+      var x = rnd(W * 0.08, W * 0.92);
+      var target = rnd(H * 0.08, H * 0.46);
+      var vy = -Math.sqrt(2 * G * (HZ - target));
+      var hue = pick(HUES);
+      var hue2 = (hue + pick([40, 150, 180, 200, 300])) % 360;
+      var type = pick(TYPES);
+      if (Math.random() < 0.12) hue2 = -1; // white companion
+      rockets.push({ x: x, y: HZ, px: x, py: HZ, vx: rnd(-28, 28) * S, vy: vy, target: target, type: type, hue: hue, hue2: hue2 < 0 ? 0 : hue2, white2: hue2 < 0 });
+    }
+  }
+
+  function schedule() {
+    var cycle = t % 52;
+    if (cycle > 44) {                      // finale
+      launchTimer = rnd(0.08, 0.22);
+      launch(Math.random() < 0.3 ? 2 : 1);
+    } else {
+      launchTimer = rnd(0.3, 1.15);
+      if (Math.random() < 0.18) launch(ri(2, 4));
+      else launch(1);
+    }
+  }
+
+  // ---------- simulation ----------
+  function update(dt) {
+    launchTimer -= dt;
+    if (launchTimer <= 0 && ps.length < 7000) schedule();
+
+    var i, p;
+    for (i = rockets.length - 1; i >= 0; i--) {
+      var r = rockets[i];
+      r.px = r.x; r.py = r.y;
+      r.vy += G * dt;
+      r.x += r.vx * dt;
+      r.y += r.vy * dt;
+      // exhaust sparks
+      for (var k = 0; k < 2; k++) {
+        spawn(r.x + rnd(-1, 1) * S, r.y + rnd(0, 4) * S, rnd(-25, 25) * S, rnd(20, 70) * S,
+          { h: rnd(25, 45), s: 100, l: 65, t: rnd(0.25, 0.5), size: 1.6 * S, g: G * 0.3, drag: 2, hot: 0.8 });
+      }
+      if (r.vy >= -45 * S || r.y <= r.target) {
+        burst(r.x, r.y, r.type, r.hue, r.hue2);
+        rockets.splice(i, 1);
+      }
+    }
+
+    for (i = ps.length - 1; i >= 0; i--) {
+      p = ps[i];
+      p.px = p.x; p.py = p.y;
+      var dk = 1 - p.drag * dt; if (dk < 0) dk = 0;
+      p.vx *= dk; p.vy *= dk;
+      p.vy += p.g * dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.life -= p.decay * dt;
+
+      if (p.split && p.life < p.splitAt) {
+        p.split = false; p.life = 0;
+        var ang = Math.atan2(p.vy, p.vx);
+        for (var j = 0; j < 4; j++) {
+          var a2 = ang + j * Math.PI / 2 + Math.PI / 4;
+          var sp2 = rnd(110, 160) * S;
+          spawn(p.x, p.y, p.vx * 0.3 + Math.cos(a2) * sp2, p.vy * 0.3 + Math.sin(a2) * sp2,
+            { h: p.h, t: 0.9, size: 2.4 * S, drag: 1.6 });
+        }
+      }
+      if (p.emit && ps.length < 9000) {
+        var em = p.emit * dt * 60 * p.life;
+        while (em > 0) {
+          if (Math.random() < em) {
+            spawn(p.x, p.y, p.vx * 0.15 + rnd(-30, 30) * S, p.vy * 0.15 + rnd(-30, 30) * S,
+              { h: p.h, s: 90, l: 70, t: rnd(0.35, 0.8), size: 1.5 * S, g: G * 0.8, drag: 2.2, hot: 0.5 });
+          }
+          em -= 1;
+        }
+      }
+      if (p.life <= 0 || p.y > HZ + 40 * S) {
+        ps[i] = ps[ps.length - 1];
+        ps.pop();
+      }
+    }
+
+    for (i = flashes.length - 1; i >= 0; i--) {
+      flashes[i].a -= dt * 3.2;
+      if (flashes[i].a <= 0) flashes.splice(i, 1);
+    }
+  }
+
+  // ---------- rendering ----------
+  function drawSky() {
+    sg.globalCompositeOperation = 'destination-out';
+    sg.fillStyle = 'rgba(0,0,0,0.19)';
+    sg.fillRect(0, 0, W, HZ);
+    sg.globalCompositeOperation = 'lighter';
+
+    var i, p;
+    for (i = 0; i < flashes.length; i++) {
+      var f = flashes[i];
+      var fg = sg.createRadialGradient(f.x, f.y, 0, f.x, f.y, f.r);
+      fg.addColorStop(0, 'hsla(' + f.h + ',70%,90%,' + (f.a * 0.6).toFixed(3) + ')');
+      fg.addColorStop(0.35, 'hsla(' + f.h + ',90%,65%,' + (f.a * 0.18).toFixed(3) + ')');
+      fg.addColorStop(1, 'hsla(' + f.h + ',90%,60%,0)');
+      sg.fillStyle = fg;
+      sg.fillRect(f.x - f.r, f.y - f.r, f.r * 2, f.r * 2);
+    }
+
+    for (i = 0; i < rockets.length; i++) {
+      var r = rockets[i];
+      sg.strokeStyle = 'hsla(42,100%,88%,0.95)';
+      sg.lineWidth = 2.4 * S;
+      sg.beginPath(); sg.moveTo(r.px, r.py); sg.lineTo(r.x, r.y); sg.stroke();
+    }
+
+    for (i = 0; i < ps.length; i++) {
+      p = ps[i];
+      var a = p.life; if (a > 1) a = 1;
+      var alpha = a < 0.3 ? a / 0.3 : 1;
+      if (p.strobe) alpha *= (Math.random() < 0.45 ? 1 : 0.08);
+      var hot = Math.pow(a, 4) * p.hot;
+      var l = p.l + (97 - p.l) * hot;
+      var s = p.s * (1 - hot * 0.7);
+      var h = p.h;
+      if (p.h2 >= 0 && a < 0.55) h = p.h2;
+      sg.strokeStyle = 'hsla(' + h + ',' + s.toFixed(0) + '%,' + l.toFixed(0) + '%,' + alpha.toFixed(3) + ')';
+      sg.lineWidth = p.size * (0.45 + 0.55 * a);
+      sg.beginPath(); sg.moveTo(p.px, p.py); sg.lineTo(p.x, p.y); sg.stroke();
+    }
+  }
+
+  function compose() {
+    cx.globalAlpha = 1;
+    cx.globalCompositeOperation = 'source-over';
+    cx.drawImage(bgC, 0, 0, W, H);
+
+    // twinkling stars
+    for (var i = 0; i < twinkles.length; i++) {
+      var tw = twinkles[i];
+      var ta = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(t * tw.sp + tw.ph));
+      cx.fillStyle = 'rgba(255,255,255,' + ta.toFixed(2) + ')';
+      cx.beginPath(); cx.arc(tw.x, tw.y, tw.r, 0, TAU); cx.fill();
+    }
+
+    cx.drawImage(skyC, 0, 0, W, HZ);
+    cx.drawImage(skylineC, 0, 0, W, HZ);
+
+    // flashes light the city and water
+    if (flashes.length) {
+      cx.globalCompositeOperation = 'lighter';
+      for (i = 0; i < flashes.length; i++) {
+        var f = flashes[i];
+        var rr = f.r * 3.2;
+        var fg = cx.createRadialGradient(f.x, f.y, 0, f.x, f.y, rr);
+        fg.addColorStop(0, 'hsla(' + f.h + ',80%,70%,' + (f.a * 0.16).toFixed(3) + ')');
+        fg.addColorStop(1, 'hsla(' + f.h + ',80%,70%,0)');
+        cx.fillStyle = fg;
+        cx.fillRect(f.x - rr, f.y - rr, rr * 2, rr * 2);
+      }
+      cx.globalCompositeOperation = 'source-over';
+    }
+
+    // beacons
+    for (i = 0; i < beacons.length; i++) {
+      var b = beacons[i];
+      var ba = 0.3 + 0.7 * Math.max(0, Math.sin(t * 2.4 + b.ph));
+      var bg = cx.createRadialGradient(b.x, b.y, 0, b.x, b.y, 6 * S);
+      bg.addColorStop(0, 'rgba(255,60,60,' + ba.toFixed(2) + ')');
+      bg.addColorStop(0.3, 'rgba(255,40,40,' + (ba * 0.5).toFixed(2) + ')');
+      bg.addColorStop(1, 'rgba(255,40,40,0)');
+      cx.fillStyle = bg;
+      cx.fillRect(b.x - 6 * S, b.y - 6 * S, 12 * S, 12 * S);
+    }
+
+    // reflection source = skyline + fireworks
+    rg.globalCompositeOperation = 'source-over';
+    rg.clearRect(0, 0, W, HZ);
+    rg.drawImage(skylineC, 0, 0, W, HZ);
+    rg.drawImage(skyC, 0, 0, W, HZ);
+
+    // rippled reflection strips
+    var sh = 2, comp = 0.8;
+    var srcH = sh / comp;
+    for (var y = 0; y < RH; y += sh) {
+      var fr = y / RH;
+      var srcY = HZ - (y + sh) / comp;
+      if (srcY < 0) break;
+      var off = Math.sin(y * 0.16 + t * 2.4) * (0.8 + fr * 5) * S
+              + Math.sin(y * 0.047 - t * 1.4 + 1.3) * (fr * 4.5) * S
+              + Math.sin(y * 0.33 + t * 3.7) * 0.6 * S;
+      cx.globalAlpha = 0.6 * (1 - fr * 0.75);
+      cx.drawImage(refC, 0, srcY * DPR, W * DPR, srcH * DPR, off, HZ + y, W, sh);
+    }
+    cx.globalAlpha = 1;
+
+    // soft shoreline edge
+    var eg = cx.createLinearGradient(0, HZ, 0, HZ + 14 * S);
+    eg.addColorStop(0, 'rgba(10,16,40,0.55)');
+    eg.addColorStop(1, 'rgba(10,16,40,0)');
+    cx.fillStyle = eg;
+    cx.fillRect(0, HZ, W, 14 * S);
+  }
+
+  function frame(now) {
+    requestAnimationFrame(frame);
+    if (!last) last = now;
+    var dt = (now - last) / 1000;
+    last = now;
+    if (dt > 0.05) dt = 0.05;
+    if (dt < 0) dt = 0;
+    t += dt;
+    update(dt);
+    drawSky();
+    compose();
+  }
+
+  window.addEventListener('resize', function () {
+    resize();
+    ps.length = 0; rockets.length = 0; flashes.length = 0;
+  });
+
+  resize();
+  launch(2);
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

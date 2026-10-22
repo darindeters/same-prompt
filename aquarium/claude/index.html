@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reef</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #052a48; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+'use strict';
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const TAU = Math.PI * 2;
+
+let W = 0, H = 0, DPR = 1, S = 1, sandY = 0;
+let staticLayer = null, sctx = null;
+let seed = 1;
+const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+const R = (a, b) => a + rnd() * (b - a);
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+
+// ---------- scene content ----------
+let rocks = [], dyn = [], vents = [], anemones = [];
+let fish = [], solos = [], bubbles = [], plankton = [];
+const school = { tx: 0, ty: 0, nextTurn: 0, scatter: 0, scatterT: 0, sx: 0, sy: 0, nextScatter: 0, shadow: null };
+
+const CORAL_COLS = [
+  ['#ff7a45', '#ffb08a'], ['#e84393', '#ff8fc0'], ['#9b59b6', '#cfa0e8'],
+  ['#f6c744', '#ffe59a'], ['#2ec4b6', '#8af0e6'], ['#ff5e5b', '#ffa5a3'],
+];
+
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  cv.width = Math.floor(W * DPR); cv.height = Math.floor(H * DPR);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  S = Math.min(W, H) / 1080;
+  sandY = H * 0.80;
+  buildScene();
+}
+
+// ---------- coral painters ----------
+function branchCoral(c, x, y, len, ang, w, depth, col, tip) {
+  if (depth <= 0 || len < 3) return;
+  const ex = x + Math.cos(ang) * len, ey = y + Math.sin(ang) * len;
+  c.strokeStyle = col; c.lineWidth = w; c.lineCap = 'round';
+  c.beginPath(); c.moveTo(x, y); c.lineTo(ex, ey); c.stroke();
+  if (depth === 1) {
+    c.fillStyle = tip; c.beginPath(); c.arc(ex, ey, w * 0.7, 0, TAU); c.fill();
+    return;
+  }
+  const n = rnd() < 0.65 ? 2 : 3;
+  for (let i = 0; i < n; i++) {
+    branchCoral(c, ex, ey, len * R(0.62, 0.82), ang + R(-0.7, 0.7), w * 0.72, depth - 1, col, tip);
+  }
+}
+
+function brainCoral(c, x, y, rx, ry, col, col2) {
+  const g = c.createRadialGradient(x - rx * 0.3, y - ry * 0.6, rx * 0.1, x, y, rx);
+  g.addColorStop(0, col2); g.addColorStop(1, col);
+  c.fillStyle = g;
+  c.beginPath(); c.ellipse(x, y, rx, ry, 0, Math.PI, TAU); c.closePath(); c.fill();
+  c.save();
+  c.beginPath(); c.ellipse(x, y, rx, ry, 0, Math.PI, TAU); c.closePath(); c.clip();
+  c.strokeStyle = 'rgba(40,20,40,0.45)'; c.lineWidth = Math.max(1, rx * 0.06); c.lineCap = 'round';
+  const rows = Math.floor(ry / (rx * 0.16)) + 2;
+  for (let i = 0; i < rows; i++) {
+    const yy = y - ry + (i + 0.5) * (ry / rows) * 1.0;
+    c.beginPath();
+    for (let xx = x - rx; xx <= x + rx; xx += rx * 0.08) {
+      const off = Math.sin(xx * 0.25 / S + i * 1.7) * rx * 0.05 + Math.sin(xx * 0.9 / S + i) * rx * 0.03;
+      if (xx === x - rx) c.moveTo(xx, yy + off); else c.lineTo(xx, yy + off);
+    }
+    c.stroke();
+  }
+  c.restore();
+}
+
+function tubeCoral(c, x, y, n, h, w, col, col2) {
+  for (let i = 0; i < n; i++) {
+    const xx = x + (i - (n - 1) / 2) * w * 1.1 + R(-w * 0.2, w * 0.2);
+    const hh = h * R(0.6, 1.1);
+    const g = c.createLinearGradient(xx - w / 2, 0, xx + w / 2, 0);
+    g.addColorStop(0, col); g.addColorStop(0.5, col2); g.addColorStop(1, col);
+    c.fillStyle = g;
+    c.beginPath();
+    c.moveTo(xx - w / 2, y + 2);
+    c.lineTo(xx - w / 2, y - hh);
+    c.arc(xx, y - hh, w / 2, Math.PI, 0);
+    c.lineTo(xx + w / 2, y + 2);
+    c.closePath(); c.fill();
+    c.fillStyle = 'rgba(30,10,30,0.5)';
+    c.beginPath(); c.ellipse(xx, y - hh, w * 0.3, w * 0.16, 0, 0, TAU); c.fill();
+  }
+}
+
+function rockShape(c, r, col, col2) {
+  const g = c.createLinearGradient(0, r.y - r.ry, 0, r.y + r.ry);
+  g.addColorStop(0, col2); g.addColorStop(1, col);
+  c.fillStyle = g;
+  c.beginPath();
+  const pts = r.pts;
+  c.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i <= pts.length; i++) {
+    const p = pts[i % pts.length], q = pts[(i + 1) % pts.length];
+    c.quadraticCurveTo(p[0], p[1], (p[0] + q[0]) / 2, (p[1] + q[1]) / 2);
+  }
+  c.closePath(); c.fill();
+}
+
+function makeRock(x, y, rx, ry) {
+  const pts = [];
+  const n = 14;
+  for (let i = 0; i < n; i++) {
+    const a = i / n * TAU;
+    const k = R(0.8, 1.15);
+    pts.push([x + Math.cos(a) * rx * k, y + Math.sin(a) * ry * k]);
+  }
+  return { x, y, rx, ry, pts };
+}
+function rockTop(r, x) {
+  const u = clamp((x - r.x) / r.rx, -0.95, 0.95);
+  return r.y - r.ry * Math.sqrt(1 - u * u) * 0.95;
+}
+
+// ---------- scene build ----------
+function buildScene() {
+  seed = 90210;
+  staticLayer = document.createElement('canvas');
+  staticLayer.width = cv.width; staticLayer.height = cv.height;
+  sctx = staticLayer.getContext('2d');
+  sctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const c = sctx;
+  rocks = []; dyn = []; vents = []; anemones = [];
+
+  // far reef silhouettes (depth haze)
+  c.save();
+  c.globalAlpha = 0.55;
+  for (let i = 0; i < 9; i++) {
+    const x = W * (i + R(0.1, 0.9)) / 9, y = sandY - R(0, 40 * S);
+    const r = makeRock(x, y + 30 * S, R(70, 140) * S, R(40, 90) * S);
+    rockShape(c, r, '#123a5a', '#1f5578');
+    for (let k = 0; k < 3; k++) {
+      branchCoral(c, x + R(-r.rx * 0.6, r.rx * 0.6), rockTop(r, x), R(30, 60) * S, -Math.PI / 2 + R(-0.5, 0.5), 7 * S, 4, '#1b4f72', '#2a6b93');
+    }
+  }
+  c.restore();
+
+  // sand
+  const sg = c.createLinearGradient(0, sandY - 10, 0, H);
+  sg.addColorStop(0, '#9a9a74'); sg.addColorStop(0.5, '#6f7460'); sg.addColorStop(1, '#3c4a4a');
+  c.fillStyle = sg;
+  c.beginPath();
+  c.moveTo(0, sandY);
+  for (let x = 0; x <= W; x += 20) c.lineTo(x, sandY + Math.sin(x * 0.012) * 8 * S + Math.sin(x * 0.031) * 4 * S);
+  c.lineTo(W, H); c.lineTo(0, H); c.closePath(); c.fill();
+  c.strokeStyle = 'rgba(255,255,230,0.08)'; c.lineWidth = 2 * S;
+  for (let i = 0; i < 9; i++) {
+    const yy = sandY + 20 * S + i * (H - sandY) / 9;
+    c.beginPath();
+    for (let x = 0; x <= W; x += 16) c.lineTo(x, yy + Math.sin(x * 0.02 + i) * 5 * S);
+    c.stroke();
+  }
+
+  // near rocks
+  const nRocks = Math.max(5, Math.round(W / (220 * S)));
+  for (let i = 0; i < nRocks; i++) {
+    const x = (i + 0.5) * W / nRocks + R(-40, 40) * S;
+    const rx = R(90, 160) * S, ry = R(50, 110) * S;
+    const y = sandY + R(10, 40) * S;
+    rocks.push(makeRock(x, y, rx, ry));
+  }
+  rocks.sort((a, b) => a.y - b.y);
+  for (const r of rocks) {
+    rockShape(c, r, '#1d2d3a', '#3a5566');
+    // mossy / encrusting patches
+    for (let k = 0; k < 4; k++) {
+      c.fillStyle = ['rgba(120,90,160,0.35)', 'rgba(230,120,80,0.3)', 'rgba(70,160,140,0.35)', 'rgba(220,180,90,0.3)'][k];
+      c.beginPath(); c.ellipse(r.x + R(-r.rx * 0.7, r.rx * 0.7), r.y + R(-r.ry * 0.3, r.ry * 0.5), R(12, 30) * S, R(8, 18) * S, R(0, TAU), 0, TAU); c.fill();
+    }
+  }
+
+  // corals on rocks
+  let ci = 0;
+  for (const r of rocks) {
+    const count = 3 + Math.floor(rnd() * 3);
+    for (let k = 0; k < count; k++) {
+      const x = r.x + R(-r.rx * 0.75, r.rx * 0.75);
+      const y = rockTop(r, x) + 4 * S;
+      const col = CORAL_COLS[(ci++) % CORAL_COLS.length];
+      const t = rnd();
+      if (t < 0.3) {
+        branchCoral(c, x, y, R(40, 75) * S, -Math.PI / 2 + R(-0.4, 0.4), R(8, 12) * S, 5, col[0], col[1]);
+      } else if (t < 0.48) {
+        brainCoral(c, x, y, R(35, 65) * S, R(25, 45) * S, col[0], col[1]);
+      } else if (t < 0.64) {
+        tubeCoral(c, x, y, 3 + Math.floor(rnd() * 4), R(30, 60) * S, R(12, 18) * S, col[0], col[1]);
+      } else if (t < 0.82) {
+        dyn.push({ type: 'fan', x, y, h: R(80, 140) * S, w: R(60, 110) * S, col: col[0], col2: col[1], ph: R(0, TAU), ribs: 9 + Math.floor(rnd() * 5) });
+      } else {
+        const a = { type: 'anemone', x, y, n: 18 + Math.floor(rnd() * 10), len: R(35, 60) * S, col: col[0], col2: col[1], ph: R(0, TAU), spread: R(0.9, 1.3) };
+        dyn.push(a); anemones.push(a);
+      }
+    }
+    if (rnd() < 0.5) vents.push({ x: r.x + R(-r.rx * 0.5, r.rx * 0.5), y: rockTop(r, r.x) + 6 * S, t: R(0, 2) });
+  }
+  if (!anemones.length) {
+    const r = rocks[Math.floor(rocks.length / 2)];
+    const a = { type: 'anemone', x: r.x, y: rockTop(r, r.x), n: 24, len: 50 * S, col: '#2ec4b6', col2: '#8af0e6', ph: 0, spread: 1.1 };
+    dyn.push(a); anemones.push(a);
+  }
+
+  // seaweed clumps between/behind rocks
+  const nWeed = Math.max(6, Math.round(W / (150 * S)));
+  for (let i = 0; i < nWeed; i++) {
+    const x = R(0, W);
+    const strands = 3 + Math.floor(rnd() * 4);
+    for (let k = 0; k < strands; k++) {
+      dyn.push({ type: 'weed', x: x + R(-18, 18) * S, y: sandY + R(0, 25) * S, h: R(90, 220) * S, w: R(5, 10) * S, ph: R(0, TAU), sp: R(0.6, 1.1), col: rnd() < 0.5 ? '#2f7d4f' : '#4f9a3c' });
+    }
+  }
+  dyn.sort((a, b) => (a.type === 'weed' ? 0 : 1) - (b.type === 'weed' ? 0 : 1));
+
+  // fish school
+  fish = [];
+  const N = 150;
+  const cx0 = W * 0.5, cy0 = H * 0.4;
+  for (let i = 0; i < N; i++) {
+    const a = R(0, TAU), d = R(0, 90 * S);
+    const hue = R(190, 212), lig = R(58, 74);
+    fish.push({
+      x: cx0 + Math.cos(a) * d, y: cy0 + Math.sin(a) * d,
+      vx: 80 * S + R(-10, 10), vy: R(-10, 10),
+      size: R(11, 15) * S, phase: R(0, TAU),
+      col: `hsl(${hue},55%,${lig}%)`, col2: `hsl(${R(42, 52)},90%,${R(55, 65)}%)`,
+      belly: `hsl(${hue},40%,88%)`,
+    });
+  }
+  school.tx = W * 0.5; school.ty = H * 0.35; school.nextTurn = 5; school.scatter = 0; school.nextScatter = 16; school.shadow = null;
+
+  // solo reef fish
+  solos = [];
+  const solo = (opts) => solos.push(Object.assign({
+    x: R(W * 0.2, W * 0.8), y: R(H * 0.45, sandY - 80 * S), vx: 20 * S, vy: 0, tx: 0, ty: 0, nextT: 0,
+    phase: R(0, TAU), speed: 45 * S, size: 26 * S, aspect: 0.6, bands: 0, col: '#f6c744', col2: '#ffe59a', bandCol: '#fff', home: null,
+  }, opts));
+  solo({ col: '#f7c531', col2: '#fff0a0', size: 30 * S, aspect: 0.62, speed: 40 * S });
+  solo({ col: '#2d6fe0', col2: '#7fb2ff', size: 30 * S, aspect: 0.58, speed: 48 * S, bands: 0, tailCol: '#ffd84d' });
+  solo({ col: '#ff7a1a', col2: '#ffb36b', size: 18 * S, aspect: 0.52, speed: 55 * S, bands: 3, home: anemones[0] });
+  solo({ col: '#ff7a1a', col2: '#ffb36b', size: 15 * S, aspect: 0.52, speed: 60 * S, bands: 3, home: anemones[anemones.length - 1] });
+  solo({ col: '#e8e8f0', col2: '#ffffff', size: 28 * S, aspect: 0.6, speed: 42 * S, bands: 2, bandCol: '#222' });
+
+  // plankton
+  plankton = [];
+  for (let i = 0; i < 90; i++) plankton.push({ x: R(0, W), y: R(0, H), r: R(0.6, 1.8) * S, ph: R(0, TAU), sp: R(0.3, 1) });
+  bubbles = [];
+}
+
+// ---------- dynamic coral painters ----------
+function drawWeed(w, t) {
+  const segs = 12;
+  ctx.strokeStyle = w.col; ctx.lineCap = 'round';
+  ctx.beginPath();
+  let px = w.x, py = w.y;
+  ctx.moveTo(px, py);
+  for (let i = 1; i <= segs; i++) {
+    const u = i / segs;
+    const y = w.y - w.h * u;
+    const x = w.x + Math.sin(t * w.sp + w.ph + u * 2.2) * u * u * 28 * S + Math.sin(t * 0.3 + w.ph) * u * 10 * S;
+    ctx.lineTo(x, y);
+  }
+  ctx.lineWidth = w.w; ctx.stroke();
+}
+
+function drawFan(f, t) {
+  ctx.save();
+  ctx.translate(f.x, f.y);
+  ctx.rotate(Math.sin(t * 0.5 + f.ph) * 0.06);
+  ctx.strokeStyle = f.col; ctx.lineCap = 'round';
+  ctx.globalAlpha = 0.9;
+  for (let i = 0; i < f.ribs; i++) {
+    const u = (i / (f.ribs - 1) - 0.5);
+    const a = -Math.PI / 2 + u * 1.5;
+    const ex = Math.cos(a) * f.w * 0.5 * (1 + Math.abs(u) * 0.3), ey = Math.sin(a) * f.h;
+    ctx.lineWidth = 2.2 * S;
+    ctx.beginPath(); ctx.moveTo(0, 0);
+    ctx.quadraticCurveTo(ex * 0.3, ey * 0.7, ex, ey);
+    ctx.stroke();
+  }
+  // mesh
+  ctx.strokeStyle = f.col2; ctx.lineWidth = 1 * S; ctx.globalAlpha = 0.5;
+  for (let k = 1; k <= 5; k++) {
+    const u = k / 5;
+    ctx.beginPath();
+    for (let i = 0; i <= 24; i++) {
+      const v = (i / 24 - 0.5);
+      const a = -Math.PI / 2 + v * 1.5;
+      const x = Math.cos(a) * f.w * 0.5 * (1 + Math.abs(v) * 0.3) * u, y = Math.sin(a) * f.h * u;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawAnemone(a, t) {
+  ctx.fillStyle = a.col;
+  ctx.beginPath(); ctx.ellipse(a.x, a.y, 22 * S, 10 * S, 0, 0, TAU); ctx.fill();
+  ctx.lineCap = 'round';
+  for (let i = 0; i < a.n; i++) {
+    const u = i / a.n;
+    const base = -Math.PI / 2 + (u - 0.5) * Math.PI * a.spread;
+    const sway = Math.sin(t * 1.4 + a.ph + i * 0.9) * 0.25 + Math.sin(t * 0.5 + a.ph) * 0.1;
+    const ang = base + sway;
+    const len = a.len * (0.75 + 0.25 * Math.sin(i * 2.3));
+    const bx = a.x + Math.cos(base) * 16 * S, by = a.y - 4 * S + Math.sin(base) * 6 * S;
+    const ex = bx + Math.cos(ang) * len, ey = by + Math.sin(ang) * len;
+    const mx = bx + Math.cos(base) * len * 0.5, my = by + Math.sin(base) * len * 0.5;
+    ctx.strokeStyle = a.col; ctx.lineWidth = 4 * S;
+    ctx.beginPath(); ctx.moveTo(bx, by); ctx.quadraticCurveTo(mx, my, ex, ey); ctx.stroke();
+    ctx.fillStyle = a.col2;
+    ctx.beginPath(); ctx.arc(ex, ey, 2.6 * S, 0, TAU); ctx.fill();
+  }
+}
+
+// ---------- fish ----------
+function drawSchoolFish(f) {
+  const a = Math.atan2(f.vy, f.vx);
+  const s = f.size;
+  const wag = Math.sin(f.phase) * 0.35;
+  ctx.save();
+  ctx.translate(f.x, f.y); ctx.rotate(a);
+  if (f.vx < 0) ctx.scale(1, -1);
+  // tail
+  ctx.fillStyle = f.col2;
+  ctx.beginPath();
+  ctx.moveTo(-s * 0.55, 0);
+  ctx.lineTo(-s * 1.2, -s * 0.42 + wag * s * 0.4);
+  ctx.lineTo(-s * 0.98, wag * s * 0.25);
+  ctx.lineTo(-s * 1.2, s * 0.42 + wag * s * 0.4);
+  ctx.closePath(); ctx.fill();
+  // body
+  ctx.fillStyle = f.col;
+  ctx.beginPath();
+  ctx.moveTo(s, 0);
+  ctx.quadraticCurveTo(s * 0.25, -s * 0.5, -s * 0.65, -s * 0.12);
+  ctx.quadraticCurveTo(-s * 0.72, 0, -s * 0.65, s * 0.12);
+  ctx.quadraticCurveTo(s * 0.25, s * 0.5, s, 0);
+  ctx.fill();
+  // belly
+  ctx.fillStyle = f.belly;
+  ctx.globalAlpha = 0.55;
+  ctx.beginPath();
+  ctx.moveTo(s * 0.85, s * 0.05);
+  ctx.quadraticCurveTo(s * 0.2, s * 0.42, -s * 0.55, s * 0.1);
+  ctx.quadraticCurveTo(s * 0.2, s * 0.22, s * 0.85, s * 0.05);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  // dorsal
+  ctx.fillStyle = f.col2;
+  ctx.beginPath();
+  ctx.moveTo(s * 0.3, -s * 0.28); ctx.lineTo(-s * 0.05, -s * 0.5); ctx.lineTo(-s * 0.35, -s * 0.22); ctx.closePath(); ctx.fill();
+  // eye
+  ctx.fillStyle = '#eef6ff'; ctx.beginPath(); ctx.arc(s * 0.62, -s * 0.09, s * 0.09, 0, TAU); ctx.fill();
+  ctx.fillStyle = '#071018'; ctx.beginPath(); ctx.arc(s * 0.64, -s * 0.09, s * 0.05, 0, TAU); ctx.fill();
+  ctx.restore();
+}
+
+function drawSoloFish(f) {
+  const a = Math.atan2(f.vy, f.vx);
+  const s = f.size, h = s * f.aspect;
+  const wag = Math.sin(f.phase) * 0.3;
+  ctx.save();
+  ctx.translate(f.x, f.y); ctx.rotate(a);
+  if (f.vx < 0) ctx.scale(1, -1);
+  // tail
+  ctx.fillStyle = f.tailCol || f.col2;
+  ctx.beginPath();
+  ctx.moveTo(-s * 0.7, 0);
+  ctx.lineTo(-s * 1.15, -h * 0.75 + wag * s * 0.3);
+  ctx.lineTo(-s * 1.0, wag * s * 0.2);
+  ctx.lineTo(-s * 1.15, h * 0.75 + wag * s * 0.3);
+  ctx.closePath(); ctx.fill();
+  // fins
+  ctx.fillStyle = f.col2;
+  ctx.beginPath(); ctx.moveTo(s * 0.3, -h * 0.8); ctx.quadraticCurveTo(-s * 0.1, -h * 1.5, -s * 0.6, -h * 0.6); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(s * 0.2, h * 0.8); ctx.quadraticCurveTo(-s * 0.1, h * 1.3, -s * 0.5, h * 0.6); ctx.closePath(); ctx.fill();
+  // body
+  const g = ctx.createLinearGradient(0, -h, 0, h);
+  g.addColorStop(0, f.col2); g.addColorStop(0.45, f.col); g.addColorStop(1, f.col);
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.ellipse(0, 0, s, h, 0, 0, TAU); ctx.fill();
+  if (f.bands) {
+    ctx.save();
+    ctx.beginPath(); ctx.ellipse(0, 0, s, h, 0, 0, TAU); ctx.clip();
+    ctx.fillStyle = f.bandCol;
+    for (let i = 0; i < f.bands; i++) {
+      const x = s * (0.55 - i * (1.1 / f.bands));
+      ctx.beginPath(); ctx.moveTo(x - s * 0.08, -h); ctx.lineTo(x + s * 0.08, -h); ctx.lineTo(x + s * 0.02, h); ctx.lineTo(x - s * 0.14, h); ctx.closePath(); ctx.fill();
+    }
+    ctx.restore();
+  }
+  // eye
+  ctx.fillStyle = '#eef6ff'; ctx.beginPath(); ctx.arc(s * 0.6, -h * 0.2, s * 0.09, 0, TAU); ctx.fill();
+  ctx.fillStyle = '#071018'; ctx.beginPath(); ctx.arc(s * 0.62, -h * 0.2, s * 0.05, 0, TAU); ctx.fill();
+  ctx.restore();
+}
+
+function stepSchool(dt, t) {
+  const base = 105 * S;
+  const marginX = 70 * S, top = 50 * S, bottom = sandY - 110 * S;
+
+  // turning target
+  if (t > school.nextTurn) {
+    school.tx = R(W * 0.18, W * 0.82);
+    school.ty = R(H * 0.12, bottom - 40 * S);
+    school.nextTurn = t + R(6, 11);
+  }
+  // scatter trigger
+  if (t > school.nextScatter) {
+    let cx = 0, cy = 0;
+    for (const f of fish) { cx += f.x; cy += f.y; }
+    cx /= fish.length; cy /= fish.length;
+    school.sx = cx + R(-50, 50) * S; school.sy = cy + R(-40, 40) * S;
+    school.scatter = 1.5; school.scatterT = 1.5;
+    school.nextScatter = t + R(17, 28);
+    school.shadow = { t0: t, dir: rnd() < 0.5 ? 1 : -1, y: R(H * 0.08, H * 0.3) };
+    school.nextTurn = t + 3;
+  }
+  const scat = school.scatter > 0 ? school.scatter / school.scatterT : 0;
+  if (school.scatter > 0) school.scatter -= dt;
+
+  const per = 75 * S, per2 = per * per, sep = 24 * S, sep2 = sep * sep;
+  const maxV = base * (1.35 + 2.0 * scat), minV = base * 0.55;
+  const n = fish.length;
+
+  for (let i = 0; i < n; i++) {
+    const f = fish[i];
+    let cx = 0, cy = 0, avx = 0, avy = 0, sx = 0, sy = 0, cnt = 0;
+    for (let j = 0; j < n; j++) {
+      if (j === i) continue;
+      const o = fish[j];
+      const dx = o.x - f.x, dy = o.y - f.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 > per2) continue;
+      cnt++; cx += o.x; cy += o.y; avx += o.vx; avy += o.vy;
+      if (d2 < sep2 && d2 > 0.01) {
+        const d = Math.sqrt(d2);
+        const push = (sep - d) / sep;
+        sx -= dx / d * push; sy -= dy / d * push;
+      }
+    }
+    let ax = 0, ay = 0;
+    if (cnt) {
+      cx /= cnt; cy /= cnt; avx /= cnt; avy /= cnt;
+      const kc = 1.6 * (1 - 0.85 * scat);
+      ax += (cx - f.x) * kc; ay += (cy - f.y) * kc;
+      ax += (avx - f.vx) * 2.6; ay += (avy - f.vy) * 2.6;
+    }
+    ax += sx * base * 5; ay += sy * base * 5;
+    // target
+    {
+      const dx = school.tx - f.x, dy = school.ty - f.y;
+      const d = Math.hypot(dx, dy) + 1;
+      const k = base * 1.1 * (1 - scat);
+      ax += dx / d * k; ay += dy / d * k;
+    }
+    // scatter
+    if (scat > 0) {
+      const dx = f.x - school.sx, dy = f.y - school.sy;
+      const d = Math.hypot(dx, dy) + 20 * S;
+      const k = base * 14 * scat * (120 * S / d);
+      ax += dx / d * k; ay += dy / d * k;
+      // perpendicular burst for variety
+      ax += -dy / d * k * 0.3 * Math.sin(i); ay += dx / d * k * 0.3 * Math.sin(i);
+    }
+    // bounds
+    const kb = base * 3;
+    if (f.x < marginX) ax += (marginX - f.x) / marginX * kb;
+    if (f.x > W - marginX) ax -= (f.x - (W - marginX)) / marginX * kb;
+    if (f.y < top) ay += (top - f.y) / top * kb;
+    if (f.y > bottom) ay -= (f.y - bottom) / (80 * S) * kb;
+
+    f.vx += ax * dt; f.vy += ay * dt;
+    let v = Math.hypot(f.vx, f.vy);
+    if (v > maxV) { f.vx *= maxV / v; f.vy *= maxV / v; v = maxV; }
+    else if (v < minV) { f.vx *= minV / (v || 1); f.vy *= minV / (v || 1); v = minV; }
+    f.x += f.vx * dt; f.y += f.vy * dt;
+    f.phase += dt * (5 + v / base * 7);
+  }
+}
+
+function stepSolos(dt, t) {
+  for (const f of solos) {
+    if (t > f.nextT) {
+      if (f.home) {
+        f.tx = f.home.x + R(-90, 90) * S; f.ty = f.home.y - R(20, 110) * S;
+      } else {
+        f.tx = R(W * 0.1, W * 0.9); f.ty = R(H * 0.4, sandY - 60 * S);
+      }
+      f.nextT = t + R(2.5, 6);
+    }
+    const dx = f.tx - f.x, dy = f.ty - f.y;
+    const d = Math.hypot(dx, dy) + 1;
+    const want = Math.min(f.speed, d * 0.8);
+    const wx = dx / d * want, wy = dy / d * want;
+    f.vx += (wx - f.vx) * dt * 1.2; f.vy += (wy - f.vy) * dt * 1.2;
+    // scatter reaction
+    if (school.scatter > 0) {
+      const sx = f.x - school.sx, sy = f.y - school.sy;
+      const sd = Math.hypot(sx, sy) + 1;
+      if (sd < 300 * S) { f.vx += sx / sd * 200 * S * dt; f.vy += sy / sd * 200 * S * dt; }
+    }
+    f.x += f.vx * dt; f.y += f.vy * dt;
+    f.y = clamp(f.y, H * 0.3, sandY - 30 * S);
+    f.phase += dt * (4 + Math.hypot(f.vx, f.vy) / S * 0.08);
+  }
+}
+
+// ---------- water effects ----------
+function drawWater() {
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#2196cc'); g.addColorStop(0.35, '#0f6aa0'); g.addColorStop(0.75, '#083f6e'); g.addColorStop(1, '#052a48');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+}
+
+function drawRays(t) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < 8; i++) {
+    const x = W * (0.05 + i * 0.125) + Math.sin(t * 0.12 + i * 1.3) * W * 0.03;
+    const w = W * (0.025 + 0.02 * ((i * 7) % 3));
+    const sway = Math.sin(t * 0.09 + i * 1.7) * W * 0.12 + W * 0.08;
+    const a = 0.08 + 0.06 * Math.sin(t * 0.45 + i * 2.1);
+    const g = ctx.createLinearGradient(0, 0, 0, H * 0.95);
+    g.addColorStop(0, `rgba(150,220,250,${a})`); g.addColorStop(1, 'rgba(150,220,250,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(x - w, 0); ctx.lineTo(x + w, 0);
+    ctx.lineTo(x + sway + w * 3.5, H * 0.95); ctx.lineTo(x + sway - w * 3.5, H * 0.95);
+    ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawCaustics(t) {
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, sandY - 90 * S, W, H); ctx.clip();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.lineWidth = 2.2 * S;
+  for (let k = 0; k < 2; k++) {
+    ctx.strokeStyle = k ? 'rgba(200,240,255,0.06)' : 'rgba(255,250,220,0.07)';
+    for (let i = 0; i < 12; i++) {
+      const yy = sandY - 60 * S + i * (H - sandY + 60 * S) / 12;
+      ctx.beginPath();
+      for (let x = 0; x <= W; x += 18) {
+        const y = yy + Math.sin(x * 0.018 + t * 1.1 + k * 2 + i * 0.8) * 7 * S + Math.sin(x * 0.006 - t * 0.6 + i * 0.5 + k) * 12 * S;
+        if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function drawShadow(t) {
+  const sh = school.shadow;
+  if (!sh) return;
+  const p = (t - sh.t0) / 3.2;
+  if (p > 1) { school.shadow = null; return; }
+  const x = sh.dir > 0 ? -W * 0.25 + W * 1.5 * p : W * 1.25 - W * 1.5 * p;
+  const y = sh.y + Math.sin(p * 6) * 15 * S;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(sh.dir, 1);
+  const g = ctx.createRadialGradient(0, 0, 10 * S, 0, 0, 240 * S);
+  g.addColorStop(0, 'rgba(2,12,25,0.42)'); g.addColorStop(0.45, 'rgba(2,12,25,0.25)'); g.addColorStop(1, 'rgba(2,12,25,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(220 * S, 0);
+  ctx.quadraticCurveTo(60 * S, -75 * S, -140 * S, -25 * S);
+  ctx.lineTo(-230 * S, -85 * S); ctx.lineTo(-190 * S, 0); ctx.lineTo(-230 * S, 85 * S);
+  ctx.lineTo(-140 * S, 25 * S);
+  ctx.quadraticCurveTo(60 * S, 75 * S, 220 * S, 0);
+  ctx.closePath();
+  ctx.filter = 'blur(' + Math.round(14 * S) + 'px)';
+  ctx.fill();
+  ctx.restore();
+}
+
+function stepBubbles(dt, t) {
+  for (const v of vents) {
+    v.t -= dt;
+    if (v.t <= 0) {
+      v.t = R(0.25, 1.4);
+      bubbles.push({ x: v.x + R(-4, 4) * S, y: v.y, r: R(2, 6) * S, vy: R(40, 70) * S, ph: R(0, TAU), wob: R(6, 14) * S });
+    }
+  }
+  for (let i = bubbles.length - 1; i >= 0; i--) {
+    const b = bubbles[i];
+    b.y -= b.vy * dt; b.vy += 10 * S * dt; b.ph += dt * 3;
+    if (b.y < -10) bubbles.splice(i, 1);
+  }
+}
+function drawBubbles() {
+  ctx.lineWidth = 1.2 * S;
+  for (const b of bubbles) {
+    const x = b.x + Math.sin(b.ph) * b.wob;
+    ctx.strokeStyle = 'rgba(220,245,255,0.6)';
+    ctx.fillStyle = 'rgba(200,235,255,0.12)';
+    ctx.beginPath(); ctx.arc(x, b.y, b.r, 0, TAU); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.beginPath(); ctx.arc(x - b.r * 0.35, b.y - b.r * 0.35, b.r * 0.25, 0, TAU); ctx.fill();
+  }
+}
+
+function drawPlankton(t) {
+  ctx.fillStyle = 'rgba(220,240,255,0.35)';
+  for (const p of plankton) {
+    const x = (p.x + Math.sin(t * 0.3 * p.sp + p.ph) * 20 * S + t * 4 * S * p.sp) % (W + 20);
+    const y = (p.y + Math.cos(t * 0.2 * p.sp + p.ph) * 14 * S - t * 2 * S * p.sp + H * 100) % H;
+    ctx.beginPath(); ctx.arc(x, y, p.r, 0, TAU); ctx.fill();
+  }
+}
+
+function drawVignette() {
+  const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.4, W / 2, H / 2, Math.max(W, H) * 0.8);
+  g.addColorStop(0, 'rgba(0,10,30,0)'); g.addColorStop(1, 'rgba(0,10,30,0.5)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+}
+
+// ---------- main loop ----------
+let last = performance.now(), time = 0;
+function frame(now) {
+  let dt = (now - last) / 1000; last = now;
+  if (dt > 0.05) dt = 0.05;
+  time += dt;
+  const t = time;
+
+  stepSchool(dt, t);
+  stepSolos(dt, t);
+  stepBubbles(dt, t);
+
+  drawWater();
+  drawRays(t);
+  ctx.drawImage(staticLayer, 0, 0, W, H);
+  drawCaustics(t);
+  for (const d of dyn) {
+    if (d.type === 'weed') drawWeed(d, t);
+    else if (d.type === 'fan') drawFan(d, t);
+    else drawAnemone(d, t);
+  }
+  for (const f of solos) drawSoloFish(f);
+  for (const f of fish) drawSchoolFish(f);
+  drawBubbles();
+  drawPlankton(t);
+  drawShadow(t);
+  drawVignette();
+  requestAnimationFrame(frame);
+}
+
+window.addEventListener('resize', resize);
+resize();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
