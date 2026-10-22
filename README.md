@@ -38,6 +38,8 @@ Note: Grok's first attempt ran into an earlier 15-minute cap without writing a f
 | Gemini (4 Argon) | Antigravity CLI 1.4.5 | 1:08 | [open](https://darindeters.github.io/same-prompt/pendulums/gemini/) |
 | Grok (4.7) | Grok Build 1.0.62 | 13:18 | [open](https://darindeters.github.io/same-prompt/pendulums/grok/) |
 
+Note: Claude, Codex and Grok ran this one under the earlier 15-minute cap. All four finished inside it.
+
 ## Galaxy Collision
 
 > Build two spiral galaxies colliding and merging, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
