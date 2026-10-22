@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: #030408;
+  overflow: hidden;
+}
+canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+
+const VW = 1080;
+const PERIOD = 76;
+
+const A = {
+  id: 0, maxR: 198, bulgeR: 58, turns: 2.05, arms: 2,
+  nStar: 4600, nBulgeStar: 1100, phase: 0.4,
+  incl: 0.78, pa: 0.38, spin: 0.26,
+  ridge: [210, 226, 255], wing: [78, 138, 255], inner: [255, 214, 156],
+  bulge: [255, 196, 122], halo: [255, 206, 160], disk: [64, 96, 180]
+};
+const B = {
+  id: 1, maxR: 156, bulgeR: 46, turns: 2.45, arms: 2,
+  nStar: 3400, nBulgeStar: 820, phase: 2.35,
+  incl: 0.64, pa: -1.02, spin: 0.33,
+  ridge: [255, 228, 244], wing: [48, 214, 206], inner: [255, 160, 196],
+  bulge: [255, 142, 186], halo: [214, 170, 255], disk: [150, 70, 150]
+};
+const Mgal = {
+  id: 2, maxR: 236, bulgeR: 72, turns: 1.85, arms: 2,
+  phase: 0.15, incl: 0.88, pa: 0.22, spin: 0.11,
+  ridge: [232, 236, 255], wing: [120, 176, 255], inner: [255, 210, 176],
+  bulge: [255, 220, 196], disk: [90, 110, 190]
+};
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d', { alpha: false });
+const bg = document.createElement('canvas');
+const bgx = bg.getContext('2d', { alpha: false });
+
+let W = 0;
+let H = 0;
+let DPR = 1;
+let twinkles = [];
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function gauss(rnd) {
+  let u = 1 - rnd();
+  if (u < 1e-8) u = 1e-8;
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(Math.PI * 2 * rnd());
+}
+function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+function lerp(a, b, t) { return a + (b - a) * t; }
+function smoothstep(e0, e1, x) {
+  const t = clamp((x - e0) / (e1 - e0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+function easeInOut(t) {
+  return t < 0.5 ? 2 * t * t : 1 - ((-2 * t + 2) ** 2) / 2;
+}
+
+function makeSoft(r, g, b) {
+  const S = 64;
+  const c = document.createElement('canvas');
+  c.width = S;
+  c.height = S;
+  const gtx = c.getContext('2d');
+  const img = gtx.createImageData(S, S);
+  const data = img.data;
+  const mid = (S - 1) / 2;
+  const rad = S / 2;
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const d = Math.hypot(x - mid, y - mid) / rad;
+      const w = d >= 1 ? 0 : (1 - d) * (1 - d);
+      const o = (y * S + x) * 4;
+      data[o] = r;
+      data[o + 1] = g;
+      data[o + 2] = b;
+      data[o + 3] = (w * 255) | 0;
+    }
+  }
+  gtx.putImageData(img, 0, 0);
+  return c;
+}
+
+const spriteCache = new Map();
+function spriteFor(col) {
+  const key = col[0] + ',' + col[1] + ',' + col[2];
+  let s = spriteCache.get(key);
+  if (!s) {
+    s = makeSoft(col[0], col[1], col[2]);
+    spriteCache.set(key, s);
+  }
+  return s;
+}
+const whiteSprite = spriteFor([255, 255, 255]);
+const warmSprite = spriteFor([255, 236, 214]);
+const dustSprite = makeSoft(28, 14, 10);
+
+function spiralParams(g) {
+  const thetaMax = g.turns * Math.PI * 2;
+  const r0 = g.maxR * 0.085;
+  const b = Math.log(g.maxR / r0) / thetaMax;
+  return { thetaMax: thetaMax, r0: r0, b: b };
+}
+function thetaAt(s, p) {
+  const emax = Math.exp(p.b * p.thetaMax);
+  return Math.log(1 + clamp(s, 0, 1) * (emax - 1)) / p.b;
+}
+function radAt(theta, p) {
+  return p.r0 * Math.exp(p.b * theta);
+}
+
+let px = 0;
+let py = 0;
+function project(lx, ly, lz, rot, cosi, pa) {
+  const c = Math.cos(rot);
+  const s = Math.sin(rot);
+  const x1 = c * lx - s * ly;
+  const y1 = s * lx + c * ly;
+  const sini = Math.sqrt(Math.max(0, 1 - cosi * cosi));
+  const minor = y1 * cosi + lz * sini;
+  const cpa = Math.cos(pa);
+  const spa = Math.sin(pa);
+  px = cpa * x1 - spa * minor;
+  py = spa * x1 + cpa * minor;
+}
+
+function tide(ox, oy, nx, ny, amp, rNorm) {
+  const along = ox * nx + oy * ny;
+  const outer = clamp(rNorm, 0, 1.45);
+  const o2 = outer * outer;
+  const factor = along >= 0 ? amp * (0.08 + 0.42 * o2) : amp * (0.12 + 1.05 * o2);
+  let tx = nx * along * factor;
+  let ty = ny * along * factor;
+  const sh = amp * o2 * along * 0.14;
+  tx += -ny * sh;
+  ty += nx * sh;
+  const mag = Math.hypot(tx, ty);
+  if (mag > 230) {
+    const k = 230 / mag;
+    tx *= k;
+    ty *= k;
+  }
+  return [tx, ty];
+}
+
+function encounter(u) {
+  let d;
+  let ang;
+  if (u < 0.34) {
+    const k = u / 0.34;
+    d = lerp(520, 188, easeInOut(k));
+    ang = lerp(-0.66, 0.28, k);
+  } else if (u < 0.62) {
+    const k = (u - 0.34) / 0.28;
+    d = lerp(188, 78, easeInOut(k));
+    ang = lerp(0.28, 0.28 + Math.PI * 1.35, k);
+  } else if (u < 0.82) {
+    const k = (u - 0.62) / 0.2;
+    d = lerp(78, 0, easeInOut(k));
+    ang = lerp(0.28 + Math.PI * 1.35, 0.28 + Math.PI * 3.05, k);
+  } else {
+    d = 0;
+    ang = 0.28 + Math.PI * 3.05;
+  }
+  const h = d * 0.5;
+  const yk = 0.9;
+  return {
+    ax: Math.cos(ang) * h,
+    ay: Math.sin(ang) * h * yk,
+    bx: Math.cos(ang + Math.PI) * h,
+    by: Math.sin(ang + Math.PI) * h * yk,
+    ang: ang
+  };
+}
+
+function animU(u) {
+  if (u < 0.78) return (u / 0.78) * 0.93;
+  return 0.93 + ((u - 0.78) / 0.22) * 0.02;
+}
+function mergeStars(u) { return smoothstep(0.74, 0.9, u); }
+function mergeClouds(u) { return smoothstep(0.73, 0.88, u); }
+function viewAlpha(u) {
+  return smoothstep(0, 0.016, u) * (1 - smoothstep(0.972, 1, u));
+}
+function camScale(u) {
+  const inn = smoothstep(0.08, 0.48, u);
+  const out = smoothstep(0.86, 0.96, u);
+  return 1.08 + 0.08 * Math.sin(inn * Math.PI) * (1 - out) + 0.06 * smoothstep(0.8, 0.94, u);
+}
+
+const starBuckets = [];
+const bucketOf = new Map();
+function addStar(star) {
+  const col = star.col;
+  const key = col[0] + ',' + col[1] + ',' + col[2] + ',' + star.a;
+  let bucket = bucketOf.get(key);
+  if (!bucket) {
+    bucket = {
+      css: 'rgba(' + col[0] + ',' + col[1] + ',' + col[2] + ',' + star.a + ')',
+      items: []
+    };
+    bucketOf.set(key, bucket);
+    starBuckets.push(bucket);
+  }
+  bucket.items.push(star);
+  star.sx = 0;
+  star.sy = 0;
+}
+
+function buildGalaxy(g, rnd, withStars, clouds, dust) {
+  const p = spiralParams(g);
+  const stars = [];
+  if (withStars) {
+    for (let i = 0; i < g.nBulgeStar; i++) {
+      const a = rnd() * Math.PI * 2;
+      const rad = g.bulgeR * Math.pow(rnd(), 0.5);
+      const z = gauss(rnd) * (3.5 + rad * 0.32);
+      const star = {
+        lx: Math.cos(a) * rad, ly: Math.sin(a) * rad, lz: z,
+        rNorm: rad / g.maxR,
+        col: rad < g.bulgeR * 0.28 ? [255, 248, 240] : g.bulge,
+        sz: rad < g.bulgeR * 0.2 ? 2 : 1.45,
+        a: rad < g.bulgeR * 0.2 ? 0.7 : 0.42,
+        home: g
+      };
+      stars.push(star);
+      addStar(star);
+    }
+    for (let i = 0; i < g.nStar; i++) {
+      const arm = i % g.arms;
+      const theta = thetaAt(rnd(), p);
+      const rad = radAt(theta, p);
+      const sigma = 2.4 + rad * 0.05;
+      const scatter = gauss(rnd) * sigma;
+      const ang = theta + arm * Math.PI + g.phase + (rnd() - 0.5) * 0.18;
+      const c = Math.cos(ang);
+      const s = Math.sin(ang);
+      const rr = Math.max(0, rad + gauss(rnd) * sigma * 0.45);
+      const f = rad / g.maxR;
+      const knot = rnd() < 0.055;
+      const col = knot ? [246, 248, 255] : f < 0.3 ? g.inner : f < 0.62 ? g.ridge : g.wing;
+      const star = {
+        lx: c * rr - s * scatter,
+        ly: s * rr + c * scatter,
+        lz: gauss(rnd) * (1.5 + rad * 0.018),
+        rNorm: rr / g.maxR,
+        col: col,
+        sz: knot ? 2.15 : (rnd() < 0.6 ? 1.2 : 1.65),
+        a: knot ? 0.9 : 0.5,
+        home: g
+      };
+      stars.push(star);
+      addStar(star);
+    }
+    for (let i = 0; i < 220; i++) {
+      const a = rnd() * Math.PI * 2;
+      const rad = g.maxR * (0.9 + rnd() * 0.5);
+      const star = {
+        lx: Math.cos(a) * rad,
+        ly: Math.sin(a) * rad,
+        lz: gauss(rnd) * rad * 0.22,
+        rNorm: rad / g.maxR,
+        col: g.halo,
+        sz: 1.2,
+        a: 0.35,
+        home: g
+      };
+      stars.push(star);
+      addStar(star);
+    }
+  }
+
+  const bulgeN = g.id === 2 ? 180 : 140;
+  for (let i = 0; i < bulgeN; i++) {
+    const a = rnd() * Math.PI * 2;
+    const rad = g.bulgeR * Math.pow(rnd(), 0.45);
+    const col = rad < g.bulgeR * 0.3 ? [255, 250, 244] : g.bulge;
+    clouds.push({
+      lx: Math.cos(a) * rad,
+      ly: Math.sin(a) * rad,
+      lz: gauss(rnd) * rad * 0.35,
+      rNorm: rad / g.maxR,
+      size: 12 + (1 - rad / g.bulgeR) * 28,
+      alpha: 0.11,
+      sprite: spriteFor(col),
+      home: g,
+      sx: 0,
+      sy: 0
+    });
+  }
+
+  const steps = g.id === 0 ? 120 : g.id === 1 ? 100 : 128;
+  for (let arm = 0; arm < g.arms; arm++) {
+    for (let i = 0; i < steps; i++) {
+      const s = (i + 0.35) / steps;
+      const theta = thetaAt(Math.pow(s, 0.92), p);
+      const rad = radAt(theta, p);
+      const ang = theta + arm * Math.PI + g.phase;
+      const c = Math.cos(ang);
+      const sn = Math.sin(ang);
+      const f = rad / g.maxR;
+      const clump = 0.78 + 0.22 * Math.sin(theta * 6.5 + arm * 1.7);
+      const wingSize = (22 + f * 28) * (0.9 + 0.15 * clump);
+      const wingCol = g.id === 2 ? (arm === 0 ? [96, 156, 255] : [56, 208, 198]) : g.wing;
+      const innerCol = g.id === 2 ? (arm === 0 ? [255, 206, 154] : [255, 168, 198]) : g.inner;
+      const armCol = f < 0.26 ? innerCol : f < 0.55 ? g.ridge : wingCol;
+      clouds.push({
+        lx: c * rad, ly: sn * rad, lz: 0, rNorm: f,
+        size: wingSize, alpha: (0.08 + (1 - f) * 0.045) * clump,
+        sprite: spriteFor(armCol), home: g, sx: 0, sy: 0
+      });
+      clouds.push({
+        lx: c * rad, ly: sn * rad, lz: 0, rNorm: f,
+        size: 8 + f * 9, alpha: 0.14 * clump,
+        sprite: whiteSprite, home: g, sx: 0, sy: 0
+      });
+      const w = (4 + rad * 0.055) * (arm === 0 ? 1 : -1);
+      clouds.push({
+        lx: c * rad - sn * w, ly: sn * rad + c * w, lz: 0, rNorm: f,
+        size: wingSize * 0.8, alpha: 0.05 * clump,
+        sprite: spriteFor(wingCol), home: g, sx: 0, sy: 0
+      });
+      if (i % 8 === 0) {
+        clouds.push({
+          lx: c * rad, ly: sn * rad, lz: 0, rNorm: f,
+          size: 6 + f * 4, alpha: 0.5,
+          sprite: whiteSprite, home: g, sx: 0, sy: 0
+        });
+      }
+      if (f > 0.2) {
+        const inward = 8 + rad * 0.035;
+        dust.push({
+          lx: c * (rad - inward), ly: sn * (rad - inward), lz: 0, rNorm: f,
+          size: 12 + f * 16, alpha: 0.28 * clump,
+          home: g, sx: 0, sy: 0
+        });
+      }
+    }
+  }
+  return stars;
+}
+
+const cloudsA = [];
+const cloudsB = [];
+const cloudsM = [];
+const dustA = [];
+const dustB = [];
+const dustM = [];
+const starsA = buildGalaxy(A, mulberry32(0xa11a51), true, cloudsA, dustA);
+const starsB = buildGalaxy(B, mulberry32(0xb0b0b), true, cloudsB, dustB);
+buildGalaxy(Mgal, mulberry32(0xc0ffee), false, cloudsM, dustM);
+
+{
+  const rnd = mulberry32(0x51a7);
+  const p = spiralParams(Mgal);
+  const all = starsA.concat(starsB);
+  for (let i = 0; i < all.length; i++) {
+    const kind = rnd();
+    let lx;
+    let ly;
+    let lz;
+    if (kind < 0.3) {
+      const a = rnd() * Math.PI * 2;
+      const rad = Mgal.bulgeR * Math.pow(rnd(), 0.5);
+      lx = Math.cos(a) * rad;
+      ly = Math.sin(a) * rad;
+      lz = gauss(rnd) * (4 + rad * 0.25);
+    } else if (kind < 0.94) {
+      const arm = i % 2;
+      const theta = thetaAt(rnd(), p);
+      const rad = radAt(theta, p);
+      const sigma = 3.2 + rad * 0.045;
+      const scatter = gauss(rnd) * sigma;
+      const ang = theta + arm * Math.PI + Mgal.phase;
+      const c = Math.cos(ang);
+      const s = Math.sin(ang);
+      lx = c * rad - s * scatter;
+      ly = s * rad + c * scatter;
+      lz = gauss(rnd) * 2.2;
+    } else {
+      const a = rnd() * Math.PI * 2;
+      const rad = Mgal.maxR * (0.85 + rnd() * 0.35);
+      lx = Math.cos(a) * rad;
+      ly = Math.sin(a) * rad * 0.72;
+      lz = gauss(rnd) * 5;
+    }
+    all[i].mlx = lx;
+    all[i].mly = ly;
+    all[i].mlz = lz;
+  }
+}
+
+function placeLive(obj, time, enc, nx, ny, prox, sc, gal) {
+  project(obj.lx, obj.ly, obj.lz, time * gal.spin, gal.incl, gal.pa);
+  const td = tide(px, py, nx, ny, prox, obj.rNorm);
+  const cx = gal.id === 0 ? enc.ax : enc.bx;
+  const cy = gal.id === 0 ? enc.ay : enc.by;
+  obj.sx = (px + td[0]) * sc + cx;
+  obj.sy = (py + td[1]) * sc + cy;
+}
+function placeMerged(obj, time) {
+  const lx = obj.mlx !== undefined ? obj.mlx : obj.lx;
+  const ly = obj.mly !== undefined ? obj.mly : obj.ly;
+  const lz = obj.mlz !== undefined ? obj.mlz : obj.lz;
+  project(lx, ly, lz, time * Mgal.spin, Mgal.incl, Mgal.pa);
+  obj.mx = px;
+  obj.my = py;
+}
+
+function updatePositions(time, enc, nx, ny, prox, mS, scA, scB) {
+  for (let i = 0; i < cloudsA.length; i++) placeLive(cloudsA[i], time, enc, nx, ny, prox, scA, A);
+  for (let i = 0; i < cloudsB.length; i++) placeLive(cloudsB[i], time, enc, -nx, -ny, prox, scB, B);
+  for (let i = 0; i < cloudsM.length; i++) placeMerged(cloudsM[i], time);
+  for (let i = 0; i < dustA.length; i++) placeLive(dustA[i], time, enc, nx, ny, prox, scA, A);
+  for (let i = 0; i < dustB.length; i++) placeLive(dustB[i], time, enc, -nx, -ny, prox, scB, B);
+  for (let i = 0; i < dustM.length; i++) placeMerged(dustM[i], time);
+  for (let b = 0; b < starBuckets.length; b++) {
+    const items = starBuckets[b].items;
+    for (let i = 0; i < items.length; i++) {
+      const s = items[i];
+      const gal = s.home;
+      const sc = gal.id === 0 ? scA : scB;
+      const nnx = gal.id === 0 ? nx : -nx;
+      const nny = gal.id === 0 ? ny : -ny;
+      placeLive(s, time, enc, nnx, nny, prox, sc, gal);
+      placeMerged(s, time);
+      s.sx = s.sx * (1 - mS) + s.mx * mS;
+      s.sy = s.sy * (1 - mS) + s.my * mS;
+    }
+  }
+}
+
+function blit(sprite, x, y, radius, alpha) {
+  if (alpha < 0.004) return;
+  const d = radius * 2;
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(sprite, x - radius, y - radius, d, d);
+}
+
+function drawClouds(list, fade, viewA, merged) {
+  const a = fade * viewA;
+  if (a < 0.008) return;
+  for (let i = 0; i < list.length; i++) {
+    const c = list[i];
+    const x = merged ? c.mx : c.sx;
+    const y = merged ? c.my : c.sy;
+    blit(c.sprite, x, y, c.size, c.alpha * a);
+  }
+}
+
+function drawDust(list, fade, viewA, merged) {
+  const a = fade * viewA;
+  if (a < 0.02) return;
+  for (let i = 0; i < list.length; i++) {
+    const d = list[i];
+    const x = merged ? d.mx : d.sx;
+    const y = merged ? d.my : d.sy;
+    blit(dustSprite, x, y, d.size, d.alpha * a);
+  }
+}
+
+function drawDisk(cx, cy, radius, incl, pa, inner, mid, outer, alpha) {
+  if (alpha < 0.01) return;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(pa);
+  ctx.scale(1, incl);
+  const g = ctx.createRadialGradient(0, 0, radius * 0.04, 0, 0, radius);
+  g.addColorStop(0, 'rgba(' + inner + ',' + (0.28 * alpha) + ')');
+  g.addColorStop(0.2, 'rgba(' + mid + ',' + (0.12 * alpha) + ')');
+  g.addColorStop(0.5, 'rgba(' + outer + ',' + (0.05 * alpha) + ')');
+  g.addColorStop(1, 'rgba(' + outer + ',0)');
+  ctx.fillStyle = g;
+  ctx.globalAlpha = 1;
+  ctx.beginPath();
+  ctx.arc(0, 0, radius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawCore(x, y, a0, sprite) {
+  blit(sprite, x, y, 86, 0.06 * a0);
+  blit(warmSprite, x, y, 30, 0.22 * a0);
+  blit(whiteSprite, x, y, 6, 0.5 * a0);
+}
+
+function rebuildBackground() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth;
+  H = window.innerHeight;
+  if (W < 1 || H < 1) return;
+  canvas.width = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
+  bg.width = canvas.width;
+  bg.height = canvas.height;
+  bgx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const g = bgx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, Math.max(W, H) * 0.75);
+  g.addColorStop(0, '#0e1222');
+  g.addColorStop(0.55, '#070910');
+  g.addColorStop(1, '#030408');
+  bgx.fillStyle = g;
+  bgx.fillRect(0, 0, W, H);
+
+  const sky = mulberry32(0x51ed);
+  const nStars = (W * H / 1900) | 0;
+  twinkles = [];
+  for (let i = 0; i < nStars; i++) {
+    const x = sky() * W;
+    const y = sky() * H;
+    const bright = sky();
+    const v = bright > 0.985 ? 255 : bright > 0.93 ? 210 : 130 + ((sky() * 70) | 0);
+    const tint = sky();
+    const R = tint < 0.08 ? 160 : v;
+    const G = tint < 0.08 ? 190 : tint > 0.94 ? 180 : v;
+    const Bc = tint > 0.94 ? 255 : tint < 0.08 ? 255 : v;
+    if (bright > 0.97 && bright <= 0.985 && twinkles.length < 28) {
+      twinkles.push({ x: x, y: y, p: sky() * Math.PI * 2, r: R, g: G, b: Bc });
+      continue;
+    }
+    bgx.fillStyle = 'rgb(' + R + ',' + G + ',' + Bc + ')';
+    const sz = bright > 0.985 ? 2.2 : bright > 0.93 ? 1.6 : 1;
+    bgx.fillRect(x, y, sz, sz);
+    if (bright > 0.985) {
+      bgx.strokeStyle = 'rgba(230,236,255,0.55)';
+      bgx.lineWidth = 1;
+      bgx.beginPath();
+      bgx.moveTo(x - 7, y + 1);
+      bgx.lineTo(x + 9, y + 1);
+      bgx.moveTo(x + 1, y - 7);
+      bgx.lineTo(x + 1, y + 9);
+      bgx.stroke();
+    }
+  }
+}
+
+function frame(now) {
+  if (origin < 0) origin = now - 0.03 * PERIOD * 1000;
+  if (W < 2 || H < 2) {
+    requestAnimationFrame(frame);
+    return;
+  }
+  const elapsed = (now - origin) / 1000;
+  const u = (elapsed % PERIOD) / PERIOD;
+  const time = elapsed;
+  const au = animU(u);
+  const enc = encounter(au);
+  const sepX = enc.bx - enc.ax;
+  const sepY = enc.by - enc.ay;
+  const sep = Math.hypot(sepX, sepY) || 1;
+  const nx = sepX / sep;
+  const ny = sepY / sep;
+  const prox = smoothstep(430, 70, sep);
+  const mS = mergeStars(au);
+  const mC = mergeClouds(au);
+  const viewA = viewAlpha(u);
+  const zoom = camScale(au);
+  const zA = Math.sin(enc.ang);
+  const scA = 1 + 0.045 * zA;
+  const scB = 1 - 0.045 * zA;
+
+  updatePositions(time, enc, nx, ny, prox, mS, scA, scB);
+
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+  ctx.drawImage(bg, 0, 0, W, H);
+
+  for (let i = 0; i < twinkles.length; i++) {
+    const t = twinkles[i];
+    const tw = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(time * 1.7 + t.p));
+    ctx.globalAlpha = tw;
+    ctx.fillStyle = 'rgb(' + t.r + ',' + t.g + ',' + t.b + ')';
+    ctx.fillRect(t.x, t.y, 1.6, 1.6);
+  }
+
+  const fit = Math.min(W, H) / VW;
+  ctx.setTransform(fit * zoom * DPR, 0, 0, fit * zoom * DPR, W * 0.5 * DPR, H * 0.5 * DPR);
+  ctx.globalCompositeOperation = 'lighter';
+
+  const live = (1 - mC) * viewA;
+  drawDisk(enc.ax, enc.ay, A.maxR * 1.05, A.incl, A.pa, '255,220,170', '255,196,130', '70,110,210', live);
+  drawDisk(enc.bx, enc.by, B.maxR * 1.05, B.incl, B.pa, '255,186,210', '255,140,186', '40,180,190', live);
+  drawDisk(0, 0, Mgal.maxR * 1.02, Mgal.incl, Mgal.pa, '255,236,220', '255,214,190', '120,160,230', mC * viewA);
+
+  ctx.globalCompositeOperation = 'lighter';
+  drawClouds(cloudsA, 1 - mC, viewA, false);
+  drawClouds(cloudsB, 1 - mC, viewA, false);
+  drawClouds(cloudsM, mC, viewA, true);
+
+  ctx.globalAlpha = viewA;
+  for (let b = 0; b < starBuckets.length; b++) {
+    const bucket = starBuckets[b];
+    ctx.fillStyle = bucket.css;
+    const items = bucket.items;
+    for (let i = 0; i < items.length; i++) {
+      const s = items[i];
+      const sz = s.sz;
+      ctx.fillRect(s.sx - sz * 0.5, s.sy - sz * 0.5, sz, sz);
+    }
+  }
+
+  if (prox > 0.2 && mC < 0.8) {
+    blit(warmSprite, (enc.ax + enc.bx) / 2, (enc.ay + enc.by) / 2, 46 + prox * 30, 0.07 * prox * (1 - mC) * viewA);
+  }
+
+  ctx.globalCompositeOperation = 'multiply';
+  drawDust(dustA, 1 - mC, viewA, false);
+  drawDust(dustB, 1 - mC, viewA, false);
+  drawDust(dustM, mC, viewA, true);
+
+  ctx.globalCompositeOperation = 'lighter';
+  drawCore(enc.ax, enc.ay, (1 - mC) * viewA, spriteFor(A.bulge));
+  drawCore(enc.bx, enc.by, (1 - mC) * viewA, spriteFor(B.bulge));
+  drawCore(0, 0, mC * viewA, spriteFor([255, 214, 186]));
+
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+  const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.42, W / 2, H / 2, Math.max(W, H) * 0.72);
+  vg.addColorStop(0, 'rgba(0,0,0,0)');
+  vg.addColorStop(1, 'rgba(0,0,0,0.5)');
+  ctx.fillStyle = vg;
+  ctx.fillRect(0, 0, W, H);
+
+  requestAnimationFrame(frame);
+}
+
+let origin = -1;
+window.addEventListener('resize', rebuildBackground);
+rebuildBackground();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

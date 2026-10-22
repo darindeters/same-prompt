@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#050810">
+  <title>One Hundred Pendulums</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    body {
+      background: radial-gradient(ellipse at 50% 46%, #101b29 0%, #080e19 43%, #03050b 85%);
+    }
+    canvas { position: fixed; inset: 0; display: block; width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+  <canvas id="trails" aria-hidden="true"></canvas>
+  <canvas id="pendulums" role="img" aria-label="One hundred double pendulums released from nearly identical positions, gradually diverging into colorful chaotic motion."></canvas>
+  <script>
+    'use strict';
+
+    const trailCanvas = document.getElementById('trails');
+    const canvas = document.getElementById('pendulums');
+    const trails = trailCanvas.getContext('2d', { alpha: true });
+    const ctx = canvas.getContext('2d', { alpha: true });
+    const COUNT = 100;
+    const STEP = 1 / 240;
+    const GRAVITY = 9.81;
+    const pendulums = [];
+    let width, height, scale, pivotX, pivotY, pixelRatio;
+    let lastTime = null;
+    let accumulator = 0;
+
+    // Equal unit masses and unit rods. Angles are measured from vertical.
+    // Every pendulum starts at rest; only the first angle differs, by <0.01°.
+    for (let i = 0; i < COUNT; i++) {
+      const fraction = i / (COUNT - 1);
+      pendulums.push({
+        state: [2.28 + (fraction - 0.5) * 0.0002, 1.82, 0, 0],
+        color: `hsl(${174 + fraction * 166}, 91%, 68%)`,
+        previous: null
+      });
+    }
+
+    function resize() {
+      width = window.innerWidth;
+      height = window.innerHeight;
+      pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+      scale = Math.min(width, height) * 0.215;
+      pivotX = width / 2;
+      pivotY = height * 0.46;
+      for (const surface of [canvas, trailCanvas]) {
+        surface.width = Math.round(width * pixelRatio);
+        surface.height = Math.round(height * pixelRatio);
+        surface.getContext('2d').setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      }
+      for (const p of pendulums) p.previous = null;
+    }
+
+    function derivative(s) {
+      const [a, b, va, vb] = s;
+      const delta = a - b;
+      const sin = Math.sin(delta);
+      const cos = Math.cos(delta);
+      const denominator = 2 - cos * cos;
+      return [
+        va,
+        vb,
+        (-2 * GRAVITY * Math.sin(a) + GRAVITY * Math.sin(b) * cos
+          - sin * (vb * vb + va * va * cos)) / denominator,
+        (2 * GRAVITY * Math.sin(a) * cos - 2 * GRAVITY * Math.sin(b)
+          + sin * (2 * va * va + vb * vb * cos)) / denominator
+      ];
+    }
+
+    function offset(s, k, h) {
+      return [s[0] + k[0] * h, s[1] + k[1] * h,
+              s[2] + k[2] * h, s[3] + k[3] * h];
+    }
+
+    // Fixed-step fourth-order Runge–Kutta keeps the chaotic dynamics independent
+    // of display refresh rate, with no artificial nudges or per-pendulum forces.
+    function advance(p) {
+      const s = p.state;
+      const k1 = derivative(s);
+      const k2 = derivative(offset(s, k1, STEP / 2));
+      const k3 = derivative(offset(s, k2, STEP / 2));
+      const k4 = derivative(offset(s, k3, STEP));
+      for (let j = 0; j < 4; j++) {
+        s[j] += STEP / 6 * (k1[j] + 2 * k2[j] + 2 * k3[j] + k4[j]);
+      }
+    }
+
+    function position(p) {
+      const x1 = pivotX + Math.sin(p.state[0]) * scale;
+      const y1 = pivotY + Math.cos(p.state[0]) * scale;
+      return [x1, y1,
+        x1 + Math.sin(p.state[1]) * scale,
+        y1 + Math.cos(p.state[1]) * scale];
+    }
+
+    function render(elapsed) {
+      ctx.clearRect(0, 0, width, height);
+      // Erasing alpha lets the soft background remain visible beneath the trails.
+      trails.globalCompositeOperation = 'destination-out';
+      trails.globalAlpha = 1 - Math.exp(-elapsed / 3.8);
+      trails.fillRect(0, 0, width, height);
+      trails.globalCompositeOperation = 'lighter';
+      trails.lineCap = 'round';
+      trails.lineWidth = Math.max(0.65, scale / 290);
+      ctx.lineCap = 'round';
+      ctx.globalCompositeOperation = 'lighter';
+
+      for (const p of pendulums) {
+        const point = position(p);
+        if (p.previous) {
+          trails.strokeStyle = p.color;
+          trails.globalAlpha = 0.27;
+          trails.beginPath();
+          trails.moveTo(p.previous[2], p.previous[3]);
+          trails.lineTo(point[2], point[3]);
+          trails.stroke();
+        }
+        p.previous = point;
+
+        ctx.strokeStyle = p.color;
+        ctx.globalAlpha = 0.075;
+        ctx.lineWidth = Math.max(0.5, scale / 410);
+        ctx.beginPath();
+        ctx.moveTo(pivotX, pivotY);
+        ctx.lineTo(point[0], point[1]);
+        ctx.lineTo(point[2], point[3]);
+        ctx.stroke();
+
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = 0.55;
+        ctx.beginPath();
+        ctx.arc(point[0], point[1], Math.max(0.8, scale * 0.004), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 0.85;
+        ctx.beginPath();
+        ctx.arc(point[2], point[3], Math.max(1.2, scale * 0.0065), 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = 1;
+      const halo = ctx.createRadialGradient(pivotX, pivotY, 0, pivotX, pivotY, 21);
+      halo.addColorStop(0, 'rgba(211,237,255,0.22)');
+      halo.addColorStop(1, 'rgba(211,237,255,0)');
+      ctx.fillStyle = halo;
+      ctx.beginPath();
+      ctx.arc(pivotX, pivotY, 21, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#e7f2ff';
+      ctx.beginPath();
+      ctx.arc(pivotX, pivotY, 2.3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function frame(now) {
+      const elapsed = lastTime === null ? 0 : Math.min((now - lastTime) / 1000, 0.05);
+      lastTime = now;
+      accumulator += elapsed;
+      while (accumulator >= STEP) {
+        for (const p of pendulums) advance(p);
+        accumulator -= STEP;
+      }
+      render(elapsed);
+      requestAnimationFrame(frame);
+    }
+
+    window.addEventListener('resize', resize);
+    document.addEventListener('visibilitychange', () => { lastTime = null; });
+    resize();
+    requestAnimationFrame(frame);
+  </script>
+</body>
+</html>

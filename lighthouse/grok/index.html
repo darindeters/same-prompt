@@ -1,0 +1,1278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lighthouse</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #030508;
+    overflow: hidden;
+  }
+  canvas {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d", { alpha: false });
+  const D = 1080;
+
+  const LX = 228;
+  const BASE = 494;
+  const SHAFT_TOP = 220;
+  const HALF_B = 36;
+  const HALF_T = 19;
+  const GAL_TOP = 206;
+  const GAL_H = 20;
+  const GAL_HALF = 38;
+  const LAN_TOP = 150;
+  const LAN_BOT = 206;
+  const LAN_HALF = 16;
+  const LAMP_Y = 178;
+  const DOME_H = 26;
+
+  const CLIFF = [
+    [0, 735],
+    [18, 690],
+    [8, 640],
+    [36, 600],
+    [24, 555],
+    [62, 528],
+    [98, 508],
+    [150, 494],
+    [210, 486],
+    [268, 490],
+    [314, 502],
+    [346, 524],
+    [338, 568],
+    [366, 612],
+    [350, 662],
+    [392, 708],
+    [374, 752],
+    [414, 802],
+    [396, 858],
+    [438, 918],
+    [418, 980],
+    [462, 1040],
+    [448, 1080]
+  ];
+
+  const FAR = {
+    base: 646, a1: 7, f1: 0.0135, s1: 0.72, p1: 0.4,
+    a2: 3.2, f2: 0.028, s2: 1.15, p2: 1.2,
+    a3: 2.1, f3: 0.0075, s3: 0.35,
+    top: [24, 62, 78], mid: [10, 34, 48], bot: [5, 16, 24],
+    foam: 0.16, foamW: 1.15, caps: false
+  };
+  const MID = {
+    base: 748, a1: 15, f1: 0.0105, s1: 0.98, p1: 1.4,
+    a2: 6, f2: 0.022, s2: 1.45, p2: 0.3,
+    a3: 4, f3: 0.0064, s3: 0.42,
+    top: [34, 82, 98], mid: [8, 32, 46], bot: [4, 14, 22],
+    foam: 0.24, foamW: 1.6, caps: true
+  };
+  const NEAR = {
+    base: 908, a1: 22, f1: 0.0086, s1: 1.18, p1: 2.2,
+    a2: 8, f2: 0.019, s2: 1.7, p2: 0.8,
+    a3: 5, f3: 0.0055, s3: 0.4,
+    top: [48, 92, 104], mid: [7, 28, 40], bot: [3, 11, 18],
+    foam: 0.34, foamW: 2.2, caps: true
+  };
+
+  const CURLS = [
+    { offset: 0, period: 6.5, from: 1030, to: 448, base: 828, lip: 96, phase: 0.5, power: 1, prev: 0 },
+    { offset: 0.52, period: 6.5, from: 1060, to: 640, base: 742, lip: 50, phase: 2.1, power: 0.5, prev: 0 }
+  ];
+
+  const CLOUDS = [
+    { x: 80, y: 70, speed: 14, depth: 0, puffs: [[0, 0, 240, 74], [130, 16, 170, 48], [-120, 14, 150, 44], [40, -18, 120, 36]] },
+    { x: 620, y: 46, speed: 11, depth: 0, puffs: [[0, 0, 200, 60], [110, 12, 140, 40], [-90, 10, 120, 36]] },
+    { x: 1100, y: 100, speed: 16, depth: 0, puffs: [[0, 8, 260, 70], [-140, 20, 150, 42], [120, -8, 130, 38]] },
+    { x: 300, y: 150, speed: 18, depth: 0, puffs: [[0, 0, 180, 52], [90, 14, 120, 36]] },
+    { x: 180, y: 210, speed: 28, depth: 1, puffs: [[0, 0, 220, 64], [120, 18, 160, 46], [-110, 12, 140, 40], [30, -20, 100, 32]] },
+    { x: 780, y: 120, speed: 24, depth: 1, puffs: [[0, 0, 250, 72], [140, 16, 160, 48], [-130, 18, 150, 44], [20, -22, 110, 34]] },
+    { x: 1280, y: 250, speed: 32, depth: 1, puffs: [[0, 0, 200, 58], [-100, 14, 140, 40], [110, 10, 120, 36]] },
+    { x: 480, y: 300, speed: 36, depth: 1, puffs: [[0, 6, 230, 60], [130, 16, 150, 40], [-120, 8, 130, 36]] },
+    { x: 60, y: 390, speed: 78, depth: 2, puffs: [[0, 0, 210, 32], [140, 6, 160, 24], [-120, 4, 130, 20]] },
+    { x: 860, y: 340, speed: 64, depth: 2, puffs: [[0, 0, 180, 28], [120, 8, 140, 22], [-90, 4, 110, 18]] }
+  ];
+
+  let S = 1, OX = 0, OY = 0;
+  let V = { l: 0, t: 0, r: D, b: D };
+  let T = 0;
+  let last = 0;
+  let flash = 0;
+  let nextBolt = 1.35;
+  let nextSheet = 0.7;
+  const followUps = [];
+  const strikes = [];
+  const sheets = [];
+  const parts = [];
+  const rings = [];
+  const backRain = [];
+  const frontRain = [];
+
+  function mulberry32(a) {
+    return function () {
+      a |= 0;
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+  function smooth(a, b, x) {
+    const t = clamp((x - a) / (b - a), 0, 1);
+    return t * t * (3 - 2 * t);
+  }
+  function mix(a, b, t) {
+    return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+  }
+  function rgb(c, a) {
+    const r = clamp(c[0], 0, 255) | 0;
+    const g = clamp(c[1], 0, 255) | 0;
+    const b = clamp(c[2], 0, 255) | 0;
+    return a == null ? "rgb(" + r + "," + g + "," + b + ")" : "rgba(" + r + "," + g + "," + b + "," + a + ")";
+  }
+
+  function makeSoft(inner) {
+    const c = document.createElement("canvas");
+    c.width = 256;
+    c.height = 256;
+    const g = c.getContext("2d");
+    const grd = g.createRadialGradient(128, 128, 8, 128, 128, 128);
+    grd.addColorStop(0, inner);
+    grd.addColorStop(1, "rgba(0,0,0,0)");
+    g.fillStyle = grd;
+    g.fillRect(0, 0, 256, 256);
+    return c;
+  }
+  const softW = makeSoft("rgba(255,255,255,1)");
+  const softB = makeSoft("rgba(0,0,0,0.95)");
+
+  const stars = [];
+  {
+    const rnd = mulberry32(3);
+    for (let i = 0; i < 56; i++) {
+      stars.push({
+        x: -360 + rnd() * 1900,
+        y: -180 + rnd() * 620,
+        s: rnd() < 0.85 ? 0.7 : 1.35,
+        p: rnd() * 6.28,
+        b: 0.2 + rnd() * 0.7
+      });
+    }
+  }
+
+  function seaY(x, t, o) {
+    return o.base
+      + Math.sin(x * o.f1 + t * o.s1 + o.p1) * o.a1
+      + Math.sin(x * o.f2 + t * o.s2 + o.p2) * o.a2
+      + Math.sin(x * o.f3 - t * o.s3 + o.p1) * o.a3;
+  }
+
+  function curlState(c) {
+    const u = (T / c.period + c.offset) % 1;
+    const build = Math.sin(Math.min(u, 0.72) / 0.72 * Math.PI * 0.5);
+    const collapse = u > 0.74 ? Math.min(1, (u - 0.74) / 0.26) : 0;
+    const fade = smooth(0, 0.1, u) * (1 - smooth(0.88, 1, u));
+    const crestX = c.from + (c.to - c.from) * build;
+    const lipH = c.lip * build * (1 - collapse * 0.7);
+    const hit = Math.exp(-((u - 0.73) * (u - 0.73)) / 0.0018);
+    return { u, build, collapse, fade, crestX, lipH, hit };
+  }
+
+  function shaftHalf(y) {
+    const u = clamp((BASE - y) / (BASE - SHAFT_TOP), 0, 1);
+    return HALF_B + (HALF_T - HALF_B) * u;
+  }
+
+  function cliffOutline() {
+    ctx.moveTo(V.l - 80, V.b + 80);
+    ctx.lineTo(V.l - 80, 830);
+    if (V.l < 10) {
+      const start = V.l - 80;
+      const n = Math.max(2, Math.ceil((0 - start) / 78));
+      for (let i = 1; i <= n; i++) {
+        const x = start + (0 - start) * (i / (n + 1));
+        const y = 804 - (i % 3) * 16 - (i % 2) * 12;
+        ctx.lineTo(x, y);
+      }
+    }
+    for (let i = 0; i < CLIFF.length; i++) ctx.lineTo(CLIFF[i][0], CLIFF[i][1]);
+    ctx.lineTo(CLIFF[CLIFF.length - 1][0], V.b + 80);
+    ctx.closePath();
+  }
+
+  function jagged(x, y, rx, ry, seed) {
+    const rnd = mulberry32(seed);
+    ctx.beginPath();
+    const n = 9;
+    for (let i = 0; i <= n; i++) {
+      const a = (i / n) * Math.PI * 2 - Math.PI / 2;
+      const j = 0.72 + rnd() * 0.38;
+      const px = x + Math.cos(a) * rx * j;
+      const py = y + Math.sin(a) * ry * j;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+  }
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const cssW = Math.max(1, window.innerWidth);
+    const cssH = Math.max(1, window.innerHeight);
+    canvas.width = Math.max(1, Math.floor(cssW * dpr));
+    canvas.height = Math.max(1, Math.floor(cssH * dpr));
+    const s = Math.min(cssW, cssH) / D;
+    const ox = (cssW - D * s) / 2;
+    const oy = (cssH - D * s) / 2;
+    S = s * dpr;
+    OX = ox * dpr;
+    OY = oy * dpr;
+    V = {
+      l: (0 - ox) / s,
+      t: (0 - oy) / s,
+      r: (cssW - ox) / s,
+      b: (cssH - oy) / s
+    };
+  }
+
+  function makeDrop(front, scatter) {
+    const z = front ? 0.72 + Math.random() * 0.28 : Math.random() * 0.72;
+    const d = {
+      x: 0, y: 0, z,
+      vx: -150 - z * 340,
+      vy: 500 + z * 860,
+      splash: !front && z > 0.5 && Math.random() < 0.28,
+      front
+    };
+    resetDrop(d, scatter);
+    return d;
+  }
+
+  function resetDrop(d, scatter) {
+    const span = V.r - V.l + 280;
+    d.x = V.l - 120 + Math.random() * span;
+    d.y = scatter ? V.t + Math.random() * (V.b - V.t + 40) : V.t - 30 - Math.random() * 220;
+  }
+
+  function initRain() {
+    backRain.length = 0;
+    frontRain.length = 0;
+    for (let i = 0; i < 540; i++) backRain.push(makeDrop(false, true));
+    for (let i = 0; i < 190; i++) frontRain.push(makeDrop(true, true));
+  }
+
+  function resetMist(m) {
+    m.x = 390 + Math.random() * 220;
+    m.y = 760 + Math.random() * 220;
+    m.vx = -28 - Math.random() * 55;
+    m.vy = -8 - Math.random() * 22;
+    m.r = 46 + Math.random() * 80;
+    m.a = 0.035 + Math.random() * 0.04;
+    m.life = 0.6 + Math.random() * 1.1;
+    m.max = m.life;
+  }
+  const mist = [];
+  for (let i = 0; i < 16; i++) {
+    const m = {};
+    resetMist(m);
+    m.life = Math.random() * m.max;
+    mist.push(m);
+  }
+
+  function spawnPart(p) {
+    if (parts.length > 460) return;
+    p.max = p.life;
+    parts.push(p);
+  }
+
+  function spawnSpray(x, y, hit, power) {
+    const up = -Math.PI * (0.12 + Math.random() * 0.84);
+    const sp = (40 + Math.random() * 260) * power * (0.3 + hit);
+    const foam = Math.random() < 0.48;
+    const life = foam ? 0.45 + Math.random() * 0.75 : 0.28 + Math.random() * 0.4;
+    spawnPart({
+      x: x + (Math.random() - 0.5) * 22,
+      y: y + Math.random() * 18,
+      vx: Math.cos(up) * sp - 60 * power,
+      vy: Math.sin(up) * sp,
+      g: foam ? 36 : 640,
+      life,
+      r: (foam ? 1.5 : 0.9) + Math.random() * (foam ? 2.6 : 1.3),
+      foam
+    });
+  }
+
+  function growBolt(x, y, dx, dy, depth, out) {
+    const segs = depth === 0 ? 15 : 6;
+    const spread = depth === 0 ? 36 : 16;
+    const pts = [[x, y]];
+    let cx = x;
+    let cy = y;
+    const stepY = Math.abs(dy) / segs;
+    const stepX = dx / segs;
+    for (let i = 0; i < segs; i++) {
+      cx += stepX + (Math.random() - 0.5) * spread;
+      cy += stepY * (0.7 + Math.random() * 0.6);
+      pts.push([cx, cy]);
+    }
+    out.push(pts);
+    if (depth >= 3) return;
+    for (let i = 2; i < pts.length - 1; i += 2) {
+      if (Math.random() > (depth === 0 ? 0.5 : 0.7)) continue;
+      const len = Math.abs(dy) * (0.16 + Math.random() * 0.3);
+      const bdx = (Math.random() - 0.5) * len * 1.45;
+      growBolt(pts[i][0], pts[i][1], bdx, len, depth + 1, out);
+    }
+  }
+
+  function spawnBolt(chain) {
+    const startX = 140 + Math.random() * 820;
+    const startY = 20 + Math.random() * 90;
+    const endX = startX + (Math.random() - 0.48) * 300;
+    const endY = 660 + Math.random() * 250;
+    const paths = [];
+    growBolt(startX, startY, endX - startX, endY - startY, 0, paths);
+    const end = paths[0][paths[0].length - 1];
+    strikes.push({
+      paths,
+      age: 0,
+      max: 0.28,
+      end,
+      hitSea: end[1] > 620 && end[0] > 380
+    });
+    sheets.push({
+      x: startX,
+      y: startY + 24,
+      r: 280 + Math.random() * 220,
+      age: 0,
+      max: 0.36
+    });
+    flash = 1;
+    if (!chain && Math.random() < 0.6) followUps.push(0.08 + Math.random() * 0.11);
+  }
+
+  function boltAlpha(age, max) {
+    const u = age / max;
+    if (u < 0.08) return 1;
+    if (u < 0.16) return 0.22;
+    if (u < 0.3) return 0.92;
+    return Math.max(0, 1 - (u - 0.3) / 0.7);
+  }
+
+  function update(dt) {
+    T += dt;
+    flash *= Math.exp(-dt * 5.4);
+    if (flash < 0.004) flash = 0;
+
+    nextBolt -= dt;
+    if (nextBolt <= 0) {
+      spawnBolt(false);
+      nextBolt = 3.1 + Math.random() * 5.2;
+    }
+    for (let i = followUps.length - 1; i >= 0; i--) {
+      followUps[i] -= dt;
+      if (followUps[i] <= 0) {
+        spawnBolt(true);
+        followUps.splice(i, 1);
+      }
+    }
+    nextSheet -= dt;
+    if (nextSheet <= 0) {
+      flash = Math.max(flash, 0.42);
+      sheets.push({
+        x: 60 + Math.random() * 980,
+        y: 30 + Math.random() * 190,
+        r: 220 + Math.random() * 260,
+        age: 0,
+        max: 0.3
+      });
+      nextSheet = 1.5 + Math.random() * 3.1;
+    }
+
+    for (let i = strikes.length - 1; i >= 0; i--) {
+      strikes[i].age += dt;
+      if (strikes[i].age >= strikes[i].max) strikes.splice(i, 1);
+    }
+    for (let i = sheets.length - 1; i >= 0; i--) {
+      sheets[i].age += dt;
+      if (sheets[i].age >= sheets[i].max) sheets.splice(i, 1);
+    }
+
+    for (const c of CURLS) {
+      const st = curlState(c);
+      if (st.fade > 0.15 && st.build > 0.35) {
+        const n = st.hit > 0.35 ? 5 : 1;
+        for (let i = 0; i < n; i++) spawnSpray(st.crestX, c.base - st.lipH, st.hit, c.power);
+      }
+      if (c.prev < 0.5 && st.hit >= 0.5) {
+        if (rings.length < 8) {
+          rings.push({ x: st.crestX + 8, y: c.base + 4, rad: 10, life: 0.75, max: 0.75 });
+        }
+        for (let i = 0; i < 18; i++) spawnSpray(st.crestX, c.base - st.lipH * 0.45, 1, c.power);
+      }
+      c.prev = st.hit;
+    }
+
+    if (parts.length < 420 && Math.random() < 0.85) {
+      spawnPart({
+        x: 400 + Math.random() * 36,
+        y: 800 + Math.random() * 36,
+        vx: -90 - Math.random() * 170,
+        vy: -16 - Math.random() * 48,
+        g: 18,
+        life: 0.35 + Math.random() * 0.45,
+        r: 0.7 + Math.random() * 1.5,
+        foam: true
+      });
+    }
+
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const p = parts[i];
+      p.life -= dt;
+      p.vy += p.g * dt;
+      p.vx *= 1 - dt * 0.35;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      if (p.life <= 0 || p.y > V.b + 60) {
+        parts[i] = parts[parts.length - 1];
+        parts.pop();
+      }
+    }
+
+    for (let i = rings.length - 1; i >= 0; i--) {
+      const r = rings[i];
+      r.life -= dt;
+      r.rad += dt * 110;
+      if (r.life <= 0) rings.splice(i, 1);
+    }
+
+    for (const m of mist) {
+      m.life -= dt;
+      m.x += m.vx * dt;
+      m.y += m.vy * dt;
+      if (m.life <= 0 || m.x < 220) resetMist(m);
+    }
+
+    const rains = [backRain, frontRain];
+    for (let k = 0; k < rains.length; k++) {
+      const list = rains[k];
+      for (let i = 0; i < list.length; i++) {
+        const d = list[i];
+        d.x += d.vx * dt;
+        d.y += d.vy * dt;
+        let limit;
+        if (d.front) limit = V.b + 24;
+        else if (d.z < 0.36) limit = 600 + d.z * 160;
+        else if (d.x < 390) limit = V.b + 10;
+        else limit = seaY(d.x, T, NEAR) - 2;
+        if (d.y > limit || d.x < V.l - 160) {
+          if (d.splash && d.x > 430 && d.y < V.b) {
+            for (let s = 0; s < 2; s++) {
+              spawnPart({
+                x: d.x,
+                y: limit,
+                vx: (Math.random() - 0.5) * 70,
+                vy: -30 - Math.random() * 80,
+                g: 420,
+                life: 0.18 + Math.random() * 0.16,
+                r: 0.6 + Math.random() * 0.8,
+                foam: false
+              });
+            }
+          }
+          resetDrop(d, false);
+        }
+      }
+    }
+  }
+
+  function blit(img, x, y, rw, rh, a) {
+    if (a <= 0.004) return;
+    ctx.globalAlpha = a;
+    ctx.drawImage(img, x - rw, y - rh, rw * 2, rh * 2);
+  }
+
+  function drawSky() {
+    const g = ctx.createLinearGradient(0, V.t - 40, 0, 720);
+    g.addColorStop(0, rgb(mix([3, 6, 12], [58, 78, 108], flash * 0.62)));
+    g.addColorStop(0.42, rgb(mix([7, 13, 24], [78, 100, 128], flash * 0.5)));
+    g.addColorStop(0.72, rgb(mix([14, 26, 42], [112, 132, 154], flash * 0.4)));
+    g.addColorStop(1, rgb(mix([9, 16, 28], [48, 64, 82], flash * 0.28)));
+    ctx.fillStyle = g;
+    ctx.fillRect(V.l - 80, V.t - 80, V.r - V.l + 160, V.b - V.t + 160);
+  }
+
+  function drawStars() {
+    if (flash > 0.85) return;
+    for (let i = 0; i < stars.length; i++) {
+      const s = stars[i];
+      if (s.y > 520 || s.x < V.l - 10 || s.x > V.r + 10) continue;
+      const tw = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(T * 1.7 + s.p));
+      const horizon = clamp(1 - (s.y - 300) / 220, 0, 1);
+      const a = s.b * tw * horizon * (1 - flash * 0.95) * 0.55;
+      if (a < 0.02) continue;
+      ctx.fillStyle = "rgba(226,234,244," + a + ")";
+      ctx.fillRect(s.x, s.y, s.s, s.s);
+    }
+  }
+
+  function drawMoon() {
+    const x = 846, y = 126, r = 40;
+    ctx.save();
+    ctx.globalAlpha = 1 - flash * 0.7;
+    const halo = ctx.createRadialGradient(x, y, r * 0.2, x, y, r * 4.4);
+    halo.addColorStop(0, "rgba(226,232,242,0.38)");
+    halo.addColorStop(0.28, "rgba(180,196,220,0.08)");
+    halo.addColorStop(1, "rgba(180,196,220,0)");
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(x, y, r * 4.4, 0, Math.PI * 2);
+    ctx.fill();
+    const disc = ctx.createRadialGradient(x - 12, y - 10, r * 0.15, x, y, r);
+    disc.addColorStop(0, "rgba(248,248,252,0.96)");
+    disc.addColorStop(1, "rgba(190,198,210,0.88)");
+    ctx.fillStyle = disc;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha *= 0.28;
+    ctx.fillStyle = "#7f8b9c";
+    ctx.beginPath();
+    ctx.ellipse(x + 8, y + 3, 11, 9, 0.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(x - 11, y + 8, 6, 5, -0.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawCloudLayer(depth) {
+    const span = V.r - V.l + 820;
+    for (let i = 0; i < CLOUDS.length; i++) {
+      const c = CLOUDS[i];
+      if (c.depth !== depth) continue;
+      const x = V.l - 320 + ((c.x - T * c.speed) % span + span) % span;
+      const y = c.y + Math.sin(T * 0.17 + c.x * 0.01) * 7;
+      for (let p = 0; p < c.puffs.length; p++) {
+        const f = c.puffs[p];
+        const px = x + f[0];
+        const py = y + f[1];
+        if (depth === 0) {
+          blit(softW, px, py, f[2], f[3], 0.1 + flash * 0.15);
+        } else if (depth === 1) {
+          blit(softB, px, py, f[2], f[3], 0.32);
+          blit(softW, px, py - f[3] * 0.32, f[2] * 0.82, f[3] * 0.42, 0.045 + flash * 0.16);
+        } else {
+          blit(softB, px, py, f[2], f[3], 0.2);
+          if (flash > 0.02) blit(softW, px, py, f[2], f[3], flash * 0.08);
+        }
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawSqualls() {
+    for (let i = 0; i < 5; i++) {
+      const w = 150 + i * 34;
+      const span = V.r - V.l + w + 200;
+      const x = V.l - w + ((i * 280 - T * (36 + i * 18)) % span + span) % span;
+      const g = ctx.createLinearGradient(x, 0, x + w, 0);
+      const a = 0.028 + flash * 0.04;
+      g.addColorStop(0, "rgba(168,188,206,0)");
+      g.addColorStop(0.5, "rgba(168,188,206," + a + ")");
+      g.addColorStop(1, "rgba(168,188,206,0)");
+      ctx.fillStyle = g;
+      ctx.fillRect(x, 90 + i * 60, w, 560);
+    }
+  }
+
+  function drawSheets() {
+    ctx.save();
+    for (let i = 0; i < sheets.length; i++) {
+      const s = sheets[i];
+      const a = Math.max(0, 1 - s.age / s.max);
+      blit(softW, s.x, s.y, s.r, s.r * 0.58, a * a * 0.5);
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+
+  function strokeBoltPaths(paths, width, color) {
+    ctx.beginPath();
+    for (let i = 0; i < paths.length; i++) {
+      const pts = paths[i];
+      ctx.moveTo(pts[0][0], pts[0][1]);
+      for (let k = 1; k < pts.length; k++) ctx.lineTo(pts[k][0], pts[k][1]);
+    }
+    ctx.lineWidth = width;
+    ctx.strokeStyle = color;
+    ctx.stroke();
+  }
+
+  function drawBolts() {
+    for (let i = 0; i < strikes.length; i++) {
+      const s = strikes[i];
+      const a = boltAlpha(s.age, s.max);
+      if (a <= 0) continue;
+      strokeBoltPaths(s.paths, 6.5, "rgba(170,198,255," + (a * 0.28) + ")");
+      strokeBoltPaths(s.paths, 2.1, "rgba(246,250,255," + a + ")");
+    }
+  }
+
+  function drawHaze() {
+    const g = ctx.createLinearGradient(0, 560, 0, 710);
+    g.addColorStop(0, "rgba(150,170,190," + (0.05 + flash * 0.1) + ")");
+    g.addColorStop(1, "rgba(150,170,190,0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(V.l, 548, V.r - V.l, 170);
+  }
+
+  function drawHeadland() {
+    const right = Math.max(D, V.r) + 30;
+    ctx.beginPath();
+    ctx.moveTo(760, 656);
+    ctx.lineTo(808, 626);
+    ctx.lineTo(858, 644);
+    ctx.lineTo(912, 608);
+    ctx.lineTo(972, 636);
+    ctx.lineTo(1036, 598);
+    ctx.lineTo(right, 628);
+    ctx.lineTo(right, 676);
+    ctx.lineTo(760, 676);
+    ctx.closePath();
+    ctx.fillStyle = rgb(mix([7, 11, 16], [46, 58, 70], flash * 0.45));
+    ctx.fill();
+  }
+
+  function drawSeaLayer(o) {
+    const x0 = V.l - 20;
+    const x1 = V.r + 30;
+    const yb = V.b + 50;
+    const yAt = function (x) { return seaY(x, T, o); };
+    ctx.beginPath();
+    ctx.moveTo(x0, yb);
+    ctx.lineTo(x0, yAt(x0));
+    for (let x = x0 + 8; x <= x1; x += 8) ctx.lineTo(x, yAt(x));
+    ctx.lineTo(x1, yb);
+    ctx.closePath();
+    const crest = o.base - o.a1 - o.a2 - 8;
+    const g = ctx.createLinearGradient(0, crest, 0, Math.max(yb, o.base + 220));
+    g.addColorStop(0, rgb(mix(o.top, [186, 208, 216], flash * 0.28), 0.96));
+    g.addColorStop(0.09, rgb(mix(o.mid, [30, 60, 74], flash * 0.2), 1));
+    g.addColorStop(1, rgb(mix(o.bot, [24, 40, 52], flash * 0.18), 1));
+    ctx.fillStyle = g;
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(x0, yAt(x0));
+    for (let x = x0 + 8; x <= x1; x += 8) ctx.lineTo(x, yAt(x));
+    ctx.strokeStyle = "rgba(220,234,240," + (o.foam + flash * 0.16) + ")";
+    ctx.lineWidth = o.foamW;
+    ctx.stroke();
+
+    if (!o.caps) return;
+    const capA = 0.16 + flash * 0.18;
+    ctx.fillStyle = "rgba(230,240,244," + capA + ")";
+    for (let x = x0 + 20; x < x1; x += 20) {
+      const y = yAt(x);
+      if (y <= yAt(x - 14) && y <= yAt(x + 14)) {
+        ctx.beginPath();
+        ctx.ellipse(x, y + 1, 11 + o.a1 * 0.18, 3.1, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  function drawCliff() {
+    ctx.beginPath();
+    cliffOutline();
+    const g = ctx.createLinearGradient(0, 470, 520, 1040);
+    g.addColorStop(0, rgb(mix([30, 34, 40], [124, 138, 148], flash * 0.55)));
+    g.addColorStop(0.38, rgb(mix([16, 18, 22], [68, 80, 90], flash * 0.38)));
+    g.addColorStop(1, rgb(mix([7, 8, 10], [28, 34, 40], flash * 0.25)));
+    ctx.fillStyle = g;
+    ctx.fill();
+  }
+
+  function drawCliffDetail() {
+    ctx.save();
+    ctx.beginPath();
+    cliffOutline();
+    ctx.clip();
+    ctx.fillStyle = "rgba(0,0,0,0.2)";
+    ctx.fillRect(V.l - 40, 500, 150, V.b);
+    ctx.fillStyle = "rgba(190,208,220," + (0.035 + flash * 0.09) + ")";
+    ctx.fillRect(240, 500, 280, V.b);
+    ctx.beginPath();
+    const rnd = mulberry32(99);
+    for (let i = 0; i < 16; i++) {
+      let x = 30 + rnd() * 400;
+      let y = 530 + rnd() * 460;
+      ctx.moveTo(x, y);
+      for (let k = 0; k < 4; k++) {
+        x += (rnd() - 0.35) * 16;
+        y += 12 + rnd() * 24;
+        ctx.lineTo(x, y);
+      }
+    }
+    ctx.strokeStyle = "rgba(0,0,0,0.38)";
+    ctx.lineWidth = 1.15;
+    ctx.stroke();
+    ctx.beginPath();
+    for (let i = 0; i < 7; i++) {
+      const x = 90 + i * 46;
+      ctx.moveTo(x, 540 + (i % 3) * 18);
+      ctx.lineTo(x + 10, 960);
+    }
+    ctx.strokeStyle = "rgba(170,190,200,0.045)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.beginPath();
+    for (let i = 0; i <= 11; i++) {
+      if (i === 0) ctx.moveTo(CLIFF[i][0], CLIFF[i][1]);
+      else ctx.lineTo(CLIFF[i][0], CLIFF[i][1]);
+    }
+    ctx.strokeStyle = "rgba(206,218,226," + (0.1 + flash * 0.48) + ")";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  function fillRock(x, y, rx, ry, seed) {
+    jagged(x, y, rx, ry, seed);
+    ctx.fillStyle = rgb(mix([15, 17, 21], [96, 108, 118], flash * 0.45));
+    ctx.fill();
+    jagged(x - rx * 0.18, y - ry * 0.22, rx * 0.42, ry * 0.32, seed + 17);
+    ctx.fillStyle = "rgba(220,230,236," + (0.05 + flash * 0.14) + ")";
+    ctx.fill();
+  }
+
+  function drawBoulders() {
+    fillRock(164, 484, 18, 11, 21);
+    fillRock(198, 490, 9, 6, 22);
+    fillRock(308, 498, 13, 8, 23);
+  }
+
+  function drawRocks() {
+    const specs = [
+      [498, 28, 52, 31],
+      [628, 36, 60, 44],
+      [755, 20, 36, 52]
+    ];
+    for (let i = 0; i < specs.length; i++) {
+      const x = specs[i][0];
+      const rx = specs[i][1];
+      const ry = specs[i][2];
+      const seed = specs[i][3];
+      const yLine = seaY(x, T, NEAR);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(V.l - 40, V.t - 40, V.r - V.l + 80, yLine - (V.t - 40));
+      ctx.clip();
+      fillRock(x, yLine + ry * 0.2, rx, ry, seed);
+      ctx.restore();
+      ctx.beginPath();
+      ctx.ellipse(x, yLine + 1, rx * 1.15, 4.2, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(226,236,242," + (0.2 + flash * 0.22) + ")";
+      ctx.fill();
+    }
+  }
+
+  function crestPoint(c, st, x) {
+    const span = (V.r + 30 - st.crestX) || 1;
+    const k = clamp((V.r + 30 - x) / span, 0, 1);
+    const y = c.base - k * k * st.lipH + Math.sin(x * 0.021 + T * 2.5 + c.phase) * 3 * (1 - k);
+    return y;
+  }
+
+  function traceCrest(c, st) {
+    let started = false;
+    for (let x = V.r + 30; x >= st.crestX; x -= 7) {
+      const y = crestPoint(c, st, x);
+      if (!started) { ctx.moveTo(x, y); started = true; }
+      else ctx.lineTo(x, y);
+    }
+    const lipY = c.base - st.lipH;
+    const curl = 1 - st.collapse;
+    ctx.bezierCurveTo(
+      st.crestX - 30 * curl, lipY - 14 * curl,
+      st.crestX - 48 * curl, lipY + 28,
+      st.crestX - 2, lipY + 50 + st.collapse * 26
+    );
+  }
+
+  function drawCurl(c) {
+    const st = curlState(c);
+    if (st.fade < 0.03 || st.lipH < 3) return;
+    const lipY = c.base - st.lipH;
+    const yb = V.b + 40;
+    ctx.save();
+    ctx.globalAlpha = st.fade;
+    ctx.beginPath();
+    traceCrest(c, st);
+    ctx.quadraticCurveTo(st.crestX + 34, lipY + 124, st.crestX + 78, c.base + 40);
+    ctx.lineTo(st.crestX + 78, yb);
+    ctx.lineTo(V.r + 30, yb);
+    ctx.closePath();
+    const g = ctx.createLinearGradient(0, lipY - 20, 0, c.base + 200);
+    g.addColorStop(0, "rgba(238,246,248," + (0.18 + st.build * 0.55) + ")");
+    g.addColorStop(0.08, "rgba(164,196,206,0.42)");
+    g.addColorStop(0.18, "rgba(18,64,78,0.9)");
+    g.addColorStop(0.5, "rgba(6,24,34,0.96)");
+    g.addColorStop(1, "rgba(3,10,16,1)");
+    ctx.fillStyle = g;
+    ctx.fill();
+    ctx.beginPath();
+    traceCrest(c, st);
+    ctx.strokeStyle = "rgba(244,250,252," + (0.32 + st.build * 0.55) + ")";
+    ctx.lineWidth = 2 + st.build * 4.5;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawShimmer(flick) {
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const x0 = 560;
+    const y0 = seaY(x0, T, NEAR) + 4;
+    for (let i = 0; i < 24; i++) {
+      const y = y0 + i * 13;
+      if (y > V.b) break;
+      const w = 2.5 + i * 0.45;
+      const a = 0.055 * flick * (1 - i / 26) * (0.5 + 0.5 * Math.sin(T * 3 + i * 0.85));
+      const x = x0 + Math.sin(T * 1.6 + i * 0.65) * (2.5 + i * 0.4);
+      ctx.fillStyle = "rgba(255,198,112," + a + ")";
+      ctx.fillRect(x, y, w, 7);
+    }
+    ctx.restore();
+  }
+
+  function drawMist() {
+    for (let i = 0; i < mist.length; i++) {
+      const m = mist[i];
+      const a = m.a * clamp(m.life / m.max, 0, 1) * 1.4;
+      blit(softW, m.x, m.y, m.r, m.r * 0.55, a);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawRings() {
+    for (let i = 0; i < rings.length; i++) {
+      const r = rings[i];
+      const a = Math.max(0, r.life / r.max);
+      ctx.beginPath();
+      ctx.ellipse(r.x, r.y, Math.max(1, r.rad * 2.3), Math.max(1, r.rad * 0.55), 0, 0, Math.PI * 2);
+      ctx.strokeStyle = "rgba(236,244,248," + (a * 0.65) + ")";
+      ctx.lineWidth = 1.5 + a * 4;
+      ctx.stroke();
+    }
+  }
+
+  function drawBoltReflections() {
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    for (let i = 0; i < strikes.length; i++) {
+      const s = strikes[i];
+      if (!s.hitSea) continue;
+      const a = boltAlpha(s.age, s.max);
+      const x = s.end[0];
+      const y = Math.max(640, Math.min(s.end[1], seaY(x, T, MID)));
+      const g = ctx.createLinearGradient(x, y, x, y + 180);
+      g.addColorStop(0, "rgba(214,228,255," + (a * 0.55) + ")");
+      g.addColorStop(1, "rgba(214,228,255,0)");
+      ctx.fillStyle = g;
+      ctx.fillRect(x - 10, y, 20, 180);
+    }
+    ctx.restore();
+  }
+
+  function withSeaClip(fn) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(V.l - 90, V.t - 90, V.r - V.l + 180, V.b - V.t + 180);
+    cliffOutline();
+    ctx.clip("evenodd");
+    fn();
+    ctx.restore();
+  }
+
+  function drawParts() {
+    for (let i = 0; i < parts.length; i++) {
+      const p = parts[i];
+      const a = Math.max(0, p.life / p.max);
+      if (p.foam) {
+        ctx.fillStyle = "rgba(228,238,242," + (a * 0.6) + ")";
+        ctx.beginPath();
+        ctx.ellipse(p.x, p.y, p.r * 2.1, p.r * 0.75, 0, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.strokeStyle = "rgba(206,220,230," + (a * 0.8) + ")";
+        ctx.lineWidth = Math.max(0.6, p.r * 0.65);
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(p.x - p.vx * 0.02, p.y - p.vy * 0.02);
+        ctx.stroke();
+      }
+    }
+  }
+
+  function drawRain(front) {
+    const list = front ? frontRain : backRain;
+    for (let pass = 0; pass < 2; pass++) {
+      ctx.beginPath();
+      const mid = front ? 0.88 : 0.4;
+      for (let i = 0; i < list.length; i++) {
+        const d = list[i];
+        if ((d.z >= mid) !== (pass === 1)) continue;
+        const len = (front ? 18 : 11) + d.z * 16;
+        const sp = Math.hypot(d.vx, d.vy) || 1;
+        ctx.moveTo(d.x, d.y);
+        ctx.lineTo(d.x - (d.vx / sp) * len, d.y - (d.vy / sp) * len);
+      }
+      const a = (front ? 0.28 : 0.16) + pass * 0.16 + flash * 0.14;
+      ctx.strokeStyle = "rgba(188,206,218," + a + ")";
+      ctx.lineWidth = (front ? 1.05 : 0.55) + pass * 0.5;
+      ctx.stroke();
+    }
+  }
+
+  function drawBeam(flick) {
+    const angle = T * (Math.PI * 2 / 13) - 0.9;
+    const cones = [[0.22, 0.07], [0.09, 0.16], [0.032, 0.3]];
+    ctx.save();
+    ctx.translate(LX, LAMP_Y);
+    ctx.globalCompositeOperation = "lighter";
+    for (let k = 0; k < 2; k++) {
+      ctx.save();
+      ctx.rotate(angle + k * Math.PI);
+      for (let i = 0; i < cones.length; i++) {
+        const spread = cones[i][0];
+        const alpha = cones[i][1] * flick;
+        const len = 1750;
+        const g = ctx.createLinearGradient(0, 0, len, 0);
+        g.addColorStop(0, "rgba(255,232,188," + alpha + ")");
+        g.addColorStop(0.28, "rgba(255,214,160," + (alpha * 0.38) + ")");
+        g.addColorStop(1, "rgba(255,206,150,0)");
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.arc(0, 0, len, -spread, spread);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  function drawLighthouse(flick) {
+    const wallL = mix([118, 110, 98], [198, 208, 214], flash * 0.62);
+    const wallM = mix([230, 222, 206], [250, 252, 255], flash * 0.32);
+    const wallR = mix([150, 142, 128], [206, 214, 220], flash * 0.55);
+    const band = rgb(mix([102, 28, 36], [186, 150, 156], flash * 0.4));
+
+    ctx.beginPath();
+    ctx.moveTo(LX - HALF_B - 10, BASE - 2);
+    ctx.lineTo(LX + HALF_B + 10, BASE - 2);
+    ctx.lineTo(LX + HALF_B + 4, BASE + 12);
+    ctx.lineTo(LX - HALF_B - 4, BASE + 12);
+    ctx.closePath();
+    ctx.fillStyle = rgb(mix([42, 38, 34], [130, 136, 140], flash * 0.4));
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(LX - HALF_B, BASE);
+    ctx.lineTo(LX + HALF_B, BASE);
+    ctx.lineTo(LX + HALF_T, SHAFT_TOP);
+    ctx.lineTo(LX - HALF_T, SHAFT_TOP);
+    ctx.closePath();
+    const g = ctx.createLinearGradient(LX - HALF_B, 0, LX + HALF_B, 0);
+    g.addColorStop(0, rgb(wallL));
+    g.addColorStop(0.38, rgb(wallM));
+    g.addColorStop(0.7, rgb(mix([206, 198, 182], [242, 244, 246], flash * 0.35)));
+    g.addColorStop(1, rgb(wallR));
+    ctx.fillStyle = g;
+    ctx.fill();
+    ctx.strokeStyle = "rgba(20,16,12,0.35)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    bandBox(392, 378, band);
+    bandBox(304, 290, band);
+
+    ctx.beginPath();
+    ctx.moveTo(LX + shaftHalf(BASE) - 5, BASE - 4);
+    ctx.lineTo(LX + shaftHalf(SHAFT_TOP + 8) - 3, SHAFT_TOP + 6);
+    ctx.strokeStyle = "rgba(255,255,255," + (0.1 + flash * 0.18) + ")";
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+
+    drawDoor(flick);
+    drawWindow(418, 0.75 + Math.sin(T * 3.1) * 0.05);
+    drawWindow(338, 0.85 + Math.sin(T * 2.4 + 1) * 0.06);
+    drawWindow(262, 0.7 + Math.sin(T * 4.2 + 2) * 0.05);
+
+    ctx.beginPath();
+    ctx.moveTo(LX - GAL_HALF, GAL_TOP);
+    ctx.lineTo(LX + GAL_HALF, GAL_TOP);
+    ctx.lineTo(LX + GAL_HALF - 3, GAL_TOP + GAL_H);
+    ctx.lineTo(LX - GAL_HALF + 3, GAL_TOP + GAL_H);
+    ctx.closePath();
+    ctx.fillStyle = rgb(mix([34, 30, 26], [150, 158, 164], flash * 0.5));
+    ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,0.35)";
+    ctx.stroke();
+
+    ctx.fillStyle = rgb(mix([22, 18, 16], [80, 86, 92], flash * 0.4));
+    ctx.fillRect(LX - LAN_HALF - 3, LAN_TOP, (LAN_HALF + 3) * 2, LAN_BOT - LAN_TOP);
+
+    const glass = ctx.createLinearGradient(0, LAN_TOP, 0, LAN_BOT);
+    glass.addColorStop(0, "rgba(255,214,130," + (0.45 * flick) + ")");
+    glass.addColorStop(0.5, "rgba(255,176,64," + (0.72 * flick) + ")");
+    glass.addColorStop(1, "rgba(180,90,24," + (0.55 * flick) + ")");
+    ctx.fillStyle = glass;
+    ctx.fillRect(LX - LAN_HALF + 2, LAN_TOP + 4, (LAN_HALF - 2) * 2, LAN_BOT - LAN_TOP - 8);
+
+    ctx.strokeStyle = "rgba(28,20,12,0.85)";
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    const panes = 4;
+    for (let i = 0; i <= panes; i++) {
+      const x = LX - LAN_HALF + 2 + ((LAN_HALF - 2) * 2) * (i / panes);
+      ctx.moveTo(x, LAN_TOP + 4);
+      ctx.lineTo(x, LAN_BOT - 4);
+    }
+    ctx.moveTo(LX - LAN_HALF + 2, LAMP_Y);
+    ctx.lineTo(LX + LAN_HALF - 2, LAMP_Y);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(LX - LAN_HALF - 4, LAN_TOP + 3);
+    ctx.quadraticCurveTo(LX, LAN_TOP - DOME_H * 2, LX + LAN_HALF + 4, LAN_TOP + 3);
+    ctx.closePath();
+    const dome = ctx.createLinearGradient(LX - 20, LAN_TOP, LX + 20, LAN_TOP - DOME_H);
+    dome.addColorStop(0, rgb(mix([42, 32, 24], [120, 110, 96], flash * 0.4)));
+    dome.addColorStop(0.45, rgb(mix([92, 74, 48], [186, 170, 140], flash * 0.35)));
+    dome.addColorStop(1, rgb(mix([48, 38, 26], [130, 118, 100], flash * 0.35)));
+    ctx.fillStyle = dome;
+    ctx.fill();
+
+    const apex = LAN_TOP - DOME_H;
+    ctx.beginPath();
+    ctx.moveTo(LX, apex + 2);
+    ctx.lineTo(LX, apex - 11);
+    ctx.strokeStyle = rgb(mix([70, 60, 46], [180, 176, 160], flash * 0.4));
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(LX, apex - 14, 2.4, 0, Math.PI * 2);
+    ctx.fillStyle = rgb(mix([90, 78, 58], [210, 206, 190], flash * 0.4));
+    ctx.fill();
+
+    drawRails();
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const bloom = ctx.createRadialGradient(LX, LAMP_Y, 2, LX, LAMP_Y, 78);
+    bloom.addColorStop(0, "rgba(255,236,200," + (0.55 * flick) + ")");
+    bloom.addColorStop(0.35, "rgba(255,176,70," + (0.28 * flick) + ")");
+    bloom.addColorStop(1, "rgba(255,150,40,0)");
+    ctx.fillStyle = bloom;
+    ctx.beginPath();
+    ctx.arc(LX, LAMP_Y, 78, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function bandBox(y0, y1, color) {
+    const h0 = shaftHalf(y0);
+    const h1 = shaftHalf(y1);
+    ctx.beginPath();
+    ctx.moveTo(LX - h0, y0);
+    ctx.lineTo(LX + h0, y0);
+    ctx.lineTo(LX + h1, y1);
+    ctx.lineTo(LX - h1, y1);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+  }
+
+  function drawDoor(flick) {
+    const bottom = BASE - 16;
+    const top = bottom - 30;
+    const w = 13;
+    ctx.beginPath();
+    ctx.moveTo(LX - w / 2, bottom);
+    ctx.lineTo(LX - w / 2, top + 7);
+    ctx.arc(LX, top + 7, w / 2, Math.PI, 0, true);
+    ctx.lineTo(LX + w / 2, bottom);
+    ctx.closePath();
+    ctx.fillStyle = "#16120e";
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,186,92," + (0.8 * flick) + ")";
+    ctx.fillRect(LX - 1.4, top + 8, 2.8, bottom - top - 14);
+  }
+
+  function drawWindow(y, flickN) {
+    const ww = 8;
+    const wh = 13;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const g = ctx.createRadialGradient(LX, y, 1, LX, y, 20);
+    g.addColorStop(0, "rgba(255,188,88," + (0.4 * flickN) + ")");
+    g.addColorStop(1, "rgba(255,160,50,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(LX, y, 20, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    ctx.fillStyle = "rgba(255,198,114," + (0.88 * flickN) + ")";
+    ctx.fillRect(LX - ww / 2, y - wh / 2, ww, wh);
+    ctx.strokeStyle = "rgba(36,28,20,0.85)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(LX - ww / 2, y - wh / 2, ww, wh);
+  }
+
+  function drawRails() {
+    const y0 = GAL_TOP;
+    ctx.strokeStyle = rgb(mix([28, 24, 22], [186, 194, 200], flash * 0.5));
+    ctx.lineWidth = 1.25;
+    ctx.beginPath();
+    for (let side = -1; side <= 1; side += 2) {
+      const a = LX + side * (LAN_HALF + 5);
+      const b = LX + side * (GAL_HALF - 2);
+      const left = Math.min(a, b);
+      const right = Math.max(a, b);
+      ctx.moveTo(left, y0 - 7);
+      ctx.lineTo(right, y0 - 7);
+      for (let i = 0; i <= 4; i++) {
+        const x = left + (right - left) * (i / 4);
+        ctx.moveTo(x, y0);
+        ctx.lineTo(x, y0 - 7);
+      }
+    }
+    ctx.stroke();
+  }
+
+  function drawLampHot(flick) {
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const g = ctx.createRadialGradient(LX, LAMP_Y, 0, LX, LAMP_Y, 16);
+    g.addColorStop(0, "rgba(255,252,240," + (0.95 * flick) + ")");
+    g.addColorStop(0.45, "rgba(255,220,150," + (0.45 * flick) + ")");
+    g.addColorStop(1, "rgba(255,200,120,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(LX, LAMP_Y, 16, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawExposure() {
+    if (flash < 0.02) return;
+    ctx.fillStyle = "rgba(176,198,220," + (flash * 0.075) + ")";
+    ctx.fillRect(V.l - 40, V.t - 40, V.r - V.l + 80, V.b - V.t + 80);
+  }
+
+  function drawVignette() {
+    const rad = Math.max(
+      860,
+      Math.hypot(V.r - 420, V.b - 520),
+      Math.hypot(V.l - 420, V.t - 520)
+    );
+    const g = ctx.createRadialGradient(430, 500, 280, 480, 540, rad);
+    g.addColorStop(0, "rgba(0,0,0,0)");
+    g.addColorStop(0.55, "rgba(0,0,0,0.08)");
+    g.addColorStop(1, "rgba(0,0,0,0.58)");
+    ctx.fillStyle = g;
+    ctx.fillRect(V.l - 40, V.t - 40, V.r - V.l + 80, V.b - V.t + 80);
+    const foot = ctx.createLinearGradient(0, 900, 0, V.b + 20);
+    foot.addColorStop(0, "rgba(0,0,0,0)");
+    foot.addColorStop(1, "rgba(0,0,0,0.32)");
+    ctx.fillStyle = foot;
+    ctx.fillRect(V.l - 20, 880, V.r - V.l + 40, V.b - 860);
+  }
+
+  function render() {
+    const flick = 0.9 + Math.sin(T * 6.2) * 0.035 + Math.sin(T * 23) * 0.025 + Math.sin(T * 47) * 0.015;
+    const mag = flash * flash * 5.5;
+    ctx.setTransform(S, 0, 0, S, OX, OY);
+    ctx.translate(Math.sin(T * 93) * mag, Math.cos(T * 71) * mag);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+
+    drawSky();
+    drawStars();
+    drawMoon();
+    drawCloudLayer(0);
+    drawSqualls();
+    drawSheets();
+    drawBolts();
+    drawCloudLayer(1);
+    drawHaze();
+    drawHeadland();
+    drawSeaLayer(FAR);
+    drawSeaLayer(MID);
+    drawCliff();
+    drawCliffDetail();
+    drawBoulders();
+    withSeaClip(function () {
+      drawCurl(CURLS[1]);
+      drawSeaLayer(NEAR);
+      drawRocks();
+      drawCurl(CURLS[0]);
+      drawRings();
+      drawShimmer(flick);
+      drawMist();
+      drawBoltReflections();
+    });
+    drawParts();
+    drawRain(false);
+    drawBeam(flick);
+    drawCloudLayer(2);
+    drawLighthouse(flick);
+    drawExposure();
+    drawVignette();
+    drawLampHot(flick);
+    drawRain(true);
+  }
+
+  function frame(now) {
+    let dt = (now - last) / 1000;
+    last = now;
+    if (!(dt > 0)) dt = 0;
+    if (dt > 0.05) dt = 0.05;
+    update(dt);
+    render();
+    requestAnimationFrame(frame);
+  }
+
+  window.addEventListener("resize", resize);
+  resize();
+  initRain();
+  last = performance.now();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

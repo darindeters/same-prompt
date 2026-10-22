@@ -1,0 +1,1104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cherry Blossom</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #8ec4ea;
+    touch-action: none;
+  }
+  canvas {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+</style>
+</head>
+<body>
+<canvas id="c" aria-hidden="true"></canvas>
+<script>
+'use strict';
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  const DESIGN = 1080;
+  const ROOT_X = 540;
+  const ROOT_Y = 818;
+  const SEED = 11;
+
+  function mulberry32(a) {
+    return function () {
+      a |= 0;
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  const rand = mulberry32(SEED);
+
+  function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function smoothstep(a, b, x) {
+    const t = clamp((x - a) / (b - a), 0, 1);
+    return t * t * (3 - 2 * t);
+  }
+  function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+  function easeOutBack(t) {
+    const c1 = 1.35;
+    const c3 = c1 + 1;
+    return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+  }
+
+  function groundY(x) {
+    const n = (x - 540) / 820;
+    return 792 + n * n * 86;
+  }
+
+  const segs = [];
+  const flowers = [];
+  const flowersBack = [];
+  const flowersFront = [];
+  const leaves = [];
+  const parts = [];
+  const grasses = [];
+  const pebbles = [];
+  const clouds = [
+    { x: 150, y: 150, s: 1.05, phase: 0.2, a: 0.55 },
+    { x: 430, y: 96, s: 0.72, phase: 1.4, a: 0.42 },
+    { x: 760, y: 138, s: 0.95, phase: 2.5, a: 0.5 },
+    { x: 980, y: 188, s: 0.66, phase: 3.6, a: 0.38 },
+    { x: 300, y: 230, s: 0.5, phase: 4.4, a: 0.28 }
+  ];
+
+  function addSeg(parent, tAttach, angle, len, width, gen, curve) {
+    const pal = gen === 0 ? ['#4a2f1f', '#2c1a10', '#8d6244']
+      : gen === 1 ? ['#5b3b28', '#3a2418', '#a06e4c']
+      : gen === 2 ? ['#6b4632', '#4a2e22', '#b48362']
+      : gen >= 5 ? ['#8d5e56', '#69423c', '#d0a094']
+      : ['#7a5144', '#59362e', '#c48b78'];
+    segs.push({
+      parent, tAttach, angle, len, width, gen, curve,
+      phase: rand() * Math.PI * 2,
+      w1: width,
+      w2: Math.max(0.7, width * (gen === 0 ? 0.4 : 0.5)),
+      color: pal[0], shade: pal[1], hi: pal[2],
+      x1: ROOT_X, y1: ROOT_Y, fullX: ROOT_X, fullY: ROOT_Y,
+      cpx: ROOT_X, cpy: ROOT_Y, g: 0, born: false, drawAngle: angle
+    });
+    return segs.length - 1;
+  }
+
+  function buildTree() {
+    const j = () => (rand() - 0.5) * 0.05;
+    const trunk = addSeg(-1, 0, -Math.PI / 2 + 0.035, 258, 22, 0, 16);
+
+    const limbs = [
+      [trunk, 0.46, -Math.PI / 2 - 1.18, 176, 7.4, -20],
+      [trunk, 0.52, -Math.PI / 2 + 1.12, 156, 6.4, 16],
+      [trunk, 0.68, -Math.PI / 2 - 0.62, 164, 5.8, -12],
+      [trunk, 0.72, -Math.PI / 2 + 0.58, 158, 5.6, 14],
+      [trunk, 0.9, -Math.PI / 2 - 0.95, 206, 9.0, -18],
+      [trunk, 0.98, -Math.PI / 2 - 0.42, 184, 7.8, -8],
+      [trunk, 1, -Math.PI / 2 - 0.02, 188, 8.0, 4],
+      [trunk, 1, -Math.PI / 2 + 0.32, 176, 7.4, 10],
+      [trunk, 0.93, -Math.PI / 2 + 0.9, 206, 9.2, 18]
+    ];
+    const primaries = limbs.map(([p, t, a, len, w, c]) => addSeg(p, t, a + j(), len, w, 1, c));
+
+    function twigs(parentIdx) {
+      const p = segs[parentIdx];
+      const gen = p.gen + 1;
+      if (gen > 5 || p.len < 34) return;
+      let n = 0;
+      if (gen === 2) n = p.len > 160 ? 3 : 2;
+      else if (gen === 3) n = 2;
+      else if (gen === 4) n = rand() < 0.62 ? 2 : 1;
+      else n = p.len > 52 && rand() < 0.75 ? 1 : 0;
+      if (!n) return;
+      for (let i = 0; i < n; i++) {
+        let tA;
+        if (n === 1) tA = 0.72 + rand() * 0.24;
+        else if (i === n - 1) tA = 0.88 + rand() * 0.1;
+        else tA = 0.36 + (i / n) * 0.36 + rand() * 0.1;
+        tA = clamp(tA, 0.28, 0.98);
+        const vertical = Math.abs(p.angle + Math.PI / 2) < 0.38;
+        let spread;
+        if (vertical) {
+          const side = i - (n - 1) / 2;
+          spread = side * (0.36 + rand() * 0.2) + (rand() - 0.5) * 0.1;
+        } else {
+          const outward = p.angle > -Math.PI / 2 ? 1 : -1;
+          if (i === n - 1) spread = outward * (0.06 + rand() * 0.2);
+          else spread = outward * (0.26 + rand() * 0.38) * (rand() < 0.22 ? -0.4 : 1);
+        }
+        let angle = p.angle + spread;
+        if (gen >= 4) {
+          const droop = angle > -Math.PI / 2 ? 1 : -1;
+          angle += droop * (0.1 + rand() * 0.26);
+        }
+        angle = clamp(angle, -Math.PI - 0.42, 0.48);
+        const len = p.len * (0.58 + rand() * 0.16) * (gen >= 4 ? 0.88 : 1);
+        const width = Math.max(0.65, p.w2 * (0.6 + rand() * 0.3));
+        const curve = (rand() - 0.5) * Math.min(34, len * 0.3);
+        const idx = addSeg(parentIdx, tA, angle, Math.max(16, len), width, gen, curve);
+        twigs(idx);
+      }
+    }
+    primaries.forEach(twigs);
+
+    for (const s of segs) {
+      if (s.parent < 0) {
+        s.start = 1.55;
+        s.dur = 2.25;
+      } else {
+        const p = segs[s.parent];
+        const arrive = 1 - Math.cbrt(1 - clamp(s.tAttach, 0, 1));
+        s.start = p.start + p.dur * arrive;
+        s.dur = 0.34 + s.len / 250;
+      }
+    }
+  }
+
+  function petalInk() {
+    const roll = rand();
+    let h, s, l;
+    if (roll < 0.2) { h = 352; s = 38; l = 97; }
+    else if (roll < 0.5) { h = 348; s = 80; l = 88; }
+    else if (roll < 0.78) { h = 346; s = 76; l = 80; }
+    else { h = 340; s = 64; l = 72; }
+    h += (rand() - 0.5) * 8;
+    return {
+      color: 'hsla(' + h.toFixed(1) + ',' + s.toFixed(0) + '%,' + l.toFixed(0) + '%,0.96)',
+      ground: 'hsla(' + h.toFixed(1) + ',' + Math.max(28, s - 18).toFixed(0) + '%,' + Math.max(46, l - 16).toFixed(0) + '%,0.94)',
+      edge: 'hsla(' + h.toFixed(1) + ',42%,52%,0.38)'
+    };
+  }
+
+  let bloomEnd = 0;
+
+  function buildFlowers() {
+    for (let i = 0; i < segs.length; i++) {
+      const s = segs[i];
+      if (s.gen < 3 || s.len < 22) continue;
+      if (s.gen === 3 && rand() > 0.7) continue;
+      let cluster = 1;
+      if (s.gen === 3) cluster = rand() < 0.35 ? 2 : 1;
+      else if (s.gen === 4) cluster = rand() < 0.8 ? 2 : 1;
+      else cluster = rand() < 0.55 ? 2 : 1;
+      const baseT = 0.42 + rand() * 0.5;
+      for (let k = 0; k < cluster; k++) {
+        const ink = petalInk();
+        const back = rand() < 0.34;
+        const bloomStart = s.start + s.dur + 0.08 + rand() * 0.85;
+        const bloomDur = 1.05 + rand() * 0.7;
+        bloomEnd = Math.max(bloomEnd, bloomStart + bloomDur);
+        const petals = [];
+        for (let p = 0; p < 5; p++) {
+          const tone = petalInk();
+          petals.push({
+            i: p,
+            scale: 0.82 + rand() * 0.32,
+            gone: false,
+            releaseU: 0,
+            need: rand() < 0.1 ? 2 : 0.2 + rand() * 0.62,
+            color: p === 0 ? ink.color : tone.color,
+            ground: p === 0 ? ink.ground : tone.ground,
+            edge: tone.edge
+          });
+        }
+        const flower = {
+          seg: i,
+          t: clamp(baseT + (k - (cluster - 1) / 2) * 0.06 + (rand() - 0.5) * 0.04, 0.3, 0.98),
+          off: (rand() < 0.5 ? -1 : 1) * (rand() * 6 + 0.5) + (k - 1) * 1.5,
+          size: (back ? 10 : 13.5) + rand() * (back ? 4.2 : 6.8),
+          rot0: rand() * Math.PI * 2,
+          phase: rand() * Math.PI * 2,
+          bloomStart, bloomDur, back, petals,
+          x: 0, y: 0, ready: false
+        };
+        flowers.push(flower);
+        (back ? flowersBack : flowersFront).push(flower);
+        if (s.gen >= 4 && rand() < 0.28) {
+          leaves.push({
+            seg: i,
+            t: clamp(flower.t - 0.08 + rand() * 0.12, 0.25, 0.96),
+            off: (rand() < 0.5 ? -1 : 1) * (3 + rand() * 5),
+            len: 11 + rand() * 10,
+            wid: 3.2 + rand() * 2.2,
+            rot: (rand() - 0.5) * 0.8,
+            start: bloomStart + rand() * 0.4,
+            color: rand() < 0.5 ? '#86b15e' : rand() < 0.5 ? '#6f9a48' : '#a4c87a',
+            x: 0, y: 0, ang: 0, ready: false
+          });
+        }
+      }
+    }
+    const shedSpan = 12.5;
+    for (const f of flowers) {
+      for (const p of f.petals) {
+        if (p.need < 1.5) p.releaseU = (bloomEnd + 0.45) + rand() * shedSpan;
+      }
+    }
+  }
+
+  buildTree();
+  buildFlowers();
+
+  const SHED0 = bloomEnd + 0.45;
+  const SHED1 = SHED0 + 12.5;
+  const LINGER = 4.6;
+  const FADE = 3.1;
+  const LOOP = SHED1 + LINGER + FADE;
+
+  for (let i = 0; i < 110; i++) {
+    grasses.push({
+      x: -520 + rand() * 2120,
+      h: 8 + rand() * 26,
+      w: 0.8 + rand() * 1.15,
+      phase: rand() * Math.PI * 2,
+      col: rand() < 0.34 ? '#4f7a52' : rand() < 0.5 ? '#6e9a68' : '#87ad78',
+      front: rand() < 0.42
+    });
+  }
+  for (let i = 0; i < 7; i++) {
+    pebbles.push({
+      x: 400 + rand() * 280,
+      y: groundY(540) + 8 + rand() * 18,
+      rx: 3 + rand() * 5,
+      ry: 2 + rand() * 2.2,
+      rot: rand() * 2
+    });
+  }
+  for (let i = 0; i < 46; i++) {
+    grasses.push({
+      x: 20 + rand() * 1040,
+      h: 14 + rand() * 32,
+      w: 1 + rand() * 1.15,
+      phase: rand() * Math.PI * 2,
+      col: rand() < 0.4 ? '#3f6848' : '#5d8a58',
+      front: true
+    });
+  }
+
+  function curvePoint(s, t) {
+    const u = 1 - t;
+    return {
+      x: u * u * s.x1 + 2 * u * t * s.cpx + t * t * s.fullX,
+      y: u * u * s.y1 + 2 * u * t * s.cpy + t * t * s.fullY
+    };
+  }
+
+  function curveTangentAngle(s, t) {
+    const dx = 2 * (1 - t) * (s.cpx - s.x1) + 2 * t * (s.fullX - s.cpx);
+    const dy = 2 * (1 - t) * (s.cpy - s.y1) + 2 * t * (s.fullY - s.cpy);
+    return Math.atan2(dy, dx);
+  }
+
+  function breeze(u) {
+    return 0.3 + 0.12 * Math.sin(u * 0.33);
+  }
+  function gustFactor(u) {
+    const window = smoothstep(SHED0, SHED0 + 1.7, u) * (1 - smoothstep(SHED1 - 0.6, SHED1 + 0.8, u));
+    const wave = 0.32 + 0.68 * Math.pow(Math.max(0, Math.sin((u - SHED0) * 1.02)), 1.4);
+    return clamp(window * wave, 0, 1);
+  }
+  function windN(u) { return breeze(u) + gustFactor(u) * 1.4; }
+  function windV(u) { return 8 + breeze(u) * 16 + gustFactor(u) * 100; }
+
+  function layout(u, time, wN) {
+    for (let i = 0; i < segs.length; i++) {
+      const s = segs[i];
+      const sway = Math.sin(time * 1.15 + s.phase) * 0.05 * wN * (0.2 + s.gen * 0.55);
+      const sway2 = Math.sin(time * 0.42 + s.phase * 1.7) * 0.016 * wN * (s.gen * 0.45 + 0.2);
+      s.drawAngle = s.angle + sway + sway2;
+      if (s.parent < 0) {
+        s.x1 = ROOT_X;
+        s.y1 = ROOT_Y;
+        s.born = true;
+      } else {
+        const p = segs[s.parent];
+        s.born = !!(p.born && p.g + 0.001 >= s.tAttach);
+        const at = s.born ? s.tAttach : Math.min(Math.max(p.g, 0), s.tAttach);
+        const a = curvePoint(p, at);
+        s.x1 = a.x;
+        s.y1 = a.y;
+      }
+      let g = easeOutCubic(clamp((u - s.start) / s.dur, 0, 1));
+      if (!s.born) g = 0;
+      s.g = g;
+      s.fullX = s.x1 + Math.cos(s.drawAngle) * s.len;
+      s.fullY = s.y1 + Math.sin(s.drawAngle) * s.len;
+      const dx = s.fullX - s.x1;
+      const dy = s.fullY - s.y1;
+      const L = Math.hypot(dx, dy) || 1;
+      s.cpx = (s.x1 + s.fullX) / 2 + (-dy / L) * s.curve;
+      s.cpy = (s.y1 + s.fullY) / 2 + (dx / L) * s.curve;
+    }
+  }
+
+  function placeAll() {
+    for (const f of flowers) {
+      const s = segs[f.seg];
+      if (!s.born || s.g < f.t) { f.ready = false; f.y = -9999; continue; }
+      const p = curvePoint(s, f.t);
+      const ang = curveTangentAngle(s, f.t);
+      f.x = p.x + Math.cos(ang + Math.PI / 2) * f.off;
+      f.y = p.y + Math.sin(ang + Math.PI / 2) * f.off;
+      f.ready = true;
+    }
+    for (const lf of leaves) {
+      const s = segs[lf.seg];
+      if (!s.born || s.g < lf.t) { lf.ready = false; continue; }
+      const p = curvePoint(s, lf.t);
+      const ang = curveTangentAngle(s, lf.t);
+      lf.ang = ang;
+      lf.x = p.x + Math.cos(ang + Math.PI / 2) * lf.off;
+      lf.y = p.y + Math.sin(ang + Math.PI / 2) * lf.off;
+      lf.ready = true;
+    }
+  }
+
+  function bloomOf(f, u) {
+    const t = clamp((u - f.bloomStart) / f.bloomDur, 0, 1);
+    if (t <= 0) return 0;
+    return clamp(easeOutBack(t), 0, 1.08);
+  }
+
+  function releasePetal(f, pet, wV) {
+    const a = f.rot0 + pet.i * (Math.PI * 2 / 5);
+    const dirx = Math.sin(a);
+    const diry = -Math.cos(a);
+    const sc = f.size * pet.scale;
+    const windK = 0.16 + rand() * 0.9;
+    parts.push({
+      x: f.x + dirx * sc * 0.48,
+      y: f.y + diry * sc * 0.48,
+      vx: dirx * 12 + wV * windK * 0.42 + (rand() - 0.35) * 12,
+      vy: diry * 10 - 6 + rand() * 18,
+      rot: a + (rand() - 0.5) * 0.5,
+      spin: (rand() - 0.5) * 3.4,
+      size: sc * (0.82 + rand() * 0.28),
+      color: pet.color,
+      ground: pet.ground,
+      phase: rand() * Math.PI * 2,
+      freq: 2.6 + rand() * 4.2,
+      flutter: 18 + rand() * 34,
+      sink: 26 + rand() * 28,
+      windK,
+      grounded: false,
+      rotFlat: (rand() - 0.5) * 1.5,
+      dead: false
+    });
+    pet.gone = true;
+  }
+
+  function resetCycle() {
+    parts.length = 0;
+    for (const f of flowers) {
+      for (const p of f.petals) p.gone = false;
+    }
+  }
+
+  let groundedCount = 0;
+
+  function updateParticles(u, dt, wV, gust) {
+    const forced = u > SHED1 + 0.35;
+    for (const f of flowers) {
+      if (!f.ready) continue;
+      if (bloomOf(f, u) < 0.62) continue;
+      for (const pet of f.petals) {
+        if (pet.gone || pet.need > 1.5) continue;
+        if (u >= pet.releaseU && (gust > pet.need || forced)) releasePetal(f, pet, wV);
+      }
+    }
+    groundedCount = 0;
+    let w = 0;
+    for (let i = 0; i < parts.length; i++) {
+      const p = parts[i];
+      if (p.grounded) {
+        const target = wV * 0.045 * p.windK;
+        p.vx += (target - p.vx) * Math.min(1, dt * 1.5);
+        p.vx *= 1 - Math.min(0.4, dt * 0.9);
+        p.x += p.vx * dt;
+        p.y = groundY(p.x) - 1.2;
+        p.rotFlat += p.vx * dt * 0.01;
+        if (p.x > 1680 || p.x < -680) continue;
+        groundedCount++;
+        parts[w++] = p;
+        continue;
+      }
+      p.phase += dt * p.freq;
+      p.vx += (wV * p.windK - p.vx) * Math.min(1, dt * 0.85);
+      p.vy += (p.sink - p.vy) * dt * 0.55;
+      p.x += p.vx * dt + Math.sin(p.phase) * p.flutter * dt;
+      p.y += p.vy * dt + Math.cos(p.phase * 0.9) * p.flutter * 0.22 * dt;
+      p.rot += p.spin * dt;
+      const gy = groundY(p.x);
+      if (p.y >= gy - 1) {
+        p.y = gy - 1;
+        p.grounded = true;
+        p.vx *= 0.35;
+        p.vy = 0;
+      }
+      if (p.y < -160 || p.x > 1700 || p.x < -700) continue;
+      parts[w++] = p;
+    }
+    parts.length = w;
+  }
+
+  function petalPath(c, len, wid) {
+    c.beginPath();
+    c.moveTo(0, 0);
+    c.bezierCurveTo(wid * 0.9, -len * 0.08, wid * 1.12, -len * 0.52, wid * 0.2, -len * 0.9);
+    c.quadraticCurveTo(0, -len * 0.76, -wid * 0.2, -len * 0.9);
+    c.bezierCurveTo(-wid * 1.12, -len * 0.52, -wid * 0.9, -len * 0.08, 0, 0);
+    c.closePath();
+  }
+
+  function sampleRibbon(s) {
+    const steps = s.len > 90 ? 10 : 6;
+    const thicken = clamp(s.g * 1.4, 0, 1);
+    const wBase = s.w2 + (s.w1 - s.w2) * thicken;
+    const left = [];
+    const right = [];
+    for (let i = 0; i <= steps; i++) {
+      const tn = i / steps;
+      const t = tn * s.g;
+      const p = curvePoint(s, t);
+      const ang = curveTangentAngle(s, t);
+      const nx = Math.cos(ang + Math.PI / 2);
+      const ny = Math.sin(ang + Math.PI / 2);
+      const half = (wBase + (s.w2 - wBase) * tn) * 0.5;
+      left.push([p.x + nx * half, p.y + ny * half]);
+      right.push([p.x - nx * half, p.y - ny * half]);
+    }
+    return { left, right };
+  }
+
+  function fillRibbon(left, right, ox, oy, color) {
+    ctx.beginPath();
+    ctx.moveTo(left[0][0] + ox, left[0][1] + oy);
+    for (let i = 1; i < left.length; i++) ctx.lineTo(left[i][0] + ox, left[i][1] + oy);
+    for (let i = right.length - 1; i >= 0; i--) ctx.lineTo(right[i][0] + ox, right[i][1] + oy);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+  }
+
+  function drawBranch(s) {
+    if (s.g < 0.02) return;
+    const rib = sampleRibbon(s);
+    const off = Math.min(2.6, s.w1 * 0.11);
+    fillRibbon(rib.left, rib.right, off * 0.8, off, s.shade);
+    fillRibbon(rib.left, rib.right, 0, 0, s.color);
+    const tip = curvePoint(s, s.g);
+    const thicken = clamp(s.g * 1.4, 0, 1);
+    const wBase = s.w2 + (s.w1 - s.w2) * thicken;
+    ctx.fillStyle = s.color;
+    ctx.beginPath();
+    ctx.arc(tip.x, tip.y, Math.max(0.4, s.w2 * 0.45), 0, Math.PI * 2);
+    ctx.fill();
+    if (s.w1 > 3) {
+      ctx.beginPath();
+      const steps = 6;
+      for (let i = 0; i <= steps; i++) {
+        const tn = i / steps;
+        const t = tn * s.g;
+        const p = curvePoint(s, t);
+        const ang = curveTangentAngle(s, t);
+        let nx = Math.cos(ang + Math.PI / 2);
+        let ny = Math.sin(ang + Math.PI / 2);
+        if (nx * -0.55 + ny * -0.75 < 0) { nx = -nx; ny = -ny; }
+        const half = (wBase + (s.w2 - wBase) * tn) * 0.5;
+        const x = p.x + nx * half * 0.45;
+        const y = p.y + ny * half * 0.45;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = s.hi;
+      ctx.globalAlpha = 0.45;
+      ctx.lineWidth = Math.max(0.6, s.w1 * 0.1);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    if (s.gen === 0 && s.g > 0.35) {
+      ctx.strokeStyle = 'rgba(30, 16, 8, 0.28)';
+      ctx.lineWidth = 1;
+      const marks = 9;
+      for (let i = 0; i < marks; i++) {
+        const t = ((i + 0.5) / marks) * s.g * 0.92;
+        const p = curvePoint(s, t);
+        const ang = curveTangentAngle(s, t);
+        const nx = Math.cos(ang + Math.PI / 2);
+        const ny = Math.sin(ang + Math.PI / 2);
+        const half = lerp(wBase, s.w2, t / Math.max(s.g, 0.001)) * 0.28;
+        ctx.beginPath();
+        ctx.moveTo(p.x - nx * half, p.y - ny * half);
+        ctx.lineTo(p.x + nx * half * 0.3, p.y + ny * half * 0.3);
+        ctx.stroke();
+      }
+    }
+    if (s.gen >= 1 && s.g > 0.08 && s.g < 0.96) {
+      const budA = 1 - smoothstep(0.8, 0.96, s.g);
+      if (budA > 0.05) {
+        ctx.save();
+        ctx.globalAlpha = budA;
+        ctx.translate(tip.x, tip.y);
+        ctx.rotate(s.drawAngle + Math.PI / 2);
+        ctx.fillStyle = s.gen >= 3 ? '#e36b8c' : '#c46a52';
+        ctx.beginPath();
+        ctx.ellipse(0, -2.2, 2.1, 3.6, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = s.gen >= 3 ? '#ffd0de' : '#e7b39a';
+        ctx.beginPath();
+        ctx.ellipse(-0.4, -3.1, 0.7, 1.3, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+  }
+
+  function drawBranches(test) {
+    for (let i = 0; i < segs.length; i++) {
+      if (test(segs[i])) drawBranch(segs[i]);
+    }
+  }
+
+  function drawFlower(f, u, wN, time) {
+    if (!f.ready) return;
+    const bloom = bloomOf(f, u);
+    const remain = [];
+    for (let i = 0; i < f.petals.length; i++) if (!f.petals[i].gone) remain.push(f.petals[i]);
+    if (bloom < 0.42 && remain.length === 5) {
+      const k = 1 - bloom / 0.42;
+      ctx.save();
+      ctx.translate(f.x, f.y);
+      ctx.rotate(f.rot0);
+      ctx.fillStyle = '#c44770';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, f.size * 0.16 * k + 1.15, f.size * 0.26 * k + 1.7, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#f4a0b8';
+      ctx.beginPath();
+      ctx.ellipse(-0.6, -f.size * 0.06 * k, f.size * 0.06, f.size * 0.1, -0.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+    if (bloom < 0.06 || remain.length === 0) return;
+    const sc = f.size * bloom;
+    ctx.save();
+    ctx.translate(f.x, f.y);
+    ctx.rotate(f.rot0 + Math.sin(time * 1.05 + f.phase) * 0.08 * wN);
+    ctx.globalAlpha = f.back ? 0.9 : 1;
+    for (let i = 0; i < remain.length; i++) {
+      const pet = remain[i];
+      ctx.save();
+      ctx.rotate((pet.i / 5) * Math.PI * 2);
+      const len = sc * pet.scale;
+      const wid = len * 0.44;
+      ctx.fillStyle = pet.color;
+      petalPath(ctx, len, wid);
+      ctx.fill();
+      if (!f.back) {
+        ctx.lineWidth = 0.55;
+        ctx.strokeStyle = pet.edge;
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(255,255,255,0.4)';
+        ctx.beginPath();
+        ctx.ellipse(0, -len * 0.5, Math.max(0.35, wid * 0.28), Math.max(0.35, len * 0.16), 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(170, 70, 98, 0.25)';
+        ctx.lineWidth = 0.45;
+        ctx.beginPath();
+        ctx.moveTo(0, -len * 0.16);
+        ctx.lineTo(0, -len * 0.72);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    if (!f.back && remain.length >= 2 && sc > 3) {
+      const cr = Math.max(0.8, sc * 0.12);
+      ctx.fillStyle = '#e7a33a';
+      ctx.beginPath();
+      ctx.arc(0, 0, cr, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(226, 168, 64, 0.9)';
+      ctx.lineWidth = 0.45;
+      for (let k = 0; k < 5; k++) {
+        const a = (k / 5) * Math.PI * 2 + 0.4;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * cr * 0.4, Math.sin(a) * cr * 0.4);
+        ctx.lineTo(Math.cos(a) * sc * 0.2, Math.sin(a) * sc * 0.2);
+        ctx.stroke();
+        ctx.fillStyle = '#ffe7a0';
+        ctx.beginPath();
+        ctx.arc(Math.cos(a) * sc * 0.2, Math.sin(a) * sc * 0.2, 0.65, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = '#fff6d4';
+      ctx.beginPath();
+      ctx.arc(-cr * 0.25, -cr * 0.28, cr * 0.32, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawLeaf(lf, u) {
+    if (!lf.ready) return;
+    const k = smoothstep(lf.start, lf.start + 0.9, u);
+    if (k <= 0.01) return;
+    ctx.save();
+    ctx.translate(lf.x, lf.y);
+    ctx.rotate(lf.ang + lf.rot);
+    ctx.scale(k, k);
+    ctx.fillStyle = lf.color;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.bezierCurveTo(lf.wid, -lf.len * 0.15, lf.wid * 0.85, -lf.len * 0.72, 0, -lf.len);
+    ctx.bezierCurveTo(-lf.wid * 0.85, -lf.len * 0.72, -lf.wid, -lf.len * 0.15, 0, 0);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(70, 100, 45, 0.4)';
+    ctx.lineWidth = 0.55;
+    ctx.beginPath();
+    ctx.moveTo(0, -1);
+    ctx.lineTo(0, -lf.len * 0.82);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawRoots(g) {
+    if (g <= 0.01) return;
+    const specs = [
+      { a: 0.62, len: 86, w: 10, c: 18 },
+      { a: Math.PI - 0.58, len: 92, w: 11, c: -20 },
+      { a: 1.12, len: 52, w: 6.5, c: 10 },
+      { a: Math.PI - 1.08, len: 56, w: 7, c: -12 },
+      { a: 0.18, len: 40, w: 4.5, c: 6 }
+    ];
+    for (const r of specs) {
+      const L = r.len * g;
+      const x0 = ROOT_X;
+      const y0 = ROOT_Y - 8;
+      const x2 = x0 + Math.cos(r.a) * L;
+      const y2 = y0 + Math.sin(r.a) * L * 0.62;
+      const cpx = (x0 + x2) / 2 + r.c * 0.25;
+      const cpy = (y0 + y2) / 2 + 6;
+      const steps = 5;
+      const left = [];
+      const right = [];
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        const u = 1 - t;
+        const x = u * u * x0 + 2 * u * t * cpx + t * t * x2;
+        const y = u * u * y0 + 2 * u * t * cpy + t * t * y2;
+        const dx = 2 * (1 - t) * (cpx - x0) + 2 * t * (x2 - cpx);
+        const dy = 2 * (1 - t) * (cpy - y0) + 2 * t * (y2 - cpy);
+        const len = Math.hypot(dx, dy) || 1;
+        const nx = -dy / len;
+        const ny = dx / len;
+        const half = lerp(r.w, 1.1, t) * 0.5 * (0.45 + 0.55 * g);
+        left.push([x + nx * half, y + ny * half]);
+        right.push([x - nx * half, y - ny * half]);
+      }
+      fillRibbon(left, right, 1.2, 1.4, '#2a1810');
+      fillRibbon(left, right, 0, 0, '#4a3022');
+    }
+  }
+
+  function drawSeed(u) {
+    const sprout = easeOutCubic(clamp((u - 0.72) / 1.2, 0, 1));
+    const alpha = 1 - smoothstep(1.15, 2.05, u);
+    if (alpha <= 0.01) return sprout;
+    const pulse = 1 + Math.sin(u * 2.4) * 0.04 * (1 - sprout);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(ROOT_X, ROOT_Y - 30);
+    ctx.scale(pulse, pulse);
+    const open = sprout;
+    function half(side) {
+      ctx.save();
+      ctx.rotate(side * (0.15 + open * 0.55));
+      ctx.translate(side * (2 + open * 5), -open * 2);
+      ctx.fillStyle = '#5a3824';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 11, 7.4, side * -0.35, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#3b2418';
+      ctx.beginPath();
+      ctx.ellipse(side * 1.2, 1.4, 5.5, 2.4, side * -0.3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(214, 164, 112, 0.75)';
+      ctx.beginPath();
+      ctx.ellipse(-side * 1.6, -1.8, 2.6, 1.5, -0.6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+    half(-1);
+    half(1);
+    ctx.restore();
+    return sprout;
+  }
+
+  function drawSprout(u, trunkG) {
+    const g = easeOutCubic(clamp((u - 0.78) / 1.15, 0, 1));
+    const alpha = g * (1 - smoothstep(0.08, 0.5, trunkG));
+    if (alpha < 0.02 || g < 0.02) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    const h = 52 * g;
+    ctx.strokeStyle = '#3d8f48';
+    ctx.lineWidth = 2.4;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(ROOT_X + 1, ROOT_Y - 28);
+    ctx.quadraticCurveTo(ROOT_X + 10, ROOT_Y - 28 - h * 0.55, ROOT_X - 1, ROOT_Y - 26 - h);
+    ctx.stroke();
+    const leaf = clamp((g - 0.4) / 0.6, 0, 1);
+    if (leaf > 0) {
+      const lx = ROOT_X - 1;
+      const ly = ROOT_Y - 26 - h;
+      function coty(rot, len, wid) {
+        ctx.save();
+        ctx.translate(lx, ly);
+        ctx.rotate(rot);
+        ctx.scale(leaf, leaf);
+        ctx.fillStyle = '#67b15a';
+        ctx.beginPath();
+        ctx.ellipse(0, -len * 0.5, wid, len * 0.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(230,255,220,0.55)';
+        ctx.beginPath();
+        ctx.ellipse(-wid * 0.2, -len * 0.55, wid * 0.35, len * 0.18, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+      coty(-0.95, 16, 6.2);
+      coty(0.85, 14.5, 5.6);
+    }
+    ctx.restore();
+  }
+
+  function drawCloud(c, time) {
+    const x = c.x + Math.sin(time * 0.075 + c.phase) * 28;
+    const y = c.y + Math.sin(time * 0.11 + c.phase * 1.3) * 7;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(c.s, c.s * 0.72);
+    ctx.globalAlpha = c.a;
+    ctx.fillStyle = '#fffaf7';
+    const puffs = [[0, 0, 46], [38, 8, 34], [-40, 10, 32], [18, -18, 28], [-16, -14, 24]];
+    for (const p of puffs) {
+      ctx.beginPath();
+      ctx.arc(p[0], p[1], p[2], 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawFalling(p) {
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.rot);
+    const flip = Math.cos(p.phase);
+    ctx.scale(0.28 + 0.72 * Math.abs(flip), 1);
+    ctx.globalAlpha = 0.94;
+    ctx.fillStyle = p.color;
+    petalPath(ctx, p.size, p.size * 0.42);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawGrounded(p) {
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.rotFlat);
+    ctx.scale(1, 0.34);
+    ctx.globalAlpha = 0.92;
+    ctx.fillStyle = p.ground;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, p.size * 0.52, p.size * 0.4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  let dpr = 1;
+  let seenCycle = 0;
+  let time = 0;
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.max(1, window.innerWidth);
+    const h = Math.max(1, window.innerHeight);
+    canvas.width = Math.max(1, Math.round(w * dpr));
+    canvas.height = Math.max(1, Math.round(h * dpr));
+  }
+
+  function draw(timeNow, dt) {
+    ctx.globalAlpha = 1;
+    const cssW = Math.max(1, window.innerWidth);
+    const cssH = Math.max(1, window.innerHeight);
+    const scale = Math.min(cssW, cssH) / DESIGN;
+    const ox = (cssW - DESIGN * scale) / 2;
+    const oy = (cssH - DESIGN * scale) / 2;
+    const extraX = ox / scale + 80;
+    const extraY = oy / scale + 80;
+
+    const cycle = Math.floor(timeNow / LOOP);
+    const u = timeNow - cycle * LOOP;
+    if (cycle !== seenCycle) {
+      seenCycle = cycle;
+      resetCycle();
+    }
+
+    const wN = windN(u);
+    const wVel = windV(u);
+    const gust = gustFactor(u);
+    layout(u, timeNow, wN);
+    placeAll();
+    if (dt > 0) updateParticles(u, dt, wVel, gust);
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const sky = ctx.createLinearGradient(0, 0, 0, cssH);
+    sky.addColorStop(0, '#7eb6e4');
+    sky.addColorStop(0.28, '#c5dff0');
+    sky.addColorStop(0.52, '#f6d6e4');
+    sky.addColorStop(0.74, '#ffe9d8');
+    sky.addColorStop(1, '#d7e7cf');
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, cssW, cssH);
+
+    const sunX = ox + 176 * scale;
+    const sunY = oy + 148 * scale;
+    const sunR = 250 * scale;
+    const sun = ctx.createRadialGradient(sunX, sunY, 8 * scale, sunX, sunY, sunR);
+    sun.addColorStop(0, 'rgba(255, 252, 240, 0.98)');
+    sun.addColorStop(0.18, 'rgba(255, 226, 190, 0.55)');
+    sun.addColorStop(0.5, 'rgba(255, 206, 186, 0.16)');
+    sun.addColorStop(1, 'rgba(255, 206, 186, 0)');
+    ctx.fillStyle = sun;
+    ctx.beginPath();
+    ctx.arc(sunX, sunY, sunR, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * ox, dpr * oy);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    for (const c of clouds) drawCloud(c, timeNow);
+
+    function hill(yBase, amp, freq, phase, color) {
+      const left = -extraX;
+      const right = DESIGN + extraX;
+      const bottom = DESIGN + extraY;
+      ctx.beginPath();
+      ctx.moveTo(left, bottom);
+      ctx.lineTo(left, yBase);
+      for (let x = left; x <= right; x += 28) {
+        const y = yBase
+          + Math.sin(x * freq + phase) * amp
+          + Math.sin(x * freq * 0.41 + phase * 1.6) * amp * 0.4;
+        ctx.lineTo(x, y);
+      }
+      ctx.lineTo(right, bottom);
+      ctx.closePath();
+      ctx.fillStyle = color;
+      ctx.fill();
+    }
+    hill(688, 18, 0.008, 0.4, '#d3e4de');
+    hill(742, 16, 0.011, 1.8, '#b7cfc3');
+
+    const left = -extraX;
+    const right = DESIGN + extraX;
+    const bottom = DESIGN + extraY;
+    const ground = ctx.createLinearGradient(0, 760, 0, bottom);
+    ground.addColorStop(0, '#8fb888');
+    ground.addColorStop(0.28, '#6f9b6c');
+    ground.addColorStop(1, '#4e7c56');
+    ctx.beginPath();
+    ctx.moveTo(left, bottom);
+    for (let x = left; x <= right; x += 24) ctx.lineTo(x, groundY(x));
+    ctx.lineTo(right, bottom);
+    ctx.closePath();
+    ctx.fillStyle = ground;
+    ctx.fill();
+
+    const haze = ctx.createLinearGradient(0, 640, 0, 820);
+    haze.addColorStop(0, 'rgba(255,255,255,0)');
+    haze.addColorStop(0.45, 'rgba(255,248,244,0.18)');
+    haze.addColorStop(1, 'rgba(255,248,244,0)');
+    ctx.fillStyle = haze;
+    ctx.fillRect(left, 640, right - left, 180);
+
+    const glow = smoothstep(SHED0 - 5.5, SHED0 - 0.2, u) * (0.55 + 0.45 * (1 - smoothstep(SHED0, SHED1 + 1, u)));
+    if (glow > 0.02) {
+      const g = ctx.createRadialGradient(548, 470, 30, 540, 500, 390);
+      g.addColorStop(0, 'rgba(255, 186, 204, ' + (0.42 * glow) + ')');
+      g.addColorStop(1, 'rgba(255, 186, 204, 0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(540, 490, 390, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    const spot = 1 - smoothstep(1.2, 3.4, u);
+    if (spot > 0.02) {
+      const sg = ctx.createRadialGradient(ROOT_X, ROOT_Y - 20, 4, ROOT_X, ROOT_Y - 10, 90);
+      sg.addColorStop(0, 'rgba(255, 244, 220, ' + (0.55 * spot) + ')');
+      sg.addColorStop(1, 'rgba(255, 244, 220, 0)');
+      ctx.fillStyle = sg;
+      ctx.beginPath();
+      ctx.arc(ROOT_X, ROOT_Y - 10, 90, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.save();
+    ctx.translate(ROOT_X + 16, ROOT_Y + 4);
+    ctx.scale(1, 0.28);
+    const canopy = smoothstep(1.6, SHED0, u);
+    ctx.fillStyle = 'rgba(48, 36, 24, ' + (0.08 + 0.12 * canopy) + ')';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 70 + 180 * canopy, 70 + 180 * canopy, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    for (const gr of grasses) {
+      if (gr.front) continue;
+      const gy = groundY(gr.x);
+      const sway = Math.sin(timeNow * 1.35 + gr.phase) * (2.2 + wN * 5.5);
+      ctx.beginPath();
+      ctx.moveTo(gr.x, gy + 2);
+      ctx.quadraticCurveTo(gr.x + sway * 0.4, gy - gr.h * 0.55, gr.x + sway, gy - gr.h);
+      ctx.strokeStyle = gr.col;
+      ctx.lineWidth = gr.w;
+      ctx.stroke();
+    }
+
+    for (const pb of pebbles) {
+      ctx.save();
+      ctx.translate(pb.x, pb.y);
+      ctx.rotate(pb.rot);
+      ctx.fillStyle = '#8d7a68';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, pb.rx, pb.ry, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.25)';
+      ctx.beginPath();
+      ctx.ellipse(-pb.rx * 0.25, -pb.ry * 0.3, pb.rx * 0.3, pb.ry * 0.25, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    for (let i = 0; i < parts.length; i++) {
+      const p = parts[i];
+      if (p.grounded && p.y < ROOT_Y + 8) drawGrounded(p);
+    }
+
+    const carpet = clamp(groundedCount / 160, 0, 1) * smoothstep(SHED0, SHED0 + 3, u);
+    if (carpet > 0.03) {
+      ctx.save();
+      ctx.translate(600, groundY(600) + 2);
+      ctx.scale(1, 0.22);
+      ctx.fillStyle = 'rgba(214, 120, 142, ' + (0.2 * carpet) + ')';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 250, 250, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    drawRoots(easeOutCubic(clamp((u - 1.2) / 1.8, 0, 1)));
+
+    ctx.fillStyle = '#6b4632';
+    ctx.beginPath();
+    ctx.ellipse(ROOT_X, ROOT_Y - 8, 74, 20, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#8a5b42';
+    ctx.beginPath();
+    ctx.ellipse(ROOT_X - 8, ROOT_Y - 14, 46, 11, -0.1, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(90, 50, 30, 0.35)';
+    ctx.beginPath();
+    ctx.ellipse(ROOT_X + 10, ROOT_Y - 4, 40, 8, 0.2, 0, Math.PI * 2);
+    ctx.fill();
+
+    drawSeed(u);
+    drawSprout(u, segs[0].g);
+
+    drawBranches((s) => s.gen <= 2);
+    flowersBack.sort((a, b) => a.y - b.y);
+    for (const f of flowersBack) drawFlower(f, u, wN, timeNow);
+    drawBranches((s) => s.gen > 2 && s.gen < 5);
+    for (const lf of leaves) drawLeaf(lf, u);
+    flowersFront.sort((a, b) => a.y - b.y);
+    for (const f of flowersFront) drawFlower(f, u, wN, timeNow);
+    drawBranches((s) => s.gen >= 5);
+
+    for (const gr of grasses) {
+      if (!gr.front) continue;
+      const gy = groundY(gr.x);
+      const sway = Math.sin(timeNow * 1.35 + gr.phase) * (2.2 + wN * 5.5);
+      ctx.beginPath();
+      ctx.moveTo(gr.x, gy + 2);
+      ctx.quadraticCurveTo(gr.x + sway * 0.45, gy - gr.h * 0.5, gr.x + sway, gy - gr.h);
+      ctx.strokeStyle = gr.col;
+      ctx.lineWidth = gr.w;
+      ctx.stroke();
+    }
+
+    for (let i = 0; i < parts.length; i++) {
+      const p = parts[i];
+      if (p.grounded && p.y >= ROOT_Y + 8) drawGrounded(p);
+      else if (!p.grounded) drawFalling(p);
+    }
+
+    const fg = ctx.createLinearGradient(0, 930, 0, bottom);
+    fg.addColorStop(0, 'rgba(36, 68, 42, 0)');
+    fg.addColorStop(1, 'rgba(28, 58, 36, 0.28)');
+    ctx.fillStyle = fg;
+    ctx.fillRect(left, 930, right - left, bottom - 930);
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const vig = ctx.createRadialGradient(cssW * 0.5, cssH * 0.48, Math.min(cssW, cssH) * 0.34, cssW * 0.5, cssH * 0.5, Math.max(cssW, cssH) * 0.72);
+    vig.addColorStop(0, 'rgba(40, 24, 32, 0)');
+    vig.addColorStop(1, 'rgba(48, 28, 36, 0.2)');
+    ctx.fillStyle = vig;
+    ctx.fillRect(0, 0, cssW, cssH);
+
+    let fadeA = 0;
+    if (u > LOOP - FADE) fadeA = (u - (LOOP - FADE)) / FADE;
+    else if (cycle > 0 && u < 0.85) fadeA = 1 - u / 0.85;
+    if (fadeA > 0.004) {
+      ctx.fillStyle = 'rgba(255, 236, 228, ' + fadeA + ')';
+      ctx.fillRect(0, 0, cssW, cssH);
+    }
+  }
+
+  resize();
+  window.addEventListener('resize', () => { resize(); draw(time, 0); });
+  draw(0, 0);
+  let last = performance.now();
+  function loop(now) {
+    let dt = (now - last) / 1000;
+    last = now;
+    if (dt > 0.05) dt = 0.05;
+    if (dt < 0) dt = 0;
+    time += dt;
+    draw(time, dt);
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

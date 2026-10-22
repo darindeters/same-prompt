@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Double Pendulum Chaos</title>
+<style>
+  *, *::before, *::after {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #06070d;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+
+  // Offscreen canvas for long-exposure tip trails
+  const trailCanvas = document.createElement('canvas');
+  const trailCtx = trailCanvas.getContext('2d');
+
+  // Offscreen canvas for cached static vignette + background atmosphere
+  const bgCanvas = document.createElement('canvas');
+  const bgCtx = bgCanvas.getContext('2d');
+
+  let width = 0;
+  let height = 0;
+  let dpr = 1;
+  let cx = 0;
+  let cy = 0;
+  let armLength = 0;
+
+  // Physics constants (dimensionless scaled lengths L1 = L2 = 1.0, M1 = M2 = 1.0)
+  const N = 100;
+  const G = 9.81;
+  const SUBSTEPS = 8;
+  const BASE_DT = (1 / 60) * 1.45; // crisp, lively chaotic evolution
+
+  // Initial configuration: high energy, asymmetric poise above horizontal
+  // Guarantees dramatic flips and rapid Lyapunov divergence after ~3.5 seconds
+  const THETA1_0 = Math.PI * 0.76;
+  const THETA2_0 = Math.PI * 0.62;
+  const SPREAD = 0.0005; // tiny initial spread across the 100 pendulums
+
+  // State arrays for 100 pendulums
+  const th1 = new Float64Array(N);
+  const th2 = new Float64Array(N);
+  const w1 = new Float64Array(N);
+  const w2 = new Float64Array(N);
+
+  // Previous and current tip coordinates (normalized to unit arm length)
+  const prevX2 = new Float64Array(N);
+  const prevY2 = new Float64Array(N);
+  const currX1 = new Float64Array(N);
+  const currY1 = new Float64Array(N);
+  const currX2 = new Float64Array(N);
+  const currY2 = new Float64Array(N);
+
+  // Precomputed luminous spectral palette (smooth rainbow fan from cyan -> violet -> magenta -> gold)
+  const armColors = new Array(N);
+  const trailColors = new Array(N);
+  const tipColors = new Array(N);
+  const jointColors = new Array(N);
+
+  for (let i = 0; i < N; i++) {
+    const t = i / (N - 1);
+    // Sweep hue smoothly across a rich spectrum (185° cyan-blue through 360° magenta-red to 52° warm gold)
+    const hue = (185 + t * 227) % 360;
+    armColors[i] = `hsla(${hue.toFixed(1)}, 92%, 64%, 0.24)`;
+    trailColors[i] = `hsla(${hue.toFixed(1)}, 96%, 62%, 0.42)`;
+    tipColors[i] = `hsla(${hue.toFixed(1)}, 100%, 74%, 0.72)`;
+    jointColors[i] = `hsla(${hue.toFixed(1)}, 88%, 68%, 0.16)`;
+  }
+
+  // Initialize pendulum states
+  for (let i = 0; i < N; i++) {
+    const offset = ((i / (N - 1)) - 0.5) * SPREAD;
+    th1[i] = THETA1_0 + offset;
+    th2[i] = THETA2_0 + offset * 0.5;
+    w1[i] = 0;
+    w2[i] = 0;
+
+    const x1 = Math.sin(th1[i]);
+    const y1 = Math.cos(th1[i]);
+    const x2 = x1 + Math.sin(th2[i]);
+    const y2 = y1 + Math.cos(th2[i]);
+
+    currX1[i] = x1;
+    currY1[i] = y1;
+    currX2[i] = x2;
+    currY2[i] = y2;
+    prevX2[i] = x2;
+    prevY2[i] = y2;
+  }
+
+  // Exact Lagrangian equations of motion for equal masses (m1 = m2 = 1) and equal lengths (L1 = L2 = 1)
+  function derivatives(t1, t2, o1, o2, out) {
+    const delta = t1 - t2;
+    const sinD = Math.sin(delta);
+    const cosD = Math.cos(delta);
+    const denom = 2 - cosD * cosD;
+
+    const num1 =
+      -G * (2 * Math.sin(t1) - Math.sin(t2) * cosD) -
+      sinD * (o2 * o2 + o1 * o1 * cosD);
+
+    const num2 =
+      G * (2 * Math.sin(t1) * cosD - 2 * Math.sin(t2)) +
+      sinD * (2 * o1 * o1 + o2 * o2 * cosD);
+
+    out[0] = o1;
+    out[1] = o2;
+    out[2] = num1 / denom;
+    out[3] = num2 / denom;
+  }
+
+  const k1 = new Float64Array(4);
+  const k2 = new Float64Array(4);
+  const k3 = new Float64Array(4);
+  const k4 = new Float64Array(4);
+
+  function stepPhysics(dt) {
+    const subDt = dt / SUBSTEPS;
+    const halfDt = subDt * 0.5;
+    const sixthDt = subDt / 6;
+
+    for (let i = 0; i < N; i++) {
+      prevX2[i] = currX2[i];
+      prevY2[i] = currY2[i];
+
+      let t1 = th1[i];
+      let t2 = th2[i];
+      let o1 = w1[i];
+      let o2 = w2[i];
+
+      for (let s = 0; s < SUBSTEPS; s++) {
+        derivatives(t1, t2, o1, o2, k1);
+
+        derivatives(
+          t1 + halfDt * k1[0],
+          t2 + halfDt * k1[1],
+          o1 + halfDt * k1[2],
+          o2 + halfDt * k1[3],
+          k2
+        );
+
+        derivatives(
+          t1 + halfDt * k2[0],
+          t2 + halfDt * k2[1],
+          o1 + halfDt * k2[2],
+          o2 + halfDt * k2[3],
+          k3
+        );
+
+        derivatives(
+          t1 + subDt * k3[0],
+          t2 + subDt * k3[1],
+          o1 + subDt * k3[2],
+          o2 + subDt * k3[3],
+          k4
+        );
+
+        t1 += sixthDt * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0]);
+        t2 += sixthDt * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1]);
+        o1 += sixthDt * (k1[2] + 2 * k2[2] + 2 * k3[2] + k4[2]);
+        o2 += sixthDt * (k1[3] + 2 * k2[3] + 2 * k3[3] + k4[3]);
+      }
+
+      th1[i] = t1;
+      th2[i] = t2;
+      w1[i] = o1;
+      w2[i] = o2;
+
+      const x1 = Math.sin(t1);
+      const y1 = Math.cos(t1);
+      currX1[i] = x1;
+      currY1[i] = y1;
+      currX2[i] = x1 + Math.sin(t2);
+      currY2[i] = y1 + Math.cos(t2);
+    }
+  }
+
+  function buildBackground() {
+    bgCtx.save();
+    bgCtx.setTransform(1, 0, 0, 1, 0, 0);
+    bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
+
+    const w = bgCanvas.width;
+    const h = bgCanvas.height;
+    const centerX = w * 0.5;
+    const centerY = h * 0.5;
+    const maxR = Math.hypot(centerX, centerY);
+
+    // Subtle deep radial gradient
+    const grad = bgCtx.createRadialGradient(centerX, centerY, 0, centerX, centerY, maxR);
+    grad.addColorStop(0.0, '#0d101f');
+    grad.addColorStop(0.55, '#070912');
+    grad.addColorStop(1.0, '#030408');
+    bgCtx.fillStyle = grad;
+    bgCtx.fillRect(0, 0, w, h);
+
+    // Delicate maximum reach boundary rings (1L and 2L)
+    const rPx = armLength * dpr;
+    bgCtx.strokeStyle = 'rgba(255, 255, 255, 0.025)';
+    bgCtx.lineWidth = 1 * dpr;
+
+    bgCtx.beginPath();
+    bgCtx.arc(centerX, centerY, rPx * 2, 0, Math.PI * 2);
+    bgCtx.stroke();
+
+    bgCtx.beginPath();
+    bgCtx.arc(centerX, centerY, rPx, 0, Math.PI * 2);
+    bgCtx.stroke();
+
+    bgCtx.restore();
+  }
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    width = window.innerWidth;
+    height = window.innerHeight;
+
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+
+    trailCanvas.width = canvas.width;
+    trailCanvas.height = canvas.height;
+
+    bgCanvas.width = canvas.width;
+    bgCanvas.height = canvas.height;
+
+    cx = width * 0.5;
+    cy = height * 0.5;
+
+    // 2 * armLength fits comfortably inside the shortest viewport dimension (with ~11% margin around the 2L circle)
+    const minDim = Math.min(width, height);
+    armLength = minDim * 0.222;
+
+    buildBackground();
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+
+  function render() {
+    stepPhysics(BASE_DT);
+
+    // 1. Update persistent trail canvas with gentle fade
+    trailCtx.save();
+    trailCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    trailCtx.globalCompositeOperation = 'destination-out';
+    trailCtx.fillStyle = 'rgba(0, 0, 0, 0.018)';
+    trailCtx.fillRect(0, 0, width, height);
+
+    trailCtx.globalCompositeOperation = 'lighter';
+    trailCtx.lineCap = 'round';
+    trailCtx.lineWidth = Math.max(1.3, armLength * 0.0085);
+
+    for (let i = 0; i < N; i++) {
+      const px = cx + prevX2[i] * armLength;
+      const py = cy + prevY2[i] * armLength;
+      const x2 = cx + currX2[i] * armLength;
+      const y2 = cy + currY2[i] * armLength;
+
+      trailCtx.strokeStyle = trailColors[i];
+      trailCtx.beginPath();
+      trailCtx.moveTo(px, py);
+      trailCtx.lineTo(x2, y2);
+      trailCtx.stroke();
+    }
+    trailCtx.restore();
+
+    // 2. Composite background and trail layers onto main canvas
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(bgCanvas, 0, 0);
+    ctx.globalCompositeOperation = 'screen';
+    ctx.drawImage(trailCanvas, 0, 0);
+    ctx.restore();
+
+    // 3. Draw pendulum arms, joints, and glowing tips
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    const rodWidth = Math.max(1.4, armLength * 0.0105);
+    const jointRadius = Math.max(1.8, armLength * 0.012);
+    const tipRadius = Math.max(2.4, armLength * 0.016);
+
+    ctx.lineWidth = rodWidth;
+
+    // Draw rods for all 100 pendulums
+    for (let i = 0; i < N; i++) {
+      const x1 = cx + currX1[i] * armLength;
+      const y1 = cy + currY1[i] * armLength;
+      const x2 = cx + currX2[i] * armLength;
+      const y2 = cy + currY2[i] * armLength;
+
+      ctx.strokeStyle = armColors[i];
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+
+    // Draw middle joints (m1) and outer bob tips (m2)
+    for (let i = 0; i < N; i++) {
+      const x1 = cx + currX1[i] * armLength;
+      const y1 = cy + currY1[i] * armLength;
+      const x2 = cx + currX2[i] * armLength;
+      const y2 = cy + currY2[i] * armLength;
+
+      ctx.fillStyle = jointColors[i];
+      ctx.beginPath();
+      ctx.arc(x1, y1, jointRadius, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = tipColors[i];
+      ctx.beginPath();
+      ctx.arc(x2, y2, tipRadius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Central pivot pin
+    const pivotGlow = ctx.createRadialGradient(cx, cy, 0, cx, cy, tipRadius * 3.5);
+    pivotGlow.addColorStop(0, 'rgba(255, 255, 255, 0.95)');
+    pivotGlow.addColorStop(0.35, 'rgba(200, 225, 255, 0.45)');
+    pivotGlow.addColorStop(1, 'rgba(200, 225, 255, 0)');
+    ctx.fillStyle = pivotGlow;
+    ctx.beginPath();
+    ctx.arc(cx, cy, tipRadius * 3.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>

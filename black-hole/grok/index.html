@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title></title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #000;
+    overflow: hidden;
+    color-scheme: dark;
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function () {
+  var canvas = document.getElementById("c");
+  var gl = canvas.getContext("webgl2", {
+    alpha: false,
+    antialias: false,
+    depth: false,
+    stencil: false,
+    powerPreference: "high-performance"
+  });
+  if (!gl) return;
+
+  var vsSrc = [
+    "#version 300 es",
+    "layout(location=0) in vec2 aPos;",
+    "out vec2 vUv;",
+    "void main() {",
+    "  vUv = aPos * 0.5 + 0.5;",
+    "  gl_Position = vec4(aPos, 0.0, 1.0);",
+    "}"
+  ].join("\n");
+
+  var marchSrc = [
+    "#version 300 es",
+    "precision highp float;",
+    "in vec2 vUv;",
+    "out vec4 fragColor;",
+    "uniform vec3 uCam;",
+    "uniform vec3 uFwd;",
+    "uniform vec3 uRight;",
+    "uniform vec3 uUp;",
+    "uniform vec2 uRes;",
+    "uniform float uFov;",
+    "uniform float uTime;",
+    "uniform float uTonemap;",
+    "",
+    "const float PI = 3.14159265;",
+    "const float RIN = 5.4;",
+    "const float ROUT = 18.0;",
+    "const float RS = 2.0;",
+    "const int MAX_STEPS = 460;",
+    "",
+    "float hash12(vec2 p) {",
+    "  vec3 p3 = fract(vec3(p.xyx) * 0.1031);",
+    "  p3 += dot(p3, p3.yzx + 33.33);",
+    "  return fract((p3.x + p3.y) * p3.z);",
+    "}",
+    "",
+    "vec3 skyColor(vec3 dir) {",
+    "  float a = uTime * 0.045;",
+    "  float cs = cos(a), sn = sin(a);",
+    "  vec3 d = vec3(cs * dir.x + sn * dir.z, dir.y, -sn * dir.x + cs * dir.z);",
+    "  float phi = atan(d.z, d.x);",
+    "  float theta = asin(clamp(d.y, -1.0, 1.0));",
+    "  float gx = 560.0;",
+    "  vec2 p = vec2((phi + PI) / (2.0 * PI), (theta + PI * 0.5) / PI);",
+    "  p *= vec2(gx, 280.0);",
+    "  vec2 ip = floor(p);",
+    "  vec3 col = vec3(0.0);",
+    "  for (int j = -1; j <= 1; j++) {",
+    "    for (int i = -1; i <= 1; i++) {",
+    "      vec2 cell = ip + vec2(float(i), float(j));",
+    "      vec2 hid = vec2(mod(cell.x, gx), cell.y);",
+    "      float h = hash12(hid);",
+    "      if (h > 0.965) {",
+    "        vec2 jitter = vec2(hash12(hid + 1.7), hash12(hid + 8.2));",
+    "        vec2 dp = p - (cell + jitter);",
+    "        dp.x -= gx * floor(dp.x / gx + 0.5);",
+    "        float dist2 = dot(dp, dp);",
+    "        float mag = (h - 0.965) / 0.035;",
+    "        float sz = 0.01 + mag * mag * 0.06;",
+    "        float core = exp(-dist2 / (sz * sz));",
+    "        float spike = 0.0;",
+    "        if (h > 0.993) {",
+    "          spike = (exp(-abs(dp.x) * 15.0) * exp(-dp.y * dp.y * 32.0)",
+    "                 + exp(-abs(dp.y) * 15.0) * exp(-dp.x * dp.x * 32.0)) * mag * 0.6;",
+    "        }",
+    "        float th = hash12(hid + 3.1);",
+    "        vec3 tint = vec3(0.88, 0.92, 1.0);",
+    "        if (th > 0.74) tint = vec3(1.0, 0.90, 0.76);",
+    "        else if (th < 0.16) tint = vec3(0.68, 0.78, 1.0);",
+    "        float tw = 0.9 + 0.1 * sin(uTime * (1.2 + h * 5.0) + h * 30.0);",
+    "        col += tint * (0.45 + mag * 3.4) * (core + spike) * tw;",
+    "      }",
+    "    }",
+    "  }",
+    "  vec3 axis = normalize(vec3(0.2, 0.72, 0.66));",
+    "  float lat = dot(d, axis);",
+    "  float band = exp(-lat * lat * 55.0);",
+    "  float lon = atan(d.x, d.z);",
+    "  float cloud = 0.5 + 0.5 * sin(lon * 5.0 + d.y * 4.0) * sin(lon * 11.0 - 1.3);",
+    "  col += vec3(0.16, 0.15, 0.28) * band * (0.4 + cloud) * 0.85;",
+    "  col += vec3(0.003, 0.004, 0.01);",
+    "  return col;",
+    "}",
+    "",
+    "vec3 heatColor(float t) {",
+    "  float r = smoothstep(0.02, 0.4, t);",
+    "  float g = smoothstep(0.25, 1.0, t);",
+    "  float b = smoothstep(0.78, 1.65, t);",
+    "  vec3 c = vec3(r, g, b);",
+    "  float w = smoothstep(1.15, 2.4, t);",
+    "  return c * (1.0 - w) + vec3(w, w * 0.97, w * 0.92);",
+    "}",
+    "",
+    "vec3 shadeDisk(float rho, float phi, float dop) {",
+    "  float beta = sqrt(clamp(1.0 / rho, 0.0, 0.64));",
+    "  float gamma = 1.0 / sqrt(1.0 - beta * beta);",
+    "  float D = 1.0 / (gamma * (1.0 - beta * clamp(dop, -0.98, 0.98)));",
+    "  D = clamp(D, 0.25, 3.2);",
+    "  float grav = sqrt(max(1.0 - RS / rho, 0.05));",
+    "  float g = D * grav;",
+    "  float om = sqrt(1.0 / (rho * rho * rho));",
+    "  float p1 = phi - uTime * om * 6.5;",
+    "  float n1 = 0.5 + 0.5 * sin(p1 * 5.0 + rho * 0.55);",
+    "  float n2 = 0.5 + 0.5 * sin(p1 * 13.0 - rho * 1.35 + 1.7);",
+    "  float n3 = 0.5 + 0.5 * sin(p1 * 22.0 + rho * 2.2);",
+    "  float turb = 0.4 + 0.6 * (n1 * 0.5 + n2 * 0.32 + n3 * 0.18);",
+    "  turb *= 0.8 + 0.2 * sin(2.0 * (phi - uTime * 0.16) - log(rho / RIN) * 5.2);",
+    "  float edgeIn = smoothstep(RIN - 0.15, RIN + 0.5, rho);",
+    "  float edgeOut = smoothstep(ROUT, ROUT - 3.2, rho);",
+    "  float rim = exp(-pow((rho - (RIN + 0.4)) / 0.75, 2.0));",
+    "  float heat = pow(RIN / rho, 1.9) * (1.0 + 1.2 * rim);",
+    "  float temp = heat * g * 0.95;",
+    "  float intensity = heat * turb * edgeIn * edgeOut * pow(g, 1.35) * 1.7;",
+    "  return heatColor(temp) * intensity;",
+    "}",
+    "",
+    "void main() {",
+    "  float aspect = uRes.x / uRes.y;",
+    "  vec2 ndc = vUv * 2.0 - 1.0;",
+    "  ndc.x *= aspect;",
+    "  vec3 dir = normalize(uFwd + (ndc.x * uRight + ndc.y * uUp) * uFov);",
+    "  float r0 = length(uCam);",
+    "  vec3 e_r = uCam / r0;",
+    "  float s = dot(dir, e_r);",
+    "  float b = length(cross(uCam, dir));",
+    "  if (b < 0.05 && s < 0.0) {",
+    "    fragColor = vec4(0.0, 0.0, 0.0, 1.0);",
+    "    return;",
+    "  }",
+    "  float u = 1.0 / r0;",
+    "  float du = -s / b;",
+    "  float psi = 0.0;",
+    "  float minR = r0;",
+    "  vec3 tang = normalize(dir - e_r * s);",
+    "  vec3 col = vec3(0.0);",
+    "  float tau = 0.0;",
+    "  vec3 prev = uCam;",
+    "  bool escaped = false;",
+    "  vec3 escDir = vec3(0.0);",
+    "  for (int step = 0; step < MAX_STEPS; step++) {",
+    "    float r = 1.0 / max(u, 1e-8);",
+    "    if (r < minR) minR = r;",
+    "    if (u > 0.485) break;",
+    "    if (du < 0.0 && r > ROUT + 2.0) {",
+    "      float drd = -du / (u * u);",
+    "      vec3 e_rho = cos(psi) * e_r + sin(psi) * tang;",
+    "      vec3 e_phi = -sin(psi) * e_r + cos(psi) * tang;",
+    "      escDir = normalize(drd * e_rho + r * e_phi);",
+    "      escaped = true;",
+    "      break;",
+    "    }",
+    "    float dphi = clamp(0.42 / r, 0.007, 0.038);",
+    "    float rp = length(prev.xy);",
+    "    if (rp > RIN - 1.2 && rp < ROUT + 1.0 && abs(prev.z) < 2.2) dphi = min(dphi, 0.0075);",
+    "    if (r < 6.5) dphi = min(dphi, 0.009);",
+    "    du += u * (3.0 * u - 1.0) * dphi;",
+    "    u += du * dphi;",
+    "    psi += dphi;",
+    "    if (u <= 0.0008 && du < 0.0) {",
+    "      float uu = max(u, 1e-4);",
+    "      float rr = 1.0 / uu;",
+    "      float drd = -du / (uu * uu);",
+    "      vec3 e_rho = cos(psi) * e_r + sin(psi) * tang;",
+    "      vec3 e_phi = -sin(psi) * e_r + cos(psi) * tang;",
+    "      escDir = normalize(drd * e_rho + rr * e_phi);",
+    "      escaped = true;",
+    "      break;",
+    "    }",
+    "    vec3 erho = cos(psi) * e_r + sin(psi) * tang;",
+    "    vec3 pos = erho / max(u, 1e-6);",
+    "    float rho = length(pos.xy);",
+    "    if (u > 0.0 && rho > RIN && rho < ROUT) {",
+    "      float h = 0.2 + 0.06 * min(rho, 12.0);",
+    "      if (abs(pos.z) < h * 4.0) {",
+    "        float dens = exp(-(pos.z * pos.z) / (2.0 * h * h));",
+    "        float stepLen = max(r, 3.0) * dphi;",
+    "        float phi = atan(pos.y, pos.x);",
+    "        float drd = -du / (u * u);",
+    "        vec3 e_phi = -sin(psi) * e_r + cos(psi) * tang;",
+    "        vec3 T = drd * erho + e_phi / u;",
+    "        vec3 photon = -normalize(T);",
+    "        float dop = dot(vec3(-sin(phi), cos(phi), 0.0), photon);",
+    "        vec3 em = shadeDisk(rho, phi, dop);",
+    "        float trans = exp(-tau);",
+    "        col += em * dens * stepLen * trans * 1.25;",
+    "        tau += dens * stepLen * 1.05;",
+    "        if (tau > 7.5) break;",
+    "      }",
+    "    }",
+    "    prev = pos;",
+    "    if (u > 0.485) break;",
+    "  }",
+    "  if (escaped) {",
+    "    float trans = exp(-tau);",
+    "    col += skyColor(escDir) * trans;",
+    "    float pr = exp(-pow((minR - 3.05) / 0.17, 2.0));",
+    "    col += vec3(1.05, 0.84, 0.58) * pr * trans * 0.45;",
+    "  }",
+    "  col = min(max(col, vec3(0.0)), vec3(12.0));",
+    "  if (any(isnan(col))) col = vec3(0.0);",
+    "  if (uTonemap > 0.5) {",
+    "    col *= 1.2;",
+    "    col = clamp((col * (2.51 * col + 0.03)) / (col * (2.43 * col + 0.59) + 0.14), 0.0, 1.0);",
+    "    col = pow(col, vec3(1.0 / 2.2));",
+    "  }",
+    "  fragColor = vec4(col, 1.0);",
+    "}"
+  ].join("\n");
+
+  var extractSrc = [
+    "#version 300 es",
+    "precision highp float;",
+    "in vec2 vUv;",
+    "out vec4 fragColor;",
+    "uniform sampler2D uTex;",
+    "void main() {",
+    "  vec3 c = texture(uTex, vUv).rgb;",
+    "  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));",
+    "  float k = max(l - 0.7, 0.0) / max(l, 1e-4);",
+    "  fragColor = vec4(c * k, 1.0);",
+    "}"
+  ].join("\n");
+
+  var blurSrc = [
+    "#version 300 es",
+    "precision highp float;",
+    "in vec2 vUv;",
+    "out vec4 fragColor;",
+    "uniform sampler2D uTex;",
+    "uniform vec2 uDir;",
+    "void main() {",
+    "  vec3 acc = texture(uTex, vUv).rgb * 0.227027;",
+    "  acc += texture(uTex, vUv + uDir * 1.0).rgb * 0.1945946;",
+    "  acc += texture(uTex, vUv - uDir * 1.0).rgb * 0.1945946;",
+    "  acc += texture(uTex, vUv + uDir * 2.0).rgb * 0.1216216;",
+    "  acc += texture(uTex, vUv - uDir * 2.0).rgb * 0.1216216;",
+    "  acc += texture(uTex, vUv + uDir * 3.0).rgb * 0.054054;",
+    "  acc += texture(uTex, vUv - uDir * 3.0).rgb * 0.054054;",
+    "  acc += texture(uTex, vUv + uDir * 4.0).rgb * 0.016216;",
+    "  acc += texture(uTex, vUv - uDir * 4.0).rgb * 0.016216;",
+    "  fragColor = vec4(acc, 1.0);",
+    "}"
+  ].join("\n");
+
+  var compositeSrc = [
+    "#version 300 es",
+    "precision highp float;",
+    "in vec2 vUv;",
+    "out vec4 fragColor;",
+    "uniform sampler2D uScene;",
+    "uniform sampler2D uTight;",
+    "uniform sampler2D uWide;",
+    "vec3 aces(vec3 x) {",
+    "  const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;",
+    "  return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);",
+    "}",
+    "void main() {",
+    "  vec3 col = texture(uScene, vUv).rgb;",
+    "  col += texture(uTight, vUv).rgb * 0.55;",
+    "  col += texture(uWide, vUv).rgb * 0.42;",
+    "  col *= 1.2;",
+    "  col = aces(col);",
+    "  col = pow(max(col, vec3(0.0)), vec3(1.0 / 2.2));",
+    "  vec2 ndc = vUv * 2.0 - 1.0;",
+    "  col *= 1.0 - 0.14 * dot(ndc, ndc);",
+    "  fragColor = vec4(col, 1.0);",
+    "}"
+  ].join("\n");
+
+  function compile(type, src) {
+    var shader = gl.createShader(type);
+    gl.shaderSource(shader, src);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(shader));
+      return null;
+    }
+    return shader;
+  }
+
+  function link(vs, fsSrc) {
+    var fs = compile(gl.FRAGMENT_SHADER, fsSrc);
+    if (!fs) return null;
+    var program = gl.createProgram();
+    gl.attachShader(program, vs);
+    gl.attachShader(program, fs);
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      console.error(gl.getProgramInfoLog(program));
+      return null;
+    }
+    return program;
+  }
+
+  var vs = compile(gl.VERTEX_SHADER, vsSrc);
+  var marchProg = link(vs, marchSrc);
+  var extractProg = link(vs, extractSrc);
+  var blurProg = link(vs, blurSrc);
+  var compositeProg = link(vs, compositeSrc);
+  if (!marchProg || !extractProg || !blurProg || !compositeProg) return;
+
+  var vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+    -1, -1, 1, -1, -1, 1, 1, 1
+  ]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+  var marchLoc = {
+    cam: gl.getUniformLocation(marchProg, "uCam"),
+    fwd: gl.getUniformLocation(marchProg, "uFwd"),
+    right: gl.getUniformLocation(marchProg, "uRight"),
+    up: gl.getUniformLocation(marchProg, "uUp"),
+    res: gl.getUniformLocation(marchProg, "uRes"),
+    fov: gl.getUniformLocation(marchProg, "uFov"),
+    time: gl.getUniformLocation(marchProg, "uTime"),
+    tonemap: gl.getUniformLocation(marchProg, "uTonemap")
+  };
+  var extractLoc = { tex: gl.getUniformLocation(extractProg, "uTex") };
+  var blurLoc = {
+    tex: gl.getUniformLocation(blurProg, "uTex"),
+    dir: gl.getUniformLocation(blurProg, "uDir")
+  };
+  var compositeLoc = {
+    scene: gl.getUniformLocation(compositeProg, "uScene"),
+    tight: gl.getUniformLocation(compositeProg, "uTight"),
+    wide: gl.getUniformLocation(compositeProg, "uWide")
+  };
+
+  var INCL = 58 * Math.PI / 180;
+  var DIST = 58;
+  var FOV = 0.34;
+  var cam = [Math.sin(INCL) * DIST, 0, Math.cos(INCL) * DIST];
+  var camLen = Math.hypot(cam[0], cam[1], cam[2]);
+  var fwd = [-cam[0] / camLen, -cam[1] / camLen, -cam[2] / camLen];
+  var wx = fwd[1] * 1 - fwd[2] * 0;
+  var wy = fwd[2] * 0 - fwd[0] * 1;
+  var wz = fwd[0] * 0 - fwd[1] * 0;
+  var rl = Math.hypot(wx, wy, wz) || 1;
+  var right = [wx / rl, wy / rl, wz / rl];
+  var ux = right[1] * fwd[2] - right[2] * fwd[1];
+  var uy = right[2] * fwd[0] - right[0] * fwd[2];
+  var uz = right[0] * fwd[1] - right[1] * fwd[0];
+  var up = [ux, uy, uz];
+  if (up[2] < 0) {
+    up = [-up[0], -up[1], -up[2]];
+    right = [-right[0], -right[1], -right[2]];
+  }
+
+  function makeTarget(w, h) {
+    var tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
+    var fb = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    var ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+    return { tex: tex, fb: fb, w: w, h: h, ok: ok };
+  }
+
+  function destroyTarget(t) {
+    if (!t) return;
+    gl.deleteFramebuffer(t.fb);
+    gl.deleteTexture(t.tex);
+  }
+
+  gl.getExtension("EXT_color_buffer_float");
+  gl.getExtension("OES_texture_float_linear");
+
+  var scene = null, extract = null, tmp = null, tight = null, wide = null;
+  var floatOK = true;
+  var viewW = 0, viewH = 0;
+
+  function rebuild() {
+    var dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    var w = Math.max(1, Math.floor(window.innerWidth * dpr));
+    var h = Math.max(1, Math.floor(window.innerHeight * dpr));
+    var cap = 1440;
+    var scale = Math.min(1, cap / Math.max(w, h));
+    w = Math.max(1, Math.floor(w * scale));
+    h = Math.max(1, Math.floor(h * scale));
+    if (w === viewW && h === viewH && scene) return;
+    viewW = w;
+    viewH = h;
+    canvas.width = w;
+    canvas.height = h;
+    destroyTarget(scene);
+    destroyTarget(extract);
+    destroyTarget(tmp);
+    destroyTarget(tight);
+    destroyTarget(wide);
+    var hw = Math.max(1, w >> 1);
+    var hh = Math.max(1, h >> 1);
+    scene = makeTarget(w, h);
+    extract = makeTarget(hw, hh);
+    tmp = makeTarget(hw, hh);
+    tight = makeTarget(hw, hh);
+    wide = makeTarget(hw, hh);
+    floatOK = scene.ok && extract.ok && tmp.ok && tight.ok && wide.ok;
+  }
+
+  function draw() {
+    gl.bindVertexArray(vao);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+
+  function blur(src, dst, dirx, diry) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fb);
+    gl.viewport(0, 0, dst.w, dst.h);
+    gl.useProgram(blurProg);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, src.tex);
+    gl.uniform1i(blurLoc.tex, 0);
+    gl.uniform2f(blurLoc.dir, dirx, diry);
+    draw();
+  }
+
+  var t0 = performance.now();
+
+  function frame(now) {
+    rebuild();
+    var time = (now - t0) * 0.001;
+    if (!floatOK) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, viewW, viewH);
+      gl.useProgram(marchProg);
+      gl.uniform3f(marchLoc.cam, cam[0], cam[1], cam[2]);
+      gl.uniform3f(marchLoc.fwd, fwd[0], fwd[1], fwd[2]);
+      gl.uniform3f(marchLoc.right, right[0], right[1], right[2]);
+      gl.uniform3f(marchLoc.up, up[0], up[1], up[2]);
+      gl.uniform2f(marchLoc.res, viewW, viewH);
+      gl.uniform1f(marchLoc.fov, FOV);
+      gl.uniform1f(marchLoc.time, time);
+      gl.uniform1f(marchLoc.tonemap, 1);
+      draw();
+      requestAnimationFrame(frame);
+      return;
+    }
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, scene.fb);
+    gl.viewport(0, 0, scene.w, scene.h);
+    gl.useProgram(marchProg);
+    gl.uniform3f(marchLoc.cam, cam[0], cam[1], cam[2]);
+    gl.uniform3f(marchLoc.fwd, fwd[0], fwd[1], fwd[2]);
+    gl.uniform3f(marchLoc.right, right[0], right[1], right[2]);
+    gl.uniform3f(marchLoc.up, up[0], up[1], up[2]);
+    gl.uniform2f(marchLoc.res, scene.w, scene.h);
+    gl.uniform1f(marchLoc.fov, FOV);
+    gl.uniform1f(marchLoc.time, time);
+    gl.uniform1f(marchLoc.tonemap, 0);
+    draw();
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, extract.fb);
+    gl.viewport(0, 0, extract.w, extract.h);
+    gl.useProgram(extractProg);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, scene.tex);
+    gl.uniform1i(extractLoc.tex, 0);
+    draw();
+
+    var sx = 1 / extract.w;
+    var sy = 1 / extract.h;
+    blur(extract, tmp, sx, 0);
+    blur(tmp, tight, 0, sy);
+    blur(tight, tmp, sx * 3.0, 0);
+    blur(tmp, wide, 0, sy * 3.0);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, viewW, viewH);
+    gl.useProgram(compositeProg);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, scene.tex);
+    gl.uniform1i(compositeLoc.scene, 0);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, tight.tex);
+    gl.uniform1i(compositeLoc.tight, 1);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, wide.tex);
+    gl.uniform1i(compositeLoc.wide, 2);
+    draw();
+
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

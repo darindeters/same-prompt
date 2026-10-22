@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#020307">
+<title>Black Hole</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #020307; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas aria-label="An animated black hole bending starlight around a luminous accretion disk"></canvas>
+<script>
+(() => {
+  'use strict';
+  const canvas = document.querySelector('canvas');
+  const gl = canvas.getContext('webgl', { alpha: false, antialias: false, depth: false, powerPreference: 'high-performance' });
+  if (!gl) { fallback(); return; }
+
+  const vertex = `
+    attribute vec2 position;
+    varying vec2 uv;
+    void main() { uv = position * .5 + .5; gl_Position = vec4(position, 0., 1.); }
+  `;
+  const scene = `
+    precision highp float;
+    varying vec2 uv;
+    uniform vec2 resolution;
+    uniform float time;
+    #define PI 3.14159265359
+    float hash(vec2 p) {
+      vec3 q = fract(vec3(p.xyx) * vec3(.1031,.1030,.0973));
+      q += dot(q, q.yzx + 33.33);
+      return fract((q.x + q.y) * q.z);
+    }
+    float noise(vec2 p) {
+      vec2 i = floor(p), f = fract(p); f = f*f*(3.-2.*f);
+      return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),
+                 mix(hash(i+vec2(0,1)),hash(i+1.),f.x),f.y);
+    }
+    float fbm(vec2 p) {
+      float n = .5*noise(p); p = mat2(.8,-.6,.6,.8)*p*2.03;
+      n += .25*noise(p); p = mat2(.8,-.6,.6,.8)*p*2.01;
+      return n + .125*noise(p);
+    }
+    vec3 starLayer(vec2 p, float scale, float threshold) {
+      p *= scale;
+      vec2 cell = floor(p), f = fract(p);
+      vec3 col = vec3(0.);
+      float pixel = max(resolution.x,resolution.y);
+      for (int y=-1;y<=1;y++) for (int x=-1;x<=1;x++) {
+        vec2 id = cell + vec2(float(x),float(y));
+        float seed = hash(id);
+        vec2 at = vec2(hash(id+19.3),hash(id+71.7));
+        vec2 d = f - vec2(float(x),float(y)) - at;
+        float radius = mix(.028,.085, pow(hash(id+8.),8.));
+        radius = max(radius, scale/pixel*.28);
+        float core = exp(-dot(d,d)/(radius*radius));
+        float halo = exp(-length(d)/(radius*3.5))*.055;
+        float brightness = pow(hash(id+4.7),5.)*2.8+.25;
+        vec3 tint = mix(vec3(.48,.65,1.),vec3(1.,.77,.52),hash(id+3.));
+        col += (core+halo)*tint*brightness*step(threshold,seed);
+      }
+      return col;
+    }
+    vec3 sky(vec3 d) {
+      vec2 p = vec2(atan(d.z,d.x)/(2.*PI),asin(clamp(d.y,-1.,1.))/PI);
+      p += vec2(.11,.27);
+      float dust = fbm(p*13.);
+      float band = exp(-pow((p.y-.28 + .15*sin(p.x*6.)) * 7.,2.));
+      vec3 c = vec3(.0018,.003,.007);
+      c += vec3(.012,.017,.031)*band*pow(dust,2.);
+      c += starLayer(p,155.,.94);
+      c += starLayer(p+12.34,330.,.985)*.55;
+      return c;
+    }
+    vec3 disk(vec3 p, vec3 direction) {
+      float r = length(p.xz);
+      float a = atan(p.z,p.x);
+      float orbit = time*.24 / pow(r/3.,1.5);
+      vec2 flow = vec2(a-orbit,log(r)*3.);
+      // Advect the turbulent texture at the local Keplerian angular velocity.
+      float turbulence = fbm(vec2(cos(flow.x),sin(flow.x))*5. + vec2(r*2.7,r*.8));
+      float filaments = noise(vec2(r*33.+turbulence*3., sin(a-orbit)*3.));
+      float rings = .5+.5*sin(r*83.+turbulence*7.+sin(a*3.-orbit)*1.2);
+      float envelope = smoothstep(2.45,2.85,r) * (1.-smoothstep(5.7,7.4,r));
+      float heat = pow(3./r,2.15);
+      float texture = .42 + turbulence*.8 + filaments*.35 + rings*.2;
+      vec3 hot = mix(vec3(1.,.22,.035),vec3(1.,.80,.47),clamp(heat*.85,0.,1.));
+      hot = mix(hot,vec3(1.,.94,.81),pow(clamp(heat*.65,0.,1.),3.));
+      vec3 tangent = normalize(vec3(-p.z,0.,p.x));
+      float velocity = .58/sqrt(max(r-1.,.1));
+      float doppler = 1./(1.-dot(tangent,-direction)*velocity);
+      float beaming = pow(doppler,2.6);
+      return hot * envelope * heat * texture * beaming * 2.1;
+    }
+    void main() {
+      vec2 q = (uv*2.-1.) * resolution/min(resolution.x,resolution.y);
+      // A small roll gives the disk a natural diagonal across the frame.
+      q = mat2(.989,.148,-.148,.989)*q;
+      vec3 camera = vec3(0.,3.65,14.5);
+      vec3 forward = normalize(-camera);
+      vec3 right = vec3(1.,0.,0.);
+      vec3 up = cross(right,forward);
+      vec3 ray = normalize(forward + .61*(q.x*right+q.y*up));
+      vec3 p = camera, v = ray;
+      vec3 angular = cross(p,v);
+      float l2 = dot(angular,angular);
+      vec3 color = vec3(0.);
+      float transmission = 1.;
+      bool captured = false;
+      // Integrate null-ray curvature. Rays near the photon sphere can orbit
+      // the shadow, producing the secondary disk image and lensed stars.
+      for (int i=0;i<190;i++) {
+        float r = length(p);
+        if (r < 1.015) { captured = true; break; }
+        if (r > 29. && dot(p,v)>0.) break;
+        float stepSize = clamp(r*.105,.025,1.35);
+        vec3 acceleration = -1.5*l2*p/pow(r,5.);
+        vec3 next = p + v*stepSize + .5*acceleration*stepSize*stepSize;
+        float nr = length(next);
+        vec3 nextAcceleration = -1.5*l2*next/pow(max(nr,.6),5.);
+        v += .5*(acceleration+nextAcceleration)*stepSize;
+        if (p.y*next.y < 0.) {
+          vec3 hit = mix(p,next,p.y/(p.y-next.y));
+          float radius = length(hit.xz);
+          if (radius > 2.45 && radius < 7.4) {
+            float opacity = .94*smoothstep(2.45,2.65,radius)*(1.-smoothstep(6.7,7.4,radius));
+            color += transmission*disk(hit,normalize(v))*opacity;
+            transmission *= 1.-opacity;
+          }
+        }
+        p = next;
+      }
+      if (!captured) color += transmission*sky(normalize(v));
+      float vignette = 1.-.22*smoothstep(.35,1.55,length(q));
+      color *= vignette;
+      // Store gently compressed HDR; the final pass restores it before bloom.
+      gl_FragColor = vec4(color/(1.+color),1.);
+    }
+  `;
+  const blur = `
+    precision highp float;
+    varying vec2 uv;
+    uniform sampler2D source;
+    uniform vec2 direction;
+    uniform float extract;
+    vec3 sampleLight(vec2 p) {
+      vec3 c = texture2D(source,p).rgb;
+      if (extract > .5) { c = c/max(vec3(.035),1.-c); c = max(c-.55,0.)*.24; }
+      return c;
+    }
+    void main() {
+      vec3 c = sampleLight(uv)*.227027;
+      c += (sampleLight(uv+direction*1.384615)+sampleLight(uv-direction*1.384615))*.316216;
+      c += (sampleLight(uv+direction*3.230769)+sampleLight(uv-direction*3.230769))*.070270;
+      gl_FragColor = vec4(c,1.);
+    }
+  `;
+  const composite = `
+    precision highp float;
+    varying vec2 uv;
+    uniform sampler2D source;
+    uniform sampler2D glow;
+    uniform vec2 resolution;
+    float hash(vec2 p) { return fract(sin(dot(p,vec2(12.9898,78.233)))*43758.5453); }
+    void main() {
+      vec3 c = texture2D(source,uv).rgb;
+      c = c/max(vec3(.035),1.-c);
+      vec3 bloom = texture2D(glow,uv).rgb;
+      bloom += texture2D(glow,uv+vec2(.008,0.)).rgb*.25;
+      bloom += texture2D(glow,uv-vec2(.008,0.)).rgb*.25;
+      c += bloom*.95;
+      c = 1.-exp(-c*1.25);
+      c = pow(c,vec3(.454545));
+      c += (hash(uv*resolution)-.5)/255.;
+      gl_FragColor = vec4(c,1.);
+    }
+  `;
+  function program(fragment) {
+    function shader(type, text) {
+      const s = gl.createShader(type); gl.shaderSource(s,text); gl.compileShader(s);
+      if (!gl.getShaderParameter(s,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+      return s;
+    }
+    const p = gl.createProgram();
+    gl.attachShader(p,shader(gl.VERTEX_SHADER,vertex));
+    gl.attachShader(p,shader(gl.FRAGMENT_SHADER,fragment));
+    gl.bindAttribLocation(p,0,'position'); gl.linkProgram(p);
+    if (!gl.getProgramParameter(p,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    return p;
+  }
+  let main, bloom, final;
+  try { main = program(scene); bloom = program(blur); final = program(composite); }
+  catch (error) { console.error(error); fallback(); return; }
+  const buffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]),gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0);
+  function target() {
+    const texture = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,texture);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    const framebuffer = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER,framebuffer);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,texture,0);
+    return { texture, framebuffer, width: 1, height: 1 };
+  }
+  const full = target(), horizontal = target(), vertical = target();
+  function resize() {
+    const scale = Math.min(devicePixelRatio || 1, 1.5, 1400/Math.max(innerWidth,innerHeight));
+    canvas.width = Math.max(1,Math.round(innerWidth*scale));
+    canvas.height = Math.max(1,Math.round(innerHeight*scale));
+    for (const t of [full,horizontal,vertical]) {
+      const divisor = t===full ? 1 : 2;
+      t.width = Math.max(1,Math.floor(canvas.width/divisor));
+      t.height = Math.max(1,Math.floor(canvas.height/divisor));
+      gl.bindTexture(gl.TEXTURE_2D,t.texture);
+      gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,t.width,t.height,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
+    }
+  }
+  function use(p,t) {
+    gl.useProgram(p); gl.bindFramebuffer(gl.FRAMEBUFFER,t ? t.framebuffer : null);
+    gl.viewport(0,0,t ? t.width : canvas.width,t ? t.height : canvas.height);
+  }
+  function texture(p,name,t,unit) {
+    gl.activeTexture(gl.TEXTURE0+unit); gl.bindTexture(gl.TEXTURE_2D,t.texture);
+    gl.uniform1i(gl.getUniformLocation(p,name),unit);
+  }
+  function draw() { gl.drawArrays(gl.TRIANGLES,0,6); }
+  const start = performance.now();
+  function frame(now) {
+    use(main,full);
+    gl.uniform2f(gl.getUniformLocation(main,'resolution'),canvas.width,canvas.height);
+    gl.uniform1f(gl.getUniformLocation(main,'time'),(now-start)*.001); draw();
+    use(bloom,horizontal); texture(bloom,'source',full,0);
+    gl.uniform1f(gl.getUniformLocation(bloom,'extract'),1);
+    gl.uniform2f(gl.getUniformLocation(bloom,'direction'),3/full.width,0); draw();
+    use(bloom,vertical); texture(bloom,'source',horizontal,0);
+    gl.uniform1f(gl.getUniformLocation(bloom,'extract'),0);
+    gl.uniform2f(gl.getUniformLocation(bloom,'direction'),0,3/horizontal.height); draw();
+    use(final,null); texture(final,'source',full,0); texture(final,'glow',vertical,1);
+    gl.uniform2f(gl.getUniformLocation(final,'resolution'),canvas.width,canvas.height); draw();
+    requestAnimationFrame(frame);
+  }
+  addEventListener('resize',resize); resize(); requestAnimationFrame(frame);
+
+  function fallback() {
+    // Canvas remains animated on devices without a working WebGL context.
+    const replacement = document.createElement('canvas');
+    replacement.setAttribute('aria-label',canvas.getAttribute('aria-label'));
+    canvas.replaceWith(replacement);
+    const ctx = replacement.getContext('2d');
+    const stars = Array.from({length:700},() => [Math.random(),Math.random(),Math.random()]);
+    function paint(t) {
+      const w = replacement.width = innerWidth, h = replacement.height = innerHeight;
+      const s = Math.min(w,h), cx=w/2, cy=h/2;
+      ctx.fillStyle='#020307'; ctx.fillRect(0,0,w,h);
+      for (const [x,y,b] of stars) {
+        ctx.fillStyle=`rgba(190,210,255,${.25+b*.65})`;
+        ctx.fillRect(x*w,y*h,b*1.5+.4,b*1.5+.4);
+      }
+      ctx.save(); ctx.translate(cx,cy); ctx.rotate(-.15);
+      ctx.shadowColor='#ff9a36'; ctx.shadowBlur=s*.035;
+      for (let i=70;i>0;i--) {
+        ctx.beginPath(); ctx.ellipse(0,0,s*(.15+i*.003),s*(.035+i*.00065),0,0,Math.PI*2);
+        ctx.strokeStyle=`rgba(255,${140+i},80,${.15+.08*Math.sin(i*1.7-t*.0007)})`;
+        ctx.lineWidth=s*.002; ctx.stroke();
+      }
+      ctx.shadowBlur=s*.025; ctx.strokeStyle='#ffdc9d'; ctx.lineWidth=s*.005;
+      ctx.beginPath(); ctx.arc(0,0,s*.153,0,Math.PI*2); ctx.stroke();
+      ctx.shadowBlur=0; ctx.fillStyle='#000'; ctx.beginPath(); ctx.arc(0,0,s*.145,0,Math.PI*2); ctx.fill();
+      ctx.restore(); requestAnimationFrame(paint);
+    }
+    requestAnimationFrame(paint);
+  }
+})();
+</script>
+</body>
+</html>

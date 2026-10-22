@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Double Pendulums</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #04040a;
+    overflow: hidden;
+    color-scheme: dark;
+  }
+  canvas {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    touch-action: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<script>
+(() => {
+  const COUNT = 100;
+  const GRAVITY = 9.81;
+  const M1 = 1;
+  const M2 = 1;
+  const L1 = 1;
+  const L2 = 1;
+  const STEP = 0.002;
+  const RELEASE = Math.PI - 0.45;
+  const SPREAD = 0.0002;
+  const TRAIL_HALF_LIFE = 3;
+  const REACH = 0.45;
+  const TAU = Math.PI * 2;
+
+  const STOPS = [
+    [0.00, [64, 198, 255]],
+    [0.18, [132, 154, 255]],
+    [0.36, [206, 142, 255]],
+    [0.50, [255, 255, 255]],
+    [0.64, [255, 154, 196]],
+    [0.82, [255, 132, 124]],
+    [1.00, [255, 190, 112]]
+  ];
+
+  function colorAt(t) {
+    let i = 1;
+    while (i < STOPS.length - 1 && t > STOPS[i][0]) i++;
+    const left = STOPS[i - 1];
+    const right = STOPS[i];
+    const u = (t - left[0]) / (right[0] - left[0]);
+    return [
+      Math.round(left[1][0] + (right[1][0] - left[1][0]) * u),
+      Math.round(left[1][1] + (right[1][1] - left[1][1]) * u),
+      Math.round(left[1][2] + (right[1][2] - left[1][2]) * u)
+    ];
+  }
+
+  const mid = (COUNT - 1) / 2;
+  const order = [];
+  for (let i = 0; i < COUNT; i++) order.push(i);
+  order.sort((a, b) => Math.abs(b - mid) - Math.abs(a - mid));
+
+  const pendulums = order.map((index) => {
+    const along = index / (COUNT - 1);
+    const offset = ((index - mid) / mid) * SPREAD;
+    const rgb = colorAt(along);
+    return {
+      a1: RELEASE,
+      w1: 0,
+      a2: RELEASE + offset,
+      w2: 0,
+      css: "rgb(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + ")",
+      hasPrev: false,
+      x1: 0,
+      y1: 0,
+      x2: 0,
+      y2: 0,
+      px2: 0,
+      py2: 0
+    };
+  });
+
+  let scratchA1 = 0;
+  let scratchW1 = 0;
+  let scratchA2 = 0;
+  let scratchW2 = 0;
+
+  // Angles are measured from straight down, so zero hangs at rest.
+  function derive(a1, w1, a2, w2) {
+    const delta = a1 - a2;
+    const den = 2 * M1 + M2 - M2 * Math.cos(2 * a1 - 2 * a2);
+    const sinDelta = Math.sin(delta);
+    const cosDelta = Math.cos(delta);
+    const a1a = (
+      -GRAVITY * (2 * M1 + M2) * Math.sin(a1)
+      - M2 * GRAVITY * Math.sin(a1 - 2 * a2)
+      - 2 * sinDelta * M2 * (w2 * w2 * L2 + w1 * w1 * L1 * cosDelta)
+    ) / (L1 * den);
+    const a2a = (
+      2 * sinDelta * (
+        w1 * w1 * L1 * (M1 + M2)
+        + GRAVITY * (M1 + M2) * Math.cos(a1)
+        + w2 * w2 * L2 * M2 * cosDelta
+      )
+    ) / (L2 * den);
+    scratchA1 = w1;
+    scratchW1 = a1a;
+    scratchA2 = w2;
+    scratchW2 = a2a;
+  }
+
+  function integrate(p, h) {
+    derive(p.a1, p.w1, p.a2, p.w2);
+    const k1a = scratchA1, k1w = scratchW1, k1b = scratchA2, k1v = scratchW2;
+    const h2 = h * 0.5;
+    derive(p.a1 + k1a * h2, p.w1 + k1w * h2, p.a2 + k1b * h2, p.w2 + k1v * h2);
+    const k2a = scratchA1, k2w = scratchW1, k2b = scratchA2, k2v = scratchW2;
+    derive(p.a1 + k2a * h2, p.w1 + k2w * h2, p.a2 + k2b * h2, p.w2 + k2v * h2);
+    const k3a = scratchA1, k3w = scratchW1, k3b = scratchA2, k3v = scratchW2;
+    derive(p.a1 + k3a * h, p.w1 + k3w * h, p.a2 + k3b * h, p.w2 + k3v * h);
+    const k4a = scratchA1, k4w = scratchW1, k4b = scratchA2, k4v = scratchW2;
+    const s = h / 6;
+    p.a1 += (k1a + 2 * k2a + 2 * k3a + k4a) * s;
+    p.w1 += (k1w + 2 * k2w + 2 * k3w + k4w) * s;
+    p.a2 += (k1b + 2 * k2b + 2 * k3b + k4b) * s;
+    p.w2 += (k1v + 2 * k2v + 2 * k3v + k4v) * s;
+  }
+
+  const canvas = document.getElementById("stage");
+  const ctx = canvas.getContext("2d");
+  let front = document.createElement("canvas");
+  let back = document.createElement("canvas");
+  let fctx = front.getContext("2d");
+  let bctx = back.getContext("2d");
+
+  let cssW = 1;
+  let cssH = 1;
+  let dpr = 1;
+  let cx = 0;
+  let cy = 0;
+  let scale = 1;
+  let unit = 1;
+  let bgGrad = "#04040a";
+  let vigGrad = "rgba(0,0,0,0)";
+  let accumulator = 0;
+
+  function resize() {
+    const rect = canvas.getBoundingClientRect();
+    cssW = rect.width || window.innerWidth;
+    cssH = rect.height || window.innerHeight;
+    if (cssW < 2 || cssH < 2) return;
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const pxW = Math.max(1, Math.round(cssW * dpr));
+    const pxH = Math.max(1, Math.round(cssH * dpr));
+    const sizeChanged = canvas.width !== pxW || canvas.height !== pxH;
+    if (sizeChanged) {
+      canvas.width = pxW;
+      canvas.height = pxH;
+      front.width = pxW;
+      front.height = pxH;
+      back.width = pxW;
+      back.height = pxH;
+      for (let i = 0; i < COUNT; i++) pendulums[i].hasPrev = false;
+    }
+    cx = cssW * 0.5;
+    cy = cssH * 0.5;
+    const reach = Math.min(cssW, cssH) * REACH;
+    scale = reach / (L1 + L2);
+    unit = Math.min(cssW, cssH) / 1080;
+
+    bgGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(cssW, cssH) * 0.72);
+    bgGrad.addColorStop(0, "#141624");
+    bgGrad.addColorStop(0.48, "#090a12");
+    bgGrad.addColorStop(1, "#04040a");
+
+    const vigStart = reach * 1.04;
+    const vigEnd = Math.hypot(cssW, cssH) * 0.52;
+    vigGrad = ctx.createRadialGradient(cx, cy, vigStart, cx, cy, Math.max(vigEnd, vigStart + 1));
+    vigGrad.addColorStop(0, "rgba(0,0,0,0)");
+    vigGrad.addColorStop(1, "rgba(0,0,0,0.55)");
+    frame(0);
+  }
+
+  function advance(dt) {
+    accumulator += dt;
+    let steps = 0;
+    while (accumulator >= STEP && steps < 40) {
+      for (let i = 0; i < COUNT; i++) integrate(pendulums[i], STEP);
+      accumulator -= STEP;
+      steps++;
+    }
+    if (steps === 40) accumulator = 0;
+  }
+
+  function fadeTrails(keep) {
+    bctx.setTransform(1, 0, 0, 1, 0, 0);
+    bctx.globalCompositeOperation = "source-over";
+    bctx.globalAlpha = 1;
+    bctx.clearRect(0, 0, back.width, back.height);
+    bctx.globalAlpha = keep;
+    bctx.drawImage(front, 0, 0);
+    bctx.globalAlpha = 1;
+    const swapCanvas = front;
+    front = back;
+    back = swapCanvas;
+    const swapCtx = fctx;
+    fctx = bctx;
+    bctx = swapCtx;
+  }
+
+  function place() {
+    for (let i = 0; i < COUNT; i++) {
+      const p = pendulums[i];
+      const x1 = cx + scale * L1 * Math.sin(p.a1);
+      const y1 = cy + scale * L1 * Math.cos(p.a1);
+      p.x1 = x1;
+      p.y1 = y1;
+      p.x2 = x1 + scale * L2 * Math.sin(p.a2);
+      p.y2 = y1 + scale * L2 * Math.cos(p.a2);
+    }
+  }
+
+  function strokeTips(width, alpha) {
+    fctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    fctx.globalCompositeOperation = "lighter";
+    fctx.globalAlpha = alpha;
+    fctx.lineWidth = width;
+    fctx.lineCap = "round";
+    fctx.lineJoin = "round";
+    for (let i = 0; i < COUNT; i++) {
+      const p = pendulums[i];
+      if (!p.hasPrev) continue;
+      fctx.strokeStyle = p.css;
+      fctx.beginPath();
+      fctx.moveTo(p.px2, p.py2);
+      fctx.lineTo(p.x2, p.y2);
+      fctx.stroke();
+    }
+  }
+
+  function remember() {
+    for (let i = 0; i < COUNT; i++) {
+      const p = pendulums[i];
+      p.px2 = p.x2;
+      p.py2 = p.y2;
+      p.hasPrev = true;
+    }
+  }
+
+  function fillDot(x, y, r, color) {
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, TAU);
+    ctx.fillStyle = color;
+    ctx.fill();
+  }
+
+  function drawBodies() {
+    const arm = 1.8 * unit;
+    const jointR = 3.5 * unit;
+    const tipR = 4.8 * unit;
+    const pivotR = 3 * unit;
+
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = 0.9;
+    ctx.lineWidth = arm;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (let i = 0; i < COUNT; i++) {
+      const p = pendulums[i];
+      ctx.strokeStyle = p.css;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(p.x1, p.y1);
+      ctx.lineTo(p.x2, p.y2);
+      ctx.stroke();
+    }
+
+    ctx.globalAlpha = 1;
+    fillDot(cx, cy, pivotR, "#f4f6ff");
+    fillDot(cx - pivotR * 0.22, cy - pivotR * 0.28, pivotR * 0.34, "rgba(255,255,255,0.85)");
+
+    for (let i = 0; i < COUNT; i++) {
+      const p = pendulums[i];
+      fillDot(p.x1, p.y1, jointR, p.css);
+      fillDot(p.x1 - jointR * 0.26, p.y1 - jointR * 0.3, jointR * 0.34, "rgba(255,255,255,0.62)");
+    }
+    for (let i = 0; i < COUNT; i++) {
+      const p = pendulums[i];
+      fillDot(p.x2, p.y2, tipR, p.css);
+      fillDot(p.x2 - tipR * 0.26, p.y2 - tipR * 0.3, tipR * 0.36, "rgba(255,255,255,0.78)");
+    }
+  }
+
+  function frame(dt) {
+    if (cssW < 2 || cssH < 2) return;
+    if (dt > 0) {
+      advance(dt);
+      fadeTrails(Math.pow(0.5, dt / TRAIL_HALF_LIFE));
+    }
+    place();
+    strokeTips(10 * unit, 0.3);
+    strokeTips(1.75 * unit, 0.92);
+    remember();
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, cssW, cssH);
+    ctx.drawImage(front, 0, 0, cssW, cssH);
+    ctx.fillStyle = vigGrad;
+    ctx.fillRect(0, 0, cssW, cssH);
+    drawBodies();
+  }
+
+  resize();
+
+  let last = performance.now();
+  function tick(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    frame(dt);
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+  addEventListener("resize", resize);
+})();
+</script>
+</body>
+</html>

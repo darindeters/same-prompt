@@ -1,0 +1,172 @@
+{
+ "black-hole": {
+  "title": "Black Hole",
+  "prompt": "Build a black hole with a glowing accretion disk that bends the light of the stars behind it, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "claude": {
+    "model": "claude-fable-5-1",
+    "effort": "medium",
+    "cli": "2.1.303 (Claude Code)",
+    "start_utc": "2026-10-22T06:31:26Z",
+    "elapsed_s": 387.9
+   },
+   "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-22T06:33:17Z",
+    "elapsed_s": 150.1
+   },
+   "gemini": {
+    "model": "gemini-4-argon-medium",
+    "effort": "medium",
+    "cli": "1.4.5",
+    "start_utc": "2026-10-22T07:03:06Z",
+    "elapsed_s": 159.7
+   },
+   "grok": {
+    "model": "grok-4.7",
+    "effort": "medium",
+    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
+    "start_utc": "2026-10-22T07:04:38Z",
+    "elapsed_s": 1567.5
+   }
+  }
+ },
+ "pendulums": {
+  "title": "100 Double Pendulums",
+  "prompt": "Build one hundred double pendulums released from almost exactly the same position, so they start together and then drift apart into chaos, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "claude": {
+    "model": "claude-fable-5-1",
+    "effort": "medium",
+    "cli": "2.1.303 (Claude Code)",
+    "start_utc": "2026-10-22T06:46:36Z",
+    "elapsed_s": 72.0
+   },
+   "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-22T06:46:41Z",
+    "elapsed_s": 85.1
+   },
+   "gemini": {
+    "model": "gemini-4-argon-medium",
+    "effort": "medium",
+    "cli": "1.4.5",
+    "start_utc": "2026-10-22T07:05:46Z",
+    "elapsed_s": 68.0
+   },
+   "grok": {
+    "model": "grok-4.7",
+    "effort": "medium",
+    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
+    "start_utc": "2026-10-22T06:46:47Z",
+    "elapsed_s": 798.0
+   }
+  }
+ },
+ "galaxies": {
+  "title": "Galaxy Collision",
+  "prompt": "Build two spiral galaxies colliding and merging, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "claude": {
+    "model": "claude-fable-5-1",
+    "effort": "medium",
+    "cli": "2.1.303 (Claude Code)",
+    "start_utc": "2026-10-22T07:00:05Z",
+    "elapsed_s": 292.7
+   },
+   "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-22T07:00:10Z",
+    "elapsed_s": 92.1
+   },
+   "gemini": {
+    "model": "gemini-4-argon-medium",
+    "effort": "medium",
+    "cli": "1.4.5",
+    "start_utc": "2026-10-22T07:06:54Z",
+    "elapsed_s": 251.8
+   },
+   "grok": {
+    "model": "grok-4.7",
+    "effort": "medium",
+    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
+    "start_utc": "2026-10-22T07:00:15Z",
+    "elapsed_s": 1493.3
+   }
+  }
+ },
+ "blossom": {
+  "title": "Cherry Blossom Tree",
+  "prompt": "Build a cherry blossom tree that grows from a seed, blooms, and sheds its petals in the wind, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "claude": {
+    "model": "claude-fable-5-1",
+    "effort": "medium",
+    "cli": "2.1.303 (Claude Code)",
+    "start_utc": "2026-10-22T07:25:08Z",
+    "elapsed_s": 623.3
+   },
+   "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-22T07:25:13Z",
+    "elapsed_s": 166.5
+   },
+   "gemini": {
+    "model": "gemini-4-argon-medium",
+    "effort": "medium",
+    "cli": "1.4.5",
+    "start_utc": "2026-10-22T07:11:06Z",
+    "elapsed_s": 236.1
+   },
+   "grok": {
+    "model": "grok-4.7",
+    "effort": "medium",
+    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
+    "start_utc": "2026-10-22T07:25:18Z",
+    "elapsed_s": 1465.4
+   }
+  }
+ },
+ "lighthouse": {
+  "title": "Lighthouse in a Storm",
+  "prompt": "Build a lighthouse on a cliff during a night storm, with crashing waves, rain and lightning, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "claude": {
+    "model": "claude-fable-5-1",
+    "effort": "medium",
+    "cli": "2.1.303 (Claude Code)",
+    "start_utc": "2026-10-22T07:49:44Z",
+    "elapsed_s": 420.3
+   },
+   "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-22T07:49:49Z",
+    "elapsed_s": 200.6
+   },
+   "gemini": {
+    "model": "gemini-4-argon-medium",
+    "effort": "medium",
+    "cli": "1.4.5",
+    "start_utc": "2026-10-22T07:15:03Z",
+    "elapsed_s": 292.8
+   },
+   "grok": {
+    "model": "grok-4.7",
+    "effort": "medium",
+    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
+    "start_utc": "2026-10-22T07:49:54Z",
+    "elapsed_s": 1451.5
+   }
+  }
+ }
+}

@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Black Hole</title>
+<style>
+  *, *::before, *::after {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #000;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="glcanvas"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('glcanvas');
+  const gl = canvas.getContext('webgl2', {
+    antialias: false,
+    depth: false,
+    stencil: false,
+    alpha: false,
+    powerPreference: 'high-performance'
+  });
+
+  if (!gl) return;
+
+  gl.getExtension('EXT_color_buffer_float');
+  gl.getExtension('OES_texture_float_linear');
+
+  const VERT_SRC = `#version 300 es
+  precision highp float;
+  const vec2 pos[3] = vec2[3](
+    vec2(-1.0, -1.0),
+    vec2( 3.0, -1.0),
+    vec2(-1.0,  3.0)
+  );
+  out vec2 vUv;
+  void main() {
+    gl_Position = vec4(pos[gl_VertexID], 0.0, 1.0);
+    vUv = pos[gl_VertexID] * 0.5 + 0.5;
+  }
+  `;
+
+  // Pass 1: Relativistic Geodesic Raytracer (Black Hole, Volumetric + Midplane Accretion Disk, Lensed Starfield)
+  const SCENE_FRAG_SRC = `#version 300 es
+  precision highp float;
+
+  in vec2 vUv;
+  out vec4 fragColor;
+
+  uniform vec2 uResolution;
+  uniform float uTime;
+
+  #define PI 3.14159265359
+  #define TAU 6.28318530718
+
+  // Fast, high-quality hashes
+  float hash12(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+  }
+
+  vec3 hash32(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yxz + 33.33);
+    return fract((p3.xxy + p3.yzz) * p3.zyx);
+  }
+
+  vec3 hash33(vec3 p3) {
+    p3 = fract(p3 * vec3(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yxz + 33.33);
+    return fract((p3.xxy + p3.yxx) * p3.zyx);
+  }
+
+  // 2D smooth value noise
+  float noise2D(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash12(i);
+    float b = hash12(i + vec2(1.0, 0.0));
+    float c = hash12(i + vec2(0.0, 1.0));
+    float d = hash12(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+  }
+
+  // 3D smooth value noise
+  float noise3D(vec3 x) {
+    vec3 i = floor(x);
+    vec3 f = fract(x);
+    f = f * f * (3.0 - 2.0 * f);
+    vec2 uv = (i.xy + vec2(37.0, 239.0) * i.z) + f.xy;
+    vec2 iuv = floor(uv);
+    vec2 fuv = fract(uv);
+    float a0 = hash12(iuv);
+    float b0 = hash12(iuv + vec2(1.0, 0.0));
+    float c0 = hash12(iuv + vec2(0.0, 1.0));
+    float d0 = hash12(iuv + vec2(1.0, 1.0));
+    float n0 = mix(mix(a0, b0, fuv.x), mix(c0, d0, fuv.x), fuv.y);
+
+    vec2 uv1 = uv + vec2(37.0, 239.0);
+    vec2 iuv1 = floor(uv1);
+    vec2 fuv1 = fract(uv1);
+    float a1 = hash12(iuv1);
+    float b1 = hash12(iuv1 + vec2(1.0, 0.0));
+    float c1 = hash12(iuv1 + vec2(0.0, 1.0));
+    float d1 = hash12(iuv1 + vec2(1.0, 1.0));
+    float n1 = mix(mix(a1, b1, fuv1.x), mix(c1, d1, fuv1.x), fuv1.y);
+
+    return mix(n0, n1, f.z);
+  }
+
+  // Approximate Blackbody color from normalized temperature + Doppler shift
+  vec3 blackbodyColor(float temp) {
+    // temp around 0.1 (deep red) -> 1.0 (golden orange/white) -> 2.5+ (blue-white)
+    vec3 col;
+    col.r = smoothstep(0.0, 0.38, temp) * 1.35;
+    col.g = smoothstep(0.18, 0.85, temp) * 1.05;
+    col.b = smoothstep(0.48, 1.55, temp) * 1.25;
+    // Extra hot core boost
+    float hot = max(0.0, temp - 0.9);
+    col += vec3(0.45, 0.65, 1.1) * hot * hot * 0.45;
+    return max(col, vec3(0.0));
+  }
+
+  // Seamless spiral disk texture with Keplerian shear
+  float sampleDiskSpiral(float r, float angle, float speedScale, float freqR, float arms) {
+    float rot = uTime * speedScale;
+    // Logarithmic spiral phase
+    float winding = log(max(r, 0.1)) * freqR;
+    float p1 = angle * arms + winding - rot;
+    float p2 = angle * (arms * 2.0) + winding * 1.7 - rot * 1.35;
+    vec2 sc1 = vec2(cos(p1), sin(p1)) * 1.8 + vec2(r * 1.9, rot * 0.15);
+    vec2 sc2 = vec2(cos(p2), sin(p2)) * 2.4 + vec2(r * 3.7, -rot * 0.22);
+    float n = noise2D(sc1) * 0.62 + noise2D(sc2) * 0.38;
+    return n;
+  }
+
+  // Evaluate accretion disk emission & opacity at position p
+  void evaluateDiskPoint(
+    vec3 p,
+    float r,
+    vec3 rayDir,
+    out vec3 emission,
+    out float density
+  ) {
+    const float rIn = 1.58;
+    const float rOut = 9.2;
+
+    if (r < rIn || r > rOut) {
+      emission = vec3(0.0);
+      density = 0.0;
+      return;
+    }
+
+    float radialNorm = clamp((r - rIn) / (rOut - rIn), 0.0, 1.0);
+    // Disk scale height flares gently outward
+    float h = mix(0.045, 0.24, pow(radialNorm, 1.15));
+    float vDist = abs(p.y) / h;
+    if (vDist >= 1.0) {
+      emission = vec3(0.0);
+      density = 0.0;
+      return;
+    }
+
+    float verticalProfile = exp(-vDist * vDist * 4.2) * (1.0 - vDist * vDist);
+
+    // Inner edge sharp rise at ISCO, outer edge smooth falloff
+    float innerFade = smoothstep(rIn, rIn + 0.32, r);
+    float outerFade = (1.0 - smoothstep(rOut * 0.65, rOut, r)) * exp(-radialNorm * 1.85);
+    float radialEnv = innerFade * outerFade;
+
+    float angle = atan(p.z, p.x);
+    // Differential Keplerian angular speed
+    float omega = 2.6 / pow(max(r, 1.35), 1.35);
+
+    // Multi-scale sheared spiral turbulence
+    float s1 = sampleDiskSpiral(r, angle, omega * 1.4, 7.5, 2.0);
+    float s2 = sampleDiskSpiral(r * 1.4, angle + s1 * 0.45, omega * 2.1, 13.0, 3.0);
+    float s3 = sampleDiskSpiral(r * 2.3, angle - s2 * 0.30, omega * 3.0, 22.0, 5.0);
+
+    // Concentric relativistic plasma rings modulated by spiral filaments
+    float rings = sin(r * 11.5 - uTime * 2.4 + s1 * 4.2) * 0.5 + 0.5;
+    float fineRings = sin(r * 29.0 - uTime * 4.8 + s2 * 5.0) * 0.5 + 0.5;
+
+    float filament = s1 * 0.48 + s2 * 0.34 + s3 * 0.18;
+    filament = mix(filament, filament * (0.45 + 0.85 * rings), 0.65);
+    filament = mix(filament, filament * (0.6 + 0.7 * fineRings), 0.45);
+    filament = smoothstep(0.16, 0.88, filament);
+
+    // Hot inner rim glow right near the ISCO
+    float iscoBoost = exp(-max(0.0, r - rIn) * 2.6) * 1.45;
+
+    density = radialEnv * verticalProfile * (0.18 + 1.35 * filament + iscoBoost * 0.6);
+
+    // Relativistic orbital velocity (counter-clockwise in XZ plane)
+    vec3 tangent = normalize(vec3(-p.z, 0.0, p.x));
+    float beta = clamp(sqrt(0.55 / max(r - 0.85, 0.35)), 0.0, 0.72);
+    float gamma = inversesqrt(1.0 - beta * beta);
+
+    // Cosine between gas velocity and photon direction (photon travels along rayDir)
+    // Approaching gas moves toward the camera, i.e., opposite to rayDir: dot(tangent, -rayDir)
+    float cosTheta = dot(tangent, -rayDir);
+    float doppler = 1.0 / (gamma * (1.0 - beta * cosTheta));
+
+    // Gravitational redshift factor sqrt(1 - r_s / r)
+    float gravRedshift = sqrt(clamp(1.0 - 0.92 / r, 0.15, 1.0));
+    float gFactor = doppler * gravRedshift;
+
+    // Intrinsic radial temperature profile
+    float baseTemp = pow(1.0 - radialNorm, 0.78) * 0.95 + iscoBoost * 0.38 + filament * 0.25;
+    float perceivedTemp = baseTemp * pow(gFactor, 1.15);
+
+    // Relativistic beaming intensity boost I ~ g^3.4
+    float beaming = pow(clamp(gFactor, 0.25, 2.35), 3.35);
+
+    vec3 col = blackbodyColor(perceivedTemp);
+    // Subtle dark dust lanes on the outer cool regions
+    float dustAbsorption = mix(1.0, smoothstep(0.15, 0.65, s1 * s2 * 1.8), smoothstep(2.8, 6.5, r));
+
+    emission = col * density * beaming * dustAbsorption * (2.6 + iscoBoost * 2.2);
+  }
+
+  // Procedural 3D Starfield + Milky Way Band + Gravitational Lensing Magnification
+  vec3 sampleCelestialSphere(vec3 dir, float minR, float totalDeflection) {
+    // Gently rotate celestial sphere over time so stars drift behind the black hole
+    // and clearly reveal gravitational lensing / Einstein ring formation
+    float skyRot = uTime * 0.038;
+    float cs = cos(skyRot), sn = sin(skyRot);
+    vec3 d = vec3(cs * dir.x + sn * dir.z, dir.y, -sn * dir.x + cs * dir.z);
+
+    // Tilt the background galactic plane so it sweeps diagonally behind the black hole
+    const vec3 gAxisX = vec3(0.82, 0.48, -0.31);
+    const vec3 gAxisY = vec3(-0.44, 0.87, 0.22);
+    const vec3 gAxisZ = vec3(0.36, -0.04, 0.93);
+    vec3 gd = vec3(dot(d, gAxisX), dot(d, gAxisY), dot(d, gAxisZ));
+
+    // Gravitational lensing magnification factor near the photon sphere (Einstein ring boost)
+    float lensMag = 1.0 + 2.8 * exp(-max(0.0, minR - 1.5) * 2.4) + 0.55 * clamp(totalDeflection / PI, 0.0, 2.5);
+
+    // Deep cosmic background and Milky Way nebula band
+    float galacticLat = gd.y;
+    float band = exp(-galacticLat * galacticLat * 7.5);
+    float n1 = noise3D(gd * 3.5);
+    float n2 = noise3D(gd * 8.0 + vec3(n1 * 1.5));
+    float n3 = noise3D(gd * 18.0 - vec3(n2 * 1.2));
+    float dust = smoothstep(0.32, 0.72, n1 * 0.55 + n2 * 0.45);
+
+    vec3 nebulaCore = mix(vec3(0.03, 0.05, 0.11), vec3(0.16, 0.11, 0.22), n2);
+    nebulaCore = mix(nebulaCore, vec3(0.26, 0.17, 0.11), pow(band, 2.0) * n3);
+    vec3 sky = nebulaCore * band * (1.0 - 0.62 * dust) * 0.65 * sqrt(lensMag);
+    sky += vec3(0.004, 0.006, 0.012); // Deep space ambient floor
+
+    // Spherical coordinates for multi-layer Voronoi starfield
+    float phi = atan(gd.z, gd.x);
+    float theta = asin(clamp(gd.y, -0.9999, 0.9999));
+    vec2 sphereUv = vec2(phi / TAU + 0.5, theta / PI + 0.5);
+    float cosLat = max(cos(theta), 0.15);
+
+    vec3 starAccum = vec3(0.0);
+
+    // 4 layers of stars at different densities and brightnesses
+    for (int layer = 0; layer < 4; layer++) {
+      float fl = float(layer);
+      float scale = exp2(5.0 + fl * 1.05); // 32, 66, 137, 284
+      vec2 gridScale = vec2(scale * 2.0, scale);
+      vec2 st = sphereUv * gridScale + vec2(fl * 19.7, fl * 41.3);
+      vec2 cell = floor(st);
+      vec2 fracSt = fract(st);
+
+      // Search 3x3 neighborhood to avoid clipping bright star halos or lensed arcs
+      for (int oy = -1; oy <= 1; oy++) {
+        for (int ox = -1; ox <= 1; ox++) {
+          vec2 offset = vec2(float(ox), float(oy));
+          vec2 neighborCell = cell + offset;
+          // Wrap horizontally at seam
+          neighborCell.x = mod(neighborCell.x, gridScale.x);
+
+          vec3 rnd = hash32(neighborCell + fl * 113.0);
+          // Probability threshold (more stars near galactic plane)
+          float densityThreshold = mix(0.68, 0.35, band * 0.7);
+          if (rnd.z < densityThreshold) continue;
+
+          vec2 starPos = offset + 0.15 + 0.7 * rnd.xy;
+          vec2 diff = fracSt - starPos;
+          diff.x *= cosLat;
+
+          float distSq = dot(diff, diff);
+          // Star radius shrinks with higher layer density, expands slightly under strong lensing
+          float sizeFactor = mix(1.0, 1.45, clamp((lensMag - 1.0) * 0.25, 0.0, 1.0));
+          float coreWidth = (0.0022 + 0.0045 * pow(rnd.z, 4.0)) * sizeFactor;
+          float core = exp(-distSq / (coreWidth * coreWidth));
+
+          // Soft Airy / diffraction glow around brighter stars
+          float haloWidth = coreWidth * 4.5;
+          float halo = exp(-distSq / (haloWidth * haloWidth)) * 0.22;
+
+          // Subtle stellar scintillation
+          float twinkle = 0.88 + 0.12 * sin(uTime * (2.5 + rnd.x * 4.0) + rnd.y * 30.0);
+
+          // Stellar color temperature (blue O/B, white A/F, yellow G, orange/red K/M)
+          float tempPick = fract(rnd.x * 7.13 + rnd.y * 3.71);
+          vec3 starCol = mix(
+            mix(vec3(1.0, 0.52, 0.32), vec3(1.0, 0.88, 0.76), smoothstep(0.0, 0.45, tempPick)),
+            mix(vec3(0.95, 0.97, 1.0), vec3(0.55, 0.75, 1.0), smoothstep(0.45, 1.0, tempPick)),
+            step(0.45, tempPick)
+          );
+
+          float lum = pow((rnd.z - densityThreshold) / (1.0 - densityThreshold), 2.4);
+          float layerWeight = exp(-fl * 0.42) * 3.2;
+
+          starAccum += starCol * (core + halo) * lum * layerWeight * twinkle;
+        }
+      }
+    }
+
+    // Apply gravitational lensing amplification to background stars
+    sky += starAccum * lensMag;
+
+    return sky;
+  }
+
+  void main() {
+    // Aspect-correct normalized coordinates centered at 0, looking best in 1080x1080 square
+    vec2 uv = (gl_FragCoord.xy - 0.5 * uResolution.xy) / min(uResolution.x, uResolution.y);
+
+    // Subtle cinematic camera orbit & inclination breathing
+    float camTime = uTime * 0.14;
+    float camDist = 11.4 + 0.35 * sin(uTime * 0.23);
+    float elevation = 0.235 + 0.045 * sin(uTime * 0.19); // ~13.5 deg above disk plane
+    float azimuth = camTime;
+
+    vec3 ro = vec3(
+      camDist * cos(elevation) * sin(azimuth),
+      camDist * sin(elevation),
+      camDist * cos(elevation) * cos(azimuth)
+    );
+
+    vec3 target = vec3(0.0, -0.08, 0.0);
+    vec3 forward = normalize(target - ro);
+
+    // Slight dramatic roll angle (like Gargantua) slowly oscillating
+    float roll = -0.19 + 0.03 * cos(uTime * 0.15);
+    vec3 worldUp = vec3(sin(roll), cos(roll), 0.0);
+    vec3 right = normalize(cross(forward, worldUp));
+    vec3 up = cross(right, forward);
+
+    float fov = 1.08;
+    vec3 rd = normalize(forward * fov + right * uv.x + up * uv.y);
+
+    // Per-pixel jitter to eliminate any volumetric stepping artifacts
+    float jitter = hash12(gl_FragCoord.xy + fract(uTime * 17.3) * 100.0);
+
+    // Relativistic geodesic integration variables (Schwarzschild metric in r_s = 1.0 units)
+    vec3 p = ro;
+    vec3 v = rd;
+    // Specific angular momentum squared L^2 = |r x v|^2 (conserved along null geodesics)
+    vec3 angularVec = cross(p, v);
+    float h2 = dot(angularVec, angularVec);
+
+    vec3 accumColor = vec3(0.0);
+    float transmittance = 1.0;
+
+    float minR = 1000.0;
+    float totalDeflection = 0.0;
+    bool hitHorizon = false;
+
+    const int MAX_STEPS = 148;
+    for (int i = 0; i < MAX_STEPS; i++) {
+      float r2 = dot(p, p);
+      float r = sqrt(r2);
+      minR = min(minR, r);
+
+      // Event horizon capture (r_s = 1.0)
+      if (r < 1.015) {
+        hitHorizon = true;
+        break;
+      }
+
+      // Escaped gravitational well heading outward
+      if (r > 15.5 && dot(p, v) > 0.0) {
+        break;
+      }
+
+      // Adaptive step size: fine near photon sphere (r ~ 1.5) and near disk plane (|y| small)
+      float distFromHorizon = max(r - 0.92, 0.06);
+      float stepR = clamp(distFromHorizon * 0.095, 0.018, 0.38);
+
+      // Tighten step when close to the accretion disk volume
+      if (r > 1.35 && r < 9.8) {
+        float diskProximity = max(abs(p.y) - 0.12, 0.0);
+        stepR = min(stepR, 0.022 + diskProximity * 0.18);
+      }
+
+      float dt = stepR * (i == 0 ? (0.5 + 0.5 * jitter) : 1.0);
+
+      // Velocity-Verlet / RK2 geodesic integration of d^2x/dt^2 = -1.5 * h^2 * x / r^5
+      vec3 a0 = -1.5 * h2 * p / (r2 * r2 * r);
+      vec3 pMid = p + v * (0.5 * dt) + a0 * (0.125 * dt * dt);
+      float rMid2 = dot(pMid, pMid);
+      float rMid = sqrt(rMid2);
+
+      if (rMid < 1.01) {
+        hitHorizon = true;
+        break;
+      }
+
+      vec3 aMid = -1.5 * h2 * pMid / (rMid2 * rMid2 * rMid);
+      vec3 pNext = p + v * dt + aMid * (0.5 * dt * dt);
+      vec3 vNext = normalize(v + aMid * dt);
+
+      totalDeflection += length(vNext - v);
+
+      // 1) Exact analytical midplane crossing check (prevents any aliasing on razor-thin bright core)
+      if (p.y * pNext.y <= 0.0 && (p.y != 0.0 || pNext.y != 0.0)) {
+        float frac = abs(p.y) / max(abs(p.y - pNext.y), 1e-6);
+        vec3 pCross = mix(p, pNext, frac);
+        float rCross = length(pCross);
+        vec3 vCross = normalize(mix(v, vNext, frac));
+
+        vec3 planeEmit;
+        float planeDens;
+        evaluateDiskPoint(vec3(pCross.x, 0.0, pCross.z), rCross, vCross, planeEmit, planeDens);
+
+        if (planeDens > 0.0) {
+          // Grazing angle optical depth boost
+          float cosIncidence = max(abs(vCross.y), 0.12);
+          float alpha = 1.0 - exp(-planeDens * 0.42 / cosIncidence);
+          accumColor += transmittance * planeEmit * (0.38 / pow(cosIncidence, 0.65));
+          transmittance *= (1.0 - alpha * 0.72);
+        }
+      }
+
+      // 2) Volumetric integration through the flared plasma halo & outer disk
+      if (abs(pMid.y) < 0.28 && rMid > 1.52 && rMid < 9.3) {
+        vec3 volEmit;
+        float volDens;
+        evaluateDiskPoint(pMid, rMid, vNext, volEmit, volDens);
+
+        if (volDens > 0.0) {
+          float stepAlpha = 1.0 - exp(-volDens * dt * 2.8);
+          accumColor += transmittance * volEmit * dt * 2.1;
+          transmittance *= (1.0 - stepAlpha);
+          if (transmittance < 0.003) {
+            transmittance = 0.0;
+            break;
+          }
+        }
+      }
+
+      p = pNext;
+      v = vNext;
+    }
+
+    // Relativistic Photon Sphere Ring (rays that grazed r ~ 1.5 * r_s and wrapped around)
+    if (!hitHorizon) {
+      // Sample lensed background starfield & galactic band along final bent ray direction
+      vec3 bg = sampleCelestialSphere(v, minR, totalDeflection);
+      accumColor += transmittance * bg;
+
+      // Secondary high-order photon ring glow right at the critical impact parameter (r_min -> 1.5)
+      float photonRingDist = abs(minR - 1.505);
+      float photonRing = exp(-photonRingDist * 42.0) * smoothstep(0.8, 3.2, totalDeflection);
+      // Asymmetric Doppler brightness on photon ring (brighter on approaching left side)
+      float ringAsym = 1.0 - 0.55 * clamp(uv.x * 3.0, -0.8, 0.8);
+      vec3 ringCol = mix(vec3(1.0, 0.72, 0.38), vec3(0.85, 0.94, 1.0), clamp(ringAsym * 0.5, 0.0, 1.0));
+      accumColor += transmittance * ringCol * photonRing * ringAsym * 2.6;
+    } else {
+      // Subtle grazing corona right on the inner boundary of the photon shadow
+      float edgeGlow = exp(-max(0.0, minR - 1.0) * 35.0) * smoothstep(1.2, 3.5, totalDeflection);
+      accumColor += transmittance * vec3(1.0, 0.6, 0.25) * edgeGlow * 0.45;
+    }
+
+    fragColor = vec4(max(accumColor, vec3(0.0)), 1.0);
+  }
+  `;
+
+  // Pass 2: Bright-pass & Downsample + Separable / Multi-tap Kawase Bloom
+  const BLOOM_FRAG_SRC = `#version 300 es
+  precision highp float;
+
+  in vec2 vUv;
+  out vec4 fragColor;
+
+  uniform sampler2D uTex;
+  uniform vec2 uTexelSize;
+  uniform vec2 uDirection;
+  uniform int uExtractBright;
+
+  void main() {
+    // 9-tap Gaussian blur with hardware bilinear filtering (5 fetches)
+    vec2 off1 = vec2(1.3846153846) * uDirection * uTexelSize;
+    vec2 off2 = vec2(3.2307692308) * uDirection * uTexelSize;
+
+    vec3 c0 = texture(uTex, vUv).rgb;
+    vec3 c1 = texture(uTex, vUv + off1).rgb;
+    vec3 c2 = texture(uTex, vUv - off1).rgb;
+    vec3 c3 = texture(uTex, vUv + off2).rgb;
+    vec3 c4 = texture(uTex, vUv - off2).rgb;
+
+    if (uExtractBright == 1) {
+      c0 = max(c0 - 0.42, vec3(0.0));
+      c1 = max(c1 - 0.42, vec3(0.0));
+      c2 = max(c2 - 0.42, vec3(0.0));
+      c3 = max(c3 - 0.42, vec3(0.0));
+      c4 = max(c4 - 0.42, vec3(0.0));
+    }
+
+    vec3 sum = c0 * 0.2270270270
+             + (c1 + c2) * 0.3162162162
+             + (c3 + c4) * 0.0702702703;
+
+    fragColor = vec4(sum, 1.0);
+  }
+  `;
+
+  // Pass 3: Composite, Anamorphic Flare, ACES Filmic Tonemapping & Dithering
+  const COMPOSITE_FRAG_SRC = `#version 300 es
+  precision highp float;
+
+  in vec2 vUv;
+  out vec4 fragColor;
+
+  uniform sampler2D uSceneTex;
+  uniform sampler2D uBloomMidTex;
+  uniform sampler2D uBloomWideTex;
+  uniform vec2 uResolution;
+
+  // ACES fitted curve (Stephen Hill)
+  vec3 acesFilm(vec3 x) {
+    float a = 2.51;
+    float b = 0.03;
+    float c = 2.43;
+    float d = 0.59;
+    float e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+  }
+
+  float ignDither(vec2 p) {
+    vec3 magic = vec3(0.06711056, 0.00583715, 52.9829189);
+    return fract(magic.z * fract(dot(p, magic.xy)));
+  }
+
+  void main() {
+    vec2 centered = (gl_FragCoord.xy - 0.5 * uResolution) / min(uResolution.x, uResolution.y);
+    float r = length(centered);
+
+    // Subtle radial chromatic dispersion toward frame edges
+    vec2 caOffset = (vUv - 0.5) * 0.0022 * smoothstep(0.15, 0.75, r);
+    vec3 scene;
+    scene.r = texture(uSceneTex, vUv + caOffset).r;
+    scene.g = texture(uSceneTex, vUv).g;
+    scene.b = texture(uSceneTex, vUv - caOffset).b;
+
+    vec3 bloomMid = texture(uBloomMidTex, vUv).rgb;
+    vec3 bloomWide = texture(uBloomWideTex, vUv).rgb;
+
+    // Subtle horizontal anamorphic lens streak from the wide bloom
+    vec3 streak = (
+      texture(uBloomWideTex, vUv + vec2(0.035, 0.0)).rgb +
+      texture(uBloomWideTex, vUv - vec2(0.035, 0.0)).rgb
+    ) * 0.25 * vec3(0.75, 0.88, 1.15);
+
+    vec3 hdr = scene + bloomMid * 0.48 + bloomWide * 0.62 + streak * 0.28;
+
+    // Gentle cinematic vignette
+    float vignette = 1.0 - 0.24 * smoothstep(0.35, 0.95, r);
+    hdr *= vignette;
+
+    // ACES tonemapping + gamma correction
+    vec3 ldr = acesFilm(hdr * 0.92);
+    ldr = pow(ldr, vec3(1.0 / 2.2));
+
+    // Anti-banding dither
+    ldr += (ignDither(gl_FragCoord.xy) - 0.5) / 255.0;
+
+    fragColor = vec4(ldr, 1.0);
+  }
+  `;
+
+  function compileShader(type, source) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, source);
+    gl.compileShader(s);
+    return s;
+  }
+
+  function createProgram(vsSource, fsSource) {
+    const p = gl.createProgram();
+    const vs = compileShader(gl.VERTEX_SHADER, vsSource);
+    const fs = compileShader(gl.FRAGMENT_SHADER, fsSource);
+    gl.attachShader(p, vs);
+    gl.attachShader(p, fs);
+    gl.linkProgram(p);
+    return p;
+  }
+
+  const sceneProg = createProgram(VERT_SRC, SCENE_FRAG_SRC);
+  const bloomProg = createProgram(VERT_SRC, BLOOM_FRAG_SRC);
+  const compProg = createProgram(VERT_SRC, COMPOSITE_FRAG_SRC);
+
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+
+  function createFBO(w, h) {
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+
+    // Fallback to RGBA8 if half-float framebuffer isn't complete
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    }
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return { fbo, tex, w, h };
+  }
+
+  let sceneTarget = null;
+  let bloomMidA = null;
+  let bloomMidB = null;
+  let bloomWideA = null;
+  let bloomWideB = null;
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.max(1, Math.floor(window.innerWidth * dpr));
+    const h = Math.max(1, Math.floor(window.innerHeight * dpr));
+
+    if (canvas.width === w && canvas.height === h && sceneTarget) return;
+
+    canvas.width = w;
+    canvas.height = h;
+
+    const targets = [sceneTarget, bloomMidA, bloomMidB, bloomWideA, bloomWideB];
+    for (const t of targets) {
+      if (t) {
+        gl.deleteFramebuffer(t.fbo);
+        gl.deleteTexture(t.tex);
+      }
+    }
+
+    const w2 = Math.max(1, w >> 1);
+    const h2 = Math.max(1, h >> 1);
+    const w4 = Math.max(1, w >> 2);
+    const h4 = Math.max(1, h >> 2);
+
+    sceneTarget = createFBO(w, h);
+    bloomMidA = createFBO(w2, h2);
+    bloomMidB = createFBO(w2, h2);
+    bloomWideA = createFBO(w4, h4);
+    bloomWideB = createFBO(w4, h4);
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+
+  const uSceneRes = gl.getUniformLocation(sceneProg, 'uResolution');
+  const uSceneTime = gl.getUniformLocation(sceneProg, 'uTime');
+
+  const uBloomTex = gl.getUniformLocation(bloomProg, 'uTex');
+  const uBloomTexelSize = gl.getUniformLocation(bloomProg, 'uTexelSize');
+  const uBloomDir = gl.getUniformLocation(bloomProg, 'uDirection');
+  const uBloomExtract = gl.getUniformLocation(bloomProg, 'uExtractBright');
+
+  const uCompScene = gl.getUniformLocation(compProg, 'uSceneTex');
+  const uCompBloomMid = gl.getUniformLocation(compProg, 'uBloomMidTex');
+  const uCompBloomWide = gl.getUniformLocation(compProg, 'uBloomWideTex');
+  const uCompRes = gl.getUniformLocation(compProg, 'uResolution');
+
+  function runBlurPass(srcTex, dstTarget, dirX, dirY, extractBright) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dstTarget.fbo);
+    gl.viewport(0, 0, dstTarget.w, dstTarget.h);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, srcTex);
+    gl.uniform1i(uBloomTex, 0);
+    gl.uniform2f(uBloomTexelSize, 1.0 / dstTarget.w, 1.0 / dstTarget.h);
+    gl.uniform2f(uBloomDir, dirX, dirY);
+    gl.uniform1i(uBloomExtract, extractBright ? 1 : 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  const startTime = performance.now();
+
+  function render(now) {
+    resize();
+    const t = (now - startTime) * 0.001;
+
+    gl.bindVertexArray(vao);
+
+    // 1. Render relativistic black hole scene
+    gl.useProgram(sceneProg);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, sceneTarget.fbo);
+    gl.viewport(0, 0, sceneTarget.w, sceneTarget.h);
+    gl.uniform2f(uSceneRes, sceneTarget.w, sceneTarget.h);
+    gl.uniform1f(uSceneTime, t);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    // 2. Multi-scale Gaussian Bloom
+    gl.useProgram(bloomProg);
+    // Medium scale bloom (half-res)
+    runBlurPass(sceneTarget.tex, bloomMidA, 1.0, 0.0, true);
+    runBlurPass(bloomMidA.tex, bloomMidB, 0.0, 1.0, false);
+
+    // Wide scale bloom (quarter-res, two iterations for wide atmospheric halo)
+    runBlurPass(bloomMidB.tex, bloomWideA, 1.2, 0.0, false);
+    runBlurPass(bloomWideA.tex, bloomWideB, 0.0, 1.2, false);
+    runBlurPass(bloomWideB.tex, bloomWideA, 2.2, 0.0, false);
+    runBlurPass(bloomWideA.tex, bloomWideB, 0.0, 2.2, false);
+
+    // 3. Final Composite to Screen
+    gl.useProgram(compProg);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, sceneTarget.tex);
+    gl.uniform1i(uCompScene, 0);
+
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, bloomMidB.tex);
+    gl.uniform1i(uCompBloomMid, 1);
+
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, bloomWideB.tex);
+    gl.uniform1i(uCompBloomWide, 2);
+
+    gl.uniform2f(uCompRes, canvas.width, canvas.height);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,1388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Interacting Spiral Galaxies</title>
+<style>
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #010104;
+    cursor: default;
+    user-select: none;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+(() => {
+  'use strict';
+
+  const canvas = document.getElementById('canvas');
+  const gl = canvas.getContext('webgl2', {
+    alpha: false,
+    depth: false,
+    stencil: false,
+    antialias: false,
+    powerPreference: 'high-performance',
+    preserveDrawingBuffer: false
+  }) || canvas.getContext('webgl', {
+    alpha: false,
+    depth: false,
+    stencil: false,
+    antialias: false,
+    powerPreference: 'high-performance'
+  });
+
+  if (!gl) return;
+
+  const isWebGL2 = (typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext);
+
+  // Enable float/half-float render targets if available for smoother HDR bloom
+  let colorBufferExt = null;
+  let halfFloatTexExt = null;
+  if (isWebGL2) {
+    colorBufferExt = gl.getExtension('EXT_color_buffer_float');
+  } else {
+    halfFloatTexExt = gl.getExtension('OES_texture_half_float');
+    gl.getExtension('OES_texture_half_float_linear');
+  }
+
+  // Deterministic PRNG (Mulberry32) so every run exhibits the exact crafted choreography
+  let seed = 13374209;
+  function rand() {
+    let t = (seed += 0x6D2B79F5);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+  function randRange(min, max) {
+    return min + (max - min) * rand();
+  }
+  function randGauss() {
+    let u = 0, v = 0;
+    while (u === 0) u = rand();
+    while (v === 0) v = rand();
+    return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+  }
+
+  // ============================================================================
+  // SHADER COMPILATION UTILITIES
+  // ============================================================================
+  function compileShader(type, source) {
+    const shader = gl.createShader(type);
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(shader));
+      gl.deleteShader(shader);
+      return null;
+    }
+    return shader;
+  }
+
+  function createProgram(vsSource, fsSource) {
+    const vs = compileShader(gl.VERTEX_SHADER, vsSource);
+    const fs = compileShader(gl.FRAGMENT_SHADER, fsSource);
+    const prog = gl.createProgram();
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      console.error(gl.getProgramInfoLog(prog));
+      return null;
+    }
+    return prog;
+  }
+
+  // ============================================================================
+  // 1. DEEP SPACE BACKGROUND & DISTANT GALAXIES SHADER
+  // ============================================================================
+  const quadVS = `
+    attribute vec2 aPos;
+    varying vec2 vUv;
+    void main() {
+      vUv = aPos * 0.5 + 0.5;
+      gl_Position = vec4(aPos, 0.0, 1.0);
+    }
+  `;
+
+  const bgFS = `
+    precision highp float;
+    varying vec2 vUv;
+    uniform vec2 uResolution;
+    uniform float uTime;
+    uniform vec2 uCamRot;
+
+    float hash21(vec2 p) {
+      p = fract(p * vec2(234.34, 435.345));
+      p += dot(p, p + 34.23);
+      return fract(p.x * p.y);
+    }
+
+    vec2 hash22(vec2 p) {
+      float n = hash21(p);
+      return vec2(n, hash21(p + n));
+    }
+
+    float noise(vec2 p) {
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      float a = hash21(i);
+      float b = hash21(i + vec2(1.0, 0.0));
+      float c = hash21(i + vec2(0.0, 1.0));
+      float d = hash21(i + vec2(1.0, 1.0));
+      return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+    }
+
+    float fbm(vec2 p) {
+      float v = 0.0;
+      float a = 0.5;
+      mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);
+      for (int i = 0; i < 4; i++) {
+        v += a * noise(p);
+        p = rot * p * 2.03 + vec2(13.1, 7.7);
+        a *= 0.5;
+      }
+      return v;
+    }
+
+    vec3 starLayer(vec2 uv, float scale, float seedOffset) {
+      vec2 gv = fract(uv * scale) - 0.5;
+      vec2 id = floor(uv * scale) + seedOffset;
+      vec2 rnd = hash22(id);
+      vec2 offset = (rnd - 0.5) * 0.72;
+      vec2 d = gv - offset;
+      float dist = length(d);
+      float brightness = hash21(id + 19.3);
+      float mask = smoothstep(0.65, 0.995, brightness);
+      float core = exp(-dist * dist * 160.0) + 0.18 * exp(-dist * 18.0);
+      // Subtle cross spike on very bright background stars
+      float spike = max(0.0, 1.0 - abs(d.x) * 35.0) * exp(-abs(d.y) * 9.0) +
+                    max(0.0, 1.0 - abs(d.y) * 35.0) * exp(-abs(d.x) * 9.0);
+      core += spike * smoothstep(0.94, 0.999, brightness) * 0.45;
+      float twinkle = 0.88 + 0.12 * sin(uTime * 1.7 + brightness * 40.0);
+      vec3 col = mix(vec3(1.0, 0.76, 0.58), vec3(0.66, 0.82, 1.0), rnd.x);
+      col = mix(col, vec3(1.0, 0.96, 0.92), 0.45);
+      return col * core * mask * twinkle * (0.2 + 0.8 * pow(brightness, 4.0));
+    }
+
+    void main() {
+      vec2 aspect = vec2(uResolution.x / min(uResolution.x, uResolution.y),
+                         uResolution.y / min(uResolution.x, uResolution.y));
+      vec2 p = (vUv - 0.5) * aspect;
+      vec2 skyUv = p + uCamRot * 0.12;
+
+      // Deep intergalactic void with faint cosmic web dust
+      float n1 = fbm(skyUv * 2.2 + vec2(1.4, -0.8));
+      float n2 = fbm(skyUv * 4.5 - vec2(2.1, 3.3) + n1 * 0.6);
+      vec3 bg = vec3(0.004, 0.005, 0.012);
+      bg += vec3(0.012, 0.016, 0.032) * smoothstep(0.35, 0.85, n1);
+      bg += vec3(0.020, 0.010, 0.026) * smoothstep(0.45, 0.90, n2) * 0.55;
+
+      // Multi-scale background starfields
+      vec3 stars = vec3(0.0);
+      stars += starLayer(skyUv, 18.0, 11.0) * 0.55;
+      stars += starLayer(skyUv, 38.0, 37.0) * 0.35;
+      stars += starLayer(skyUv, 75.0, 91.0) * 0.22;
+
+      // Subtle vignette for focus
+      float vig = 1.0 - 0.32 * dot(p, p);
+      gl_FragColor = vec4((bg + stars) * max(vig, 0.2), 1.0);
+    }
+  `;
+
+  // ============================================================================
+  // 2. GALAXY PARTICLE SHADERS (STARS, NEBULAE, DUST, CORES)
+  // ============================================================================
+  const particleVS = `
+    precision highp float;
+    attribute vec3 aPos;
+    attribute vec4 aColor;
+    attribute vec2 aParams; // x: base size, y: particle type (0=star, 1=nebula, 2=core, 3=dust)
+
+    uniform mat4 uViewProj;
+    uniform float uScale;
+    uniform float uFade;
+
+    varying vec4 vColor;
+    varying float vType;
+
+    void main() {
+      vec4 clip = uViewProj * vec4(aPos, 1.0);
+      gl_Position = clip;
+
+      float dist = max(clip.w, 0.15);
+      float size = aParams.x * (uScale / dist);
+
+      // Clamp size so ultra-close particles don't stall fillrate and far ones stay visible
+      if (aParams.y < 0.5) {
+        // Stars
+        gl_PointSize = clamp(size, 1.15, 28.0);
+      } else if (aParams.y < 1.5) {
+        // Nebulae / H-II gas clouds
+        gl_PointSize = clamp(size, 3.0, 115.0);
+      } else if (aParams.y < 2.5) {
+        // Galactic Core / Bulge glow
+        gl_PointSize = clamp(size, 20.0, 260.0);
+      } else {
+        // Dust / dark warm lanes
+        gl_PointSize = clamp(size, 4.0, 85.0);
+      }
+
+      // Attenuate alpha slightly when point size gets clamped at sub-pixel scale
+      float subPixel = min(1.0, size / 1.15);
+      vColor = vec4(aColor.rgb, aColor.a * subPixel * uFade);
+      vType = aParams.y;
+    }
+  `;
+
+  const particleFS = `
+    precision highp float;
+    varying vec4 vColor;
+    varying float vType;
+
+    void main() {
+      vec2 uv = gl_PointCoord * 2.0 - 1.0;
+      float r2 = dot(uv, uv);
+      if (r2 > 1.0) discard;
+      float r = sqrt(r2);
+
+      if (vType < 0.5) {
+        // Star particle: crisp Airy core + soft exponential halo
+        float core = exp(-r2 * 14.0);
+        float halo = exp(-r * 3.6) * (1.0 - r2);
+        float intensity = core * 1.15 + halo * 0.55;
+        vec3 col = mix(vColor.rgb, vec3(1.0, 0.98, 0.95), core * 0.55);
+        gl_FragColor = vec4(col * intensity * vColor.a, vColor.a * halo);
+      } else if (vType < 1.5) {
+        // Nebula / H-II ionized gas cloud: soft billowing radial falloff
+        float puff = pow(1.0 - r2, 2.35);
+        gl_FragColor = vec4(vColor.rgb * puff * vColor.a, puff * vColor.a);
+      } else if (vType < 2.5) {
+        // Galactic nucleus: brilliant intense core + wide warm bulge + subtle diffraction cross
+        float core = exp(-r2 * 22.0) * 1.8;
+        float bulge = pow(1.0 - r, 2.8) * 0.75;
+        float spike = (exp(-abs(uv.x) * 26.0) * exp(-abs(uv.y) * 3.2) +
+                       exp(-abs(uv.y) * 26.0) * exp(-abs(uv.x) * 3.2)) * (1.0 - r) * 0.38;
+        float total = core + bulge + spike;
+        vec3 col = mix(vColor.rgb, vec3(1.0, 0.99, 0.94), clamp(core * 0.7, 0.0, 1.0));
+        gl_FragColor = vec4(col * total * vColor.a, clamp(total * vColor.a, 0.0, 1.0));
+      } else {
+        // Dust lane particle (rendered in alpha-blend pass to absorb light)
+        float soft = pow(1.0 - r2, 2.0);
+        gl_FragColor = vec4(vColor.rgb, soft * vColor.a);
+      }
+    }
+  `;
+
+  // ============================================================================
+  // 3. POST-PROCESSING BLOOM & ACES FILMIC TONE MAPPING SHADERS
+  // ============================================================================
+  const brightExtractFS = `
+    precision highp float;
+    varying vec2 vUv;
+    uniform sampler2D uTex;
+    void main() {
+      vec3 c = texture2D(uTex, vUv).rgb;
+      float lum = max(c.r, max(c.g, c.b));
+      vec3 bright = c * smoothstep(0.18, 0.85, lum);
+      gl_FragColor = vec4(bright, 1.0);
+    }
+  `;
+
+  const blurFS = `
+    precision highp float;
+    varying vec2 vUv;
+    uniform sampler2D uTex;
+    uniform vec2 uDirection;
+    void main() {
+      vec3 sum = texture2D(uTex, vUv).rgb * 0.227027;
+      vec2 off1 = uDirection * 1.384615;
+      vec2 off2 = uDirection * 3.230769;
+      sum += texture2D(uTex, vUv + off1).rgb * 0.316216;
+      sum += texture2D(uTex, vUv - off1).rgb * 0.316216;
+      sum += texture2D(uTex, vUv + off2).rgb * 0.070270;
+      sum += texture2D(uTex, vUv - off2).rgb * 0.070270;
+      gl_FragColor = vec4(sum, 1.0);
+    }
+  `;
+
+  const compositeFS = `
+    precision highp float;
+    varying vec2 vUv;
+    uniform sampler2D uScene;
+    uniform sampler2D uBloom1;
+    uniform sampler2D uBloom2;
+
+    vec3 acesToneMap(vec3 x) {
+      const float a = 2.51;
+      const float b = 0.03;
+      const float c = 2.43;
+      const float d = 0.59;
+      const float e = 0.14;
+      return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+    }
+
+    void main() {
+      // Subtle radial chromatic dispersion near corners
+      vec2 centered = vUv - 0.5;
+      float dist2 = dot(centered, centered);
+      vec2 disp = centered * dist2 * 0.0045;
+
+      vec3 scene;
+      scene.r = texture2D(uScene, vUv + disp).r;
+      scene.g = texture2D(uScene, vUv).g;
+      scene.b = texture2D(uScene, vUv - disp).b;
+
+      vec3 b1 = texture2D(uBloom1, vUv).rgb;
+      vec3 b2 = texture2D(uBloom2, vUv).rgb;
+
+      vec3 hdr = scene + b1 * 0.68 + b2 * 0.58;
+      vec3 mapped = acesToneMap(hdr * 1.08);
+      // Gamma correction + rich contrast
+      mapped = pow(mapped, vec3(0.92));
+      gl_FragColor = vec4(mapped, 1.0);
+    }
+  `;
+
+  const bgProg = createProgram(quadVS, bgFS);
+  const particleProg = createProgram(particleVS, particleFS);
+  const brightProg = createProgram(quadVS, brightExtractFS);
+  const blurProg = createProgram(quadVS, blurFS);
+  const compositeProg = createProgram(quadVS, compositeFS);
+
+  // Fullscreen quad buffer
+  const quadVBO = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadVBO);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+    -1, -1,  1, -1, -1,  1,
+    -1,  1,  1, -1,  1,  1
+  ]), gl.STATIC_DRAW);
+
+  // ============================================================================
+  // FRAMEBUFFERS FOR HDR SCENE & MULTI-SCALE BLOOM
+  // ============================================================================
+  let sceneFBO = null, bloomFBO1A = null, bloomFBO1B = null, bloomFBO2A = null, bloomFBO2B = null;
+  let fboWidth = 0, fboHeight = 0;
+
+  function createFBO(w, h) {
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+
+    let allocatedFloat = false;
+    if (isWebGL2 && colorBufferExt) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
+        allocatedFloat = true;
+      }
+    }
+    if (!allocatedFloat) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    }
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return { fbo, tex, w, h };
+  }
+
+  function deleteFBO(obj) {
+    if (!obj) return;
+    gl.deleteFramebuffer(obj.fbo);
+    gl.deleteTexture(obj.tex);
+  }
+
+  function resizeFramebuffers() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.max(1, Math.floor(window.innerWidth * dpr));
+    const h = Math.max(1, Math.floor(window.innerHeight * dpr));
+    if (w === fboWidth && h === fboHeight) return;
+
+    fboWidth = w;
+    fboHeight = h;
+    canvas.width = w;
+    canvas.height = h;
+
+    deleteFBO(sceneFBO);
+    deleteFBO(bloomFBO1A);
+    deleteFBO(bloomFBO1B);
+    deleteFBO(bloomFBO2A);
+    deleteFBO(bloomFBO2B);
+
+    sceneFBO = createFBO(w, h);
+    const bw1 = Math.max(1, w >> 1), bh1 = Math.max(1, h >> 1);
+    const bw2 = Math.max(1, w >> 2), bh2 = Math.max(1, h >> 2);
+    bloomFBO1A = createFBO(bw1, bh1);
+    bloomFBO1B = createFBO(bw1, bh1);
+    bloomFBO2A = createFBO(bw2, bh2);
+    bloomFBO2B = createFBO(bw2, bh2);
+  }
+
+  window.addEventListener('resize', resizeFramebuffers);
+  resizeFramebuffers();
+
+  // ============================================================================
+  // ASTROPHYSICAL GALAXY COLLISION SIMULATION (RESTRICTED N-BODY + STARBURST)
+  // ============================================================================
+  // Particle counts tuned for silky 60fps and maximum detail at 1080x1080
+  const NUM_STARS_A = 31000;
+  const NUM_STARS_B = 24000;
+  const NUM_NEBULA_A = 2200;
+  const NUM_NEBULA_B = 1800;
+  const NUM_DUST_A = 950;
+  const NUM_DUST_B = 750;
+  const NUM_CORES = 2;
+
+  const TOTAL_DUST = NUM_DUST_A + NUM_DUST_B;
+  const TOTAL_LUMINOUS = NUM_STARS_A + NUM_STARS_B + NUM_NEBULA_A + NUM_NEBULA_B + NUM_CORES;
+  const TOTAL_PARTICLES = TOTAL_DUST + TOTAL_LUMINOUS;
+
+  // SOA arrays for high-speed SIMD-friendly physics integration
+  const px = new Float32Array(TOTAL_PARTICLES);
+  const py = new Float32Array(TOTAL_PARTICLES);
+  const pz = new Float32Array(TOTAL_PARTICLES);
+  const vx = new Float32Array(TOTAL_PARTICLES);
+  const vy = new Float32Array(TOTAL_PARTICLES);
+  const vz = new Float32Array(TOTAL_PARTICLES);
+
+  // Base attributes & starburst reactivity
+  const baseR = new Float32Array(TOTAL_PARTICLES);
+  const baseG = new Float32Array(TOTAL_PARTICLES);
+  const baseB = new Float32Array(TOTAL_PARTICLES);
+  const baseA = new Float32Array(TOTAL_PARTICLES);
+  const baseSize = new Float32Array(TOTAL_PARTICLES);
+  const pType = new Float32Array(TOTAL_PARTICLES);
+  const pGalaxy = new Uint8Array(TOTAL_PARTICLES); // 0 = Galaxy A, 1 = Galaxy B
+  const pStarburst = new Float32Array(TOTAL_PARTICLES); // Excited by tidal compression / core collisions
+  const pGasResponsiveness = new Float32Array(TOTAL_PARTICLES);
+
+  // Interleaved GPU upload buffer: [x, y, z, r, g, b, a, size, type] = 9 floats per particle
+  const FLOATS_PER_VERTEX = 9;
+  const gpuData = new Float32Array(TOTAL_PARTICLES * FLOATS_PER_VERTEX);
+
+  const particleVBO = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, particleVBO);
+  gl.bufferData(gl.ARRAY_BUFFER, gpuData.byteLength, gl.DYNAMIC_DRAW);
+
+  // Gravitational constants & softening parameters (Plummer + Halo potential)
+  const G = 1.0;
+  const MASS_A_INITIAL = 115.0;
+  const MASS_B_INITIAL = 82.0;
+  const SOFTEN_A2 = 1.45 * 1.45; // Core softening radius squared for Galaxy A
+  const SOFTEN_B2 = 1.25 * 1.25; // Core softening radius squared for Galaxy B
+  const HALO_A2 = 9.5 * 9.5;     // Dark matter halo scale squared for Galaxy A
+  const HALO_B2 = 8.0 * 8.0;     // Dark matter halo scale squared for Galaxy B
+
+  // Two Galactic Core states
+  const coreA = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, mass: MASS_A_INITIAL };
+  const coreB = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, mass: MASS_B_INITIAL };
+
+  // Compute circular orbital speed at radius r inside a galaxy's combined Bulge + Disk/Halo potential
+  function orbitalSpeed(r, mass, soften2, halo2) {
+    const r2 = r * r;
+    // 55% concentrated bulge/disk + 45% extended halo
+    const fBulge = 0.55 * G * mass * r / Math.pow(r2 + soften2, 1.5);
+    const fHalo  = 0.45 * G * mass * r / Math.pow(r2 + halo2, 1.25);
+    return Math.sqrt(r * (fBulge + fHalo));
+  }
+
+  // Rotate local disk coordinates (x, y, z) by Euler tilt angles (incX, incY, incZ)
+  function rotate3D(x, y, z, rx, ry, rz) {
+    const cx = Math.cos(rx), sx = Math.sin(rx);
+    const cy = Math.cos(ry), sy = Math.sin(ry);
+    const cz = Math.cos(rz), sz = Math.sin(rz);
+
+    // Z rotation
+    let x1 = x * cz - y * sz;
+    let y1 = x * sz + y * cz;
+    let z1 = z;
+
+    // X rotation
+    let x2 = x1;
+    let y2 = y1 * cx - z1 * sx;
+    let z2 = y1 * sx + z1 * cx;
+
+    // Y rotation
+    return [
+      x2 * cy + z2 * sy,
+      y2,
+      -x2 * sy + z2 * cy
+    ];
+  }
+
+  // Populate a spiral galaxy with bulge, grand-design logarithmic spiral arms, H-II nebulae, and dust lanes
+  function populateGalaxy(
+    startIndex,
+    numStars,
+    numNebula,
+    numDust,
+    galaxyId,
+    cx, cy, cz,
+    cvx, cvy, cvz,
+    mass, soften2, halo2,
+    diskRadius,
+    numArms,
+    armWinding,
+    rotSign,
+    tiltX, tiltY, tiltZ,
+    palette
+  ) {
+    let idx = startIndex;
+
+    function addParticle(localR, theta, zOffset, vDispersion, r, g, b, a, size, type, gasResp) {
+      const lx = localR * Math.cos(theta);
+      const ly = localR * Math.sin(theta);
+      const lz = zOffset;
+
+      const vCirc = orbitalSpeed(localR, mass, soften2, halo2);
+      const lvx = -rotSign * vCirc * Math.sin(theta) + randGauss() * vDispersion;
+      const lvy =  rotSign * vCirc * Math.cos(theta) + randGauss() * vDispersion;
+      const lvz =  randGauss() * vDispersion * 0.45;
+
+      const pos = rotate3D(lx, ly, lz, tiltX, tiltY, tiltZ);
+      const vel = rotate3D(lvx, lvy, lvz, tiltX, tiltY, tiltZ);
+
+      px[idx] = cx + pos[0];
+      py[idx] = cy + pos[1];
+      pz[idx] = cz + pos[2];
+
+      vx[idx] = cvx + vel[0];
+      vy[idx] = cvy + vel[1];
+      vz[idx] = cvz + vel[2];
+
+      baseR[idx] = r;
+      baseG[idx] = g;
+      baseB[idx] = b;
+      baseA[idx] = a;
+      baseSize[idx] = size;
+      pType[idx] = type;
+      pGalaxy[idx] = galaxyId;
+      pStarburst[idx] = 0.0;
+      pGasResponsiveness[idx] = gasResp;
+      idx++;
+    }
+
+    // 1. DUST LANES (rendered first so luminous stars/nebulae glow through and over them)
+    for (let i = 0; i < numDust; i++) {
+      const u = Math.pow(rand(), 0.78);
+      const r = 0.7 + u * (diskRadius * 0.78);
+      const armIndex = Math.floor(rand() * numArms);
+      const baseArmAngle = (armIndex * 2.0 * Math.PI) / numArms;
+      const spiralAngle = rotSign * armWinding * Math.log(1.0 + r * 0.95);
+      // Dust lanes hug the trailing inner edge of spiral arms
+      const trailOffset = -rotSign * 0.16 + randGauss() * (0.14 + 0.02 * r);
+      const theta = baseArmAngle + spiralAngle + trailOffset;
+      const zOff = randGauss() * (0.08 + 0.015 * r);
+
+      addParticle(
+        r, theta, zOff,
+        0.04,
+        0.03, 0.015, 0.025,
+        randRange(0.18, 0.36),
+        randRange(18.0, 34.0),
+        3.0, // dust
+        0.0
+      );
+    }
+    return idx;
+  }
+
+  function populateLuminous(
+    startIndex,
+    numStars,
+    numNebula,
+    galaxyId,
+    cx, cy, cz,
+    cvx, cvy, cvz,
+    mass, soften2, halo2,
+    diskRadius,
+    numArms,
+    armWinding,
+    rotSign,
+    tiltX, tiltY, tiltZ,
+    palette
+  ) {
+    let idx = startIndex;
+
+    function addParticle(localR, theta, zOffset, vDispersion, r, g, b, a, size, type, gasResp) {
+      const lx = localR * Math.cos(theta);
+      const ly = localR * Math.sin(theta);
+      const lz = zOffset;
+
+      const vCirc = orbitalSpeed(localR, mass, soften2, halo2);
+      const lvx = -rotSign * vCirc * Math.sin(theta) + randGauss() * vDispersion;
+      const lvy =  rotSign * vCirc * Math.cos(theta) + randGauss() * vDispersion;
+      const lvz =  randGauss() * vDispersion * 0.45;
+
+      const pos = rotate3D(lx, ly, lz, tiltX, tiltY, tiltZ);
+      const vel = rotate3D(lvx, lvy, lvz, tiltX, tiltY, tiltZ);
+
+      px[idx] = cx + pos[0];
+      py[idx] = cy + pos[1];
+      pz[idx] = cz + pos[2];
+
+      vx[idx] = cvx + vel[0];
+      vy[idx] = cvy + vel[1];
+      vz[idx] = cvz + vel[2];
+
+      baseR[idx] = r;
+      baseG[idx] = g;
+      baseB[idx] = b;
+      baseA[idx] = a;
+      baseSize[idx] = size;
+      pType[idx] = type;
+      pGalaxy[idx] = galaxyId;
+      pStarburst[idx] = 0.0;
+      pGasResponsiveness[idx] = gasResp;
+      idx++;
+    }
+
+    // 1. NEBULA / H-II REGIONS & WARM BULGE GLOW CLOUDS
+    for (let i = 0; i < numNebula; i++) {
+      const isBulgeGlow = i < numNebula * 0.22;
+      if (isBulgeGlow) {
+        const r = Math.pow(rand(), 1.6) * (diskRadius * 0.26);
+        const theta = rand() * Math.PI * 2.0;
+        const zOff = randGauss() * 0.25;
+        addParticle(
+          r, theta, zOff,
+          0.11,
+          palette.bulgeR, palette.bulgeG, palette.bulgeB,
+          randRange(0.05, 0.13),
+          randRange(18.0, 38.0),
+          1.0,
+          0.35
+        );
+      } else {
+        const u = Math.pow(rand(), 0.72);
+        const r = 0.8 + u * (diskRadius * 0.92);
+        const armIndex = Math.floor(rand() * numArms);
+        const baseArmAngle = (armIndex * 2.0 * Math.PI) / numArms;
+        const spur = (rand() < 0.22) ? (rotSign * 0.42 * Math.sin(r * 1.4)) : 0.0;
+        const spiralAngle = rotSign * armWinding * Math.log(1.0 + r * 0.95) + spur;
+        const scatter = randGauss() * (0.14 + 0.025 * r);
+        const theta = baseArmAngle + spiralAngle + scatter;
+        const zOff = randGauss() * (0.09 + 0.015 * r);
+
+        // Mix between H-alpha crimson/magenta knots and ionized blue-cyan OB association clouds
+        const isHII = rand() < 0.58;
+        const cr = isHII ? palette.hiiR + randRange(-0.08, 0.08) : palette.armGasR;
+        const cg = isHII ? palette.hiiG + randRange(-0.04, 0.06) : palette.armGasG;
+        const cb = isHII ? palette.hiiB + randRange(-0.06, 0.08) : palette.armGasB;
+
+        addParticle(
+          r, theta, zOff,
+          0.06,
+          cr, cg, cb,
+          randRange(0.045, 0.12),
+          randRange(14.0, 34.0),
+          1.0,
+          randRange(0.7, 1.35)
+        );
+      }
+    }
+
+    // 2. STARS (Bulge stars, Spiral Arm young stars, Disk/Halo stars)
+    for (let i = 0; i < numStars; i++) {
+      const popChoice = rand();
+      if (popChoice < 0.24) {
+        // Central Spheroidal Bulge & Bar: warm golden-white old population
+        const r = Math.pow(rand(), 1.75) * (diskRadius * 0.32);
+        // Slight bar elongation in central bulge
+        const barAngle = (rand() < 0.5 ? 0.0 : Math.PI) + randGauss() * 0.65;
+        const theta = mixAngle(rand() * Math.PI * 2.0, barAngle, Math.exp(-r * 0.6) * 0.45);
+        const zOff = randGauss() * (0.28 * Math.exp(-r * 0.35) + 0.07);
+
+        const temp = randRange(0.0, 1.0);
+        const cr = palette.bulgeR * (0.9 + 0.2 * temp);
+        const cg = palette.bulgeG * (0.85 + 0.25 * temp);
+        const cb = palette.bulgeB * (0.75 + 0.35 * temp);
+
+        addParticle(
+          r, theta, zOff,
+          0.14,
+          cr, cg, cb,
+          randRange(0.45, 0.92),
+          randRange(1.6, 3.8),
+          0.0,
+          0.25
+        );
+      } else if (popChoice < 0.84) {
+        // Grand-Design Logarithmic Spiral Arms + Feathering Spurs
+        const u = Math.pow(rand(), 0.76);
+        const r = 0.45 + u * diskRadius;
+        const armIndex = Math.floor(rand() * numArms);
+        const baseArmAngle = (armIndex * 2.0 * Math.PI) / numArms;
+
+        // Add subtle secondary harmonic feathering so arms have rich substructure
+        const branch = (rand() < 0.18) ? rotSign * 0.38 : 0.0;
+        const spiralAngle = rotSign * armWinding * Math.log(1.0 + r * 0.95) + branch;
+        const armWidth = 0.12 + 0.028 * r;
+        const scatter = randGauss() * armWidth;
+        const theta = baseArmAngle + spiralAngle + scatter;
+        const zOff = randGauss() * (0.065 + 0.014 * r);
+
+        const radialFrac = Math.min(1.0, r / diskRadius);
+        const ridgeProximity = Math.exp(-(scatter * scatter) / (armWidth * armWidth * 0.6));
+
+        // Inner arm -> warm white/gold; ridge & outer arm -> brilliant sapphire/cyan O/B stars; occasional H-alpha knot star
+        let cr, cg, cb;
+        const starRoll = rand();
+        if (starRoll < 0.085 && radialFrac > 0.2) {
+          // Young H-alpha / pinkish-violet supergiant cluster knot
+          cr = palette.hiiR * 1.15;
+          cg = palette.hiiG * 0.95;
+          cb = palette.hiiB * 1.1;
+        } else {
+          const blueMix = Math.min(1.0, radialFrac * 0.78 + ridgeProximity * 0.35);
+          cr = palette.bulgeR * (1.0 - blueMix) + palette.armStarR * blueMix;
+          cg = palette.bulgeG * (1.0 - blueMix) + palette.armStarG * blueMix;
+          cb = palette.bulgeB * (1.0 - blueMix) + palette.armStarB * blueMix;
+        }
+
+        const isSupergiant = rand() < 0.035;
+        const size = isSupergiant ? randRange(4.2, 7.6) : randRange(1.4, 3.4);
+        const alpha = isSupergiant ? randRange(0.85, 1.0) : randRange(0.38, 0.88);
+
+        addParticle(
+          r, theta, zOff,
+          0.055,
+          cr, cg, cb,
+          alpha,
+          size,
+          0.0,
+          0.65 + 0.55 * ridgeProximity
+        );
+      } else {
+        // Extended Disk & Outer Tidal Envelope (forms the longest dramatic tidal tails during collision!)
+        const u = Math.pow(rand(), 0.65);
+        const r = 0.9 + u * (diskRadius * 1.24);
+        const armIndex = Math.floor(rand() * numArms);
+        const baseArmAngle = (armIndex * 2.0 * Math.PI) / numArms;
+        const spiralAngle = rotSign * armWinding * Math.log(1.0 + r * 0.95);
+        const theta = baseArmAngle + spiralAngle + randGauss() * 0.52;
+        const zOff = randGauss() * (0.12 + 0.025 * r);
+
+        const cr = palette.armStarR * 0.85 + 0.15;
+        const cg = palette.armStarG * 0.88 + 0.12;
+        const cb = palette.armStarB;
+
+        addParticle(
+          r, theta, zOff,
+          0.045,
+          cr, cg, cb,
+          randRange(0.28, 0.68),
+          randRange(1.3, 2.8),
+          0.0,
+          0.85
+        );
+      }
+    }
+
+    return idx;
+  }
+
+  function mixAngle(a, b, t) {
+    return a + (b - a) * t;
+  }
+
+  // Initialize the two galaxies on a prograde colliding trajectory (inspired by Antennae NGC 4038/4039)
+  let simTime = 0.0;
+  const CYCLE_DURATION = 34.0; // Full encounter from approach -> 1st pass -> tidal tails -> 2nd pass -> merger
+
+  function initSimulation() {
+    seed = 13374209;
+    simTime = 0.0;
+
+    // Initial orbital geometry in center-of-mass frame
+    // Galaxy A starts bottom-left-front, moving right-up; Galaxy B starts top-right-back, moving left-down
+    coreA.mass = MASS_A_INITIAL;
+    coreB.mass = MASS_B_INITIAL;
+
+    const massRatioA = coreB.mass / (coreA.mass + coreB.mass);
+    const massRatioB = coreA.mass / (coreA.mass + coreB.mass);
+
+    const sepX = -15.2, sepY = -6.8, sepZ = 2.6;
+    const relVx = 2.68, relVy = 0.42, relVz = -0.36;
+
+    coreA.x =  sepX * massRatioA;
+    coreA.y =  sepY * massRatioA;
+    coreA.z =  sepZ * massRatioA;
+    coreA.vx =  relVx * massRatioA;
+    coreA.vy =  relVy * massRatioA;
+    coreA.vz =  relVz * massRatioA;
+
+    coreB.x = -sepX * massRatioB;
+    coreB.y = -sepY * massRatioB;
+    coreB.z = -sepZ * massRatioB;
+    coreB.vx = -relVx * massRatioB;
+    coreB.vy = -relVy * massRatioB;
+    coreB.vz = -relVz * massRatioB;
+
+    // Color palettes for Galaxy A (Golden-Amber Core + Sapphire Arms + Crimson H-alpha)
+    const paletteA = {
+      bulgeR: 1.00, bulgeG: 0.80, bulgeB: 0.50,
+      armStarR: 0.46, armStarG: 0.76, armStarB: 1.00,
+      armGasR: 0.22, armGasG: 0.56, armGasB: 0.98,
+      hiiR: 1.00, hiiG: 0.24, hiiB: 0.58
+    };
+
+    // Color palette for Galaxy B (Warm Peach-Gold Core + Cyan-Violet Arms + Magenta-Rose H-II)
+    const paletteB = {
+      bulgeR: 1.00, bulgeG: 0.84, bulgeB: 0.62,
+      armStarR: 0.56, armStarG: 0.72, armStarB: 1.00,
+      armGasR: 0.38, armGasG: 0.48, armGasB: 0.98,
+      hiiR: 0.98, hiiG: 0.30, hiiB: 0.74
+    };
+
+    // Prograde inclinations so both galaxies throw out sweeping tidal tails on pericenter passage
+    const tiltAX =  0.42, tiltAY = -0.24, tiltAZ = 0.15;
+    const tiltBX = -0.55, tiltBY =  0.38, tiltBZ = 0.65;
+
+    let ptr = 0;
+    // 1. Dust lanes first (indices 0 .. TOTAL_DUST - 1)
+    ptr = populateGalaxy(
+      ptr, NUM_STARS_A, NUM_NEBULA_A, NUM_DUST_A, 0,
+      coreA.x, coreA.y, coreA.z, coreA.vx, coreA.vy, coreA.vz,
+      coreA.mass, SOFTEN_A2, HALO_A2,
+      7.4, 2, 2.35, 1.0,
+      tiltAX, tiltAY, tiltAZ, paletteA
+    );
+    ptr = populateGalaxy(
+      ptr, NUM_STARS_B, NUM_NEBULA_B, NUM_DUST_B, 1,
+      coreB.x, coreB.y, coreB.z, coreB.vx, coreB.vy, coreB.vz,
+      coreB.mass, SOFTEN_B2, HALO_B2,
+      6.1, 2, 2.45, 1.0,
+      tiltBX, tiltBY, tiltBZ, paletteB
+    );
+
+    // 2. Luminous Nebulae & Stars (indices TOTAL_DUST .. TOTAL_PARTICLES - 3)
+    ptr = populateLuminous(
+      ptr, NUM_STARS_A, NUM_NEBULA_A, 0,
+      coreA.x, coreA.y, coreA.z, coreA.vx, coreA.vy, coreA.vz,
+      coreA.mass, SOFTEN_A2, HALO_A2,
+      7.4, 2, 2.35, 1.0,
+      tiltAX, tiltAY, tiltAZ, paletteA
+    );
+    ptr = populateLuminous(
+      ptr, NUM_STARS_B, NUM_NEBULA_B, 1,
+      coreB.x, coreB.y, coreB.z, coreB.vx, coreB.vy, coreB.vz,
+      coreB.mass, SOFTEN_B2, HALO_B2,
+      6.1, 2, 2.45, 1.0,
+      tiltBX, tiltBY, tiltBZ, paletteB
+    );
+
+    // 3. Two Supermassive Galactic Nuclei (last 2 particles)
+    const coreIdxA = TOTAL_PARTICLES - 2;
+    px[coreIdxA] = coreA.x; py[coreIdxA] = coreA.y; pz[coreIdxA] = coreA.z;
+    baseR[coreIdxA] = 1.0; baseG[coreIdxA] = 0.86; baseB[coreIdxA] = 0.62; baseA[coreIdxA] = 0.95;
+    baseSize[coreIdxA] = 46.0; pType[coreIdxA] = 2.0;
+
+    const coreIdxB = TOTAL_PARTICLES - 1;
+    px[coreIdxB] = coreB.x; py[coreIdxB] = coreB.y; pz[coreIdxB] = coreB.z;
+    baseR[coreIdxB] = 1.0; baseG[coreIdxB] = 0.89; baseB[coreIdxB] = 0.72; baseA[coreIdxB] = 0.92;
+    baseSize[coreIdxB] = 40.0; pType[coreIdxB] = 2.0;
+  }
+
+  initSimulation();
+
+  // ============================================================================
+  // PHYSICS INTEGRATOR (LEAPFROG + CHANDRASEKHAR DYNAMICAL FRICTION + STARBURST)
+  // ============================================================================
+  function stepPhysics(dt) {
+    // Sub-step core-to-core interaction for high accuracy
+    const subSteps = 4;
+    const subDt = dt / subSteps;
+
+    let coreDist = 10.0;
+    for (let s = 0; s < subSteps; s++) {
+      const dx = coreB.x - coreA.x;
+      const dy = coreB.y - coreA.y;
+      const dz = coreB.z - coreA.z;
+      const r2 = dx * dx + dy * dy + dz * dz;
+      coreDist = Math.sqrt(r2);
+
+      // Mutual gravitational force between the two galactic potentials
+      const fBulge = 0.55 * G / Math.pow(r2 + 2.2, 1.5);
+      const fHalo  = 0.45 * G / Math.pow(r2 + 28.0, 1.25);
+      const fMag = fBulge + fHalo;
+
+      let axA = coreB.mass * fMag * dx;
+      let ayA = coreB.mass * fMag * dy;
+      let azA = coreB.mass * fMag * dz;
+
+      let axB = -coreA.mass * fMag * dx;
+      let ayB = -coreA.mass * fMag * dy;
+      let azB = -coreA.mass * fMag * dz;
+
+      // Chandrasekhar dynamical friction when halos overlap -> causes orbital decay & merger!
+      // Stronger after first pericenter passage (simTime > 4.2) so they loop back and coalesce
+      const overlap = Math.exp(-r2 / 85.0);
+      const lateStageBoost = smoothstep(3.8, 13.0, simTime) * 0.42 + smoothstep(14.5, 22.0, simTime) * 0.65;
+      const drag = (0.09 + lateStageBoost) * overlap;
+
+      const dvx = coreA.vx - coreB.vx;
+      const dvy = coreA.vy - coreB.vy;
+      const dvz = coreA.vz - coreB.vz;
+
+      axA -= drag * dvx * (coreB.mass / (coreA.mass + coreB.mass));
+      ayA -= drag * dvy * (coreB.mass / (coreA.mass + coreB.mass));
+      azA -= drag * dvz * (coreB.mass / (coreA.mass + coreB.mass));
+
+      axB += drag * dvx * (coreA.mass / (coreA.mass + coreB.mass));
+      ayB += drag * dvy * (coreA.mass / (coreA.mass + coreB.mass));
+      azB += drag * dvz * (coreA.mass / (coreA.mass + coreB.mass));
+
+      coreA.vx += axA * subDt;
+      coreA.vy += ayA * subDt;
+      coreA.vz += azA * subDt;
+
+      coreB.vx += axB * subDt;
+      coreB.vy += ayB * subDt;
+      coreB.vz += azB * subDt;
+
+      coreA.x += coreA.vx * subDt;
+      coreA.y += coreA.vy * subDt;
+      coreA.z += coreA.vz * subDt;
+
+      coreB.x += coreB.vx * subDt;
+      coreB.y += coreB.vy * subDt;
+      coreB.z += coreB.vz * subDt;
+    }
+
+    // Midpoint (bridge / collision shock zone) between the two galaxies
+    const midX = 0.5 * (coreA.x + coreB.x);
+    const midY = 0.5 * (coreA.y + coreB.y);
+    const midZ = 0.5 * (coreA.z + coreB.z);
+
+    // Shockwave intensity peaks when cores pass close to each other
+    const coreProximityShock = Math.exp(-(coreDist * coreDist) / 26.0);
+    const cAx = coreA.x, cAy = coreA.y, cAz = coreA.z, mA = coreA.mass;
+    const cBx = coreB.x, cBy = coreB.y, cBz = coreB.z, mB = coreB.mass;
+
+    const count = TOTAL_PARTICLES - 2;
+    let outIdx = 0;
+
+    // Gently damp extreme velocities inside the newly merged core during final coalescence
+    const mergerCooling = smoothstep(18.0, 27.0, simTime) * 0.08 * dt;
+    const comVx = (coreA.vx * mA + coreB.vx * mB) / (mA + mB);
+    const comVy = (coreA.vy * mA + coreB.vy * mB) / (mA + mB);
+    const comVz = (coreA.vz * mA + coreB.vz * mB) / (mA + mB);
+
+    for (let i = 0; i < count; i++) {
+      let x = px[i];
+      let y = py[i];
+      let z = pz[i];
+
+      // Force from Galaxy A
+      const dxA = cAx - x;
+      const dyA = cAy - y;
+      const dzA = cAz - z;
+      const r2A = dxA * dxA + dyA * dyA + dzA * dzA;
+      const invBulgeA = 1.0 / ((r2A + SOFTEN_A2) * Math.sqrt(r2A + SOFTEN_A2));
+      const invHaloA  = 1.0 / ((r2A + HALO_A2) * Math.sqrt(r2A + HALO_A2));
+      const fA = mA * (0.55 * invBulgeA + 0.45 * invHaloA);
+
+      // Force from Galaxy B
+      const dxB = cBx - x;
+      const dyB = cBy - y;
+      const dzB = cBz - z;
+      const r2B = dxB * dxB + dyB * dyB + dzB * dzB;
+      const invBulgeB = 1.0 / ((r2B + SOFTEN_B2) * Math.sqrt(r2B + SOFTEN_B2));
+      const invHaloB  = 1.0 / ((r2B + HALO_B2) * Math.sqrt(r2B + HALO_B2));
+      const fB = mB * (0.55 * invBulgeB + 0.45 * invHaloB);
+
+      let pvx = vx[i] + (dxA * fA + dxB * fB) * dt;
+      let pvy = vy[i] + (dyA * fA + dyB * fB) * dt;
+      let pvz = vz[i] + (dzA * fA + dzB * fB) * dt;
+
+      // Gas dissipation & violent relaxation near the merging cores
+      const resp = pGasResponsiveness[i];
+      if (mergerCooling > 0.0 && (r2A < 25.0 || r2B < 25.0)) {
+        const cool = mergerCooling * (0.35 + 0.65 * resp);
+        pvx -= (pvx - comVx) * cool;
+        pvy -= (pvy - comVy) * cool;
+        pvz -= (pvz - comVz) * cool;
+      }
+
+      x += pvx * dt;
+      y += pvy * dt;
+      z += pvz * dt;
+
+      px[i] = x;
+      py[i] = y;
+      pz[i] = z;
+      vx[i] = pvx;
+      vy[i] = pvy;
+      vz[i] = pvz;
+
+      // Starburst excitation when particles experience strong tidal shear / shock compression
+      let sb = pStarburst[i];
+      if (resp > 0.0) {
+        const dxM = x - midX, dyM = y - midY, dzM = z - midZ;
+        const r2Mid = dxM * dxM + dyM * dyM + dzM * dzM;
+        // Perturbation by companion galaxy + shock bridge between cores
+        const otherR2 = (pGalaxy[i] === 0) ? r2B : r2A;
+        const tidalShock = (coreProximityShock * Math.exp(-r2Mid * 0.065) + Math.exp(-otherR2 * 0.085) * 0.65) * resp;
+        sb = Math.min(1.35, sb * (1.0 - 0.18 * dt) + tidalShock * dt * 1.15);
+        pStarburst[i] = sb;
+      }
+
+      // Dynamic color modulation from starburst (shifts towards brilliant blue-white OB stars or glowing H-alpha magenta)
+      let cr = baseR[i];
+      let cg = baseG[i];
+      let cb = baseB[i];
+      let ca = baseA[i];
+      let cSize = baseSize[i];
+
+      if (sb > 0.02) {
+        const t = pType[i];
+        if (t < 0.5) {
+          // Star: heats up into luminous blue-white OB star cluster
+          cr += (0.72 - cr) * sb * 0.55;
+          cg += (0.88 - cg) * sb * 0.55;
+          cb += (1.00 - cb) * sb * 0.65;
+          ca = Math.min(1.0, ca + sb * 0.28);
+          cSize *= (1.0 + sb * 0.35);
+        } else if (t < 1.5) {
+          // Nebula: ignites with vibrant H-alpha crimson-magenta & cyan emission
+          cr = Math.min(1.2, cr + sb * 0.38);
+          cg = Math.min(1.0, cg + sb * 0.14);
+          cb = Math.min(1.2, cb + sb * 0.35);
+          ca = Math.min(0.24, ca * (1.0 + sb * 0.65));
+          cSize *= (1.0 + sb * 0.25);
+        }
+      }
+
+      gpuData[outIdx]     = x;
+      gpuData[outIdx + 1] = y;
+      gpuData[outIdx + 2] = z;
+      gpuData[outIdx + 3] = cr;
+      gpuData[outIdx + 4] = cg;
+      gpuData[outIdx + 5] = cb;
+      gpuData[outIdx + 6] = ca;
+      gpuData[outIdx + 7] = cSize;
+      gpuData[outIdx + 8] = pType[i];
+      outIdx += 9;
+    }
+
+    // Update the two Galactic Nuclei
+    const coreIdxA = TOTAL_PARTICLES - 2;
+    const coreIdxB = TOTAL_PARTICLES - 1;
+    const coreBoost = 1.0 + coreProximityShock * 0.45;
+
+    gpuData[outIdx]     = cAx;
+    gpuData[outIdx + 1] = cAy;
+    gpuData[outIdx + 2] = cAz;
+    gpuData[outIdx + 3] = baseR[coreIdxA] * coreBoost;
+    gpuData[outIdx + 4] = baseG[coreIdxA] * coreBoost;
+    gpuData[outIdx + 5] = baseB[coreIdxA] * coreBoost;
+    gpuData[outIdx + 6] = baseA[coreIdxA];
+    gpuData[outIdx + 7] = baseSize[coreIdxA] * (1.0 + coreProximityShock * 0.25);
+    gpuData[outIdx + 8] = 2.0;
+    outIdx += 9;
+
+    gpuData[outIdx]     = cBx;
+    gpuData[outIdx + 1] = cBy;
+    gpuData[outIdx + 2] = cBz;
+    gpuData[outIdx + 3] = baseR[coreIdxB] * coreBoost;
+    gpuData[outIdx + 4] = baseG[coreIdxB] * coreBoost;
+    gpuData[outIdx + 5] = baseB[coreIdxB] * coreBoost;
+    gpuData[outIdx + 6] = baseA[coreIdxB];
+    gpuData[outIdx + 7] = baseSize[coreIdxB] * (1.0 + coreProximityShock * 0.25);
+    gpuData[outIdx + 8] = 2.0;
+  }
+
+  function smoothstep(edge0, edge1, x) {
+    const t = Math.max(0.0, Math.min(1.0, (x - edge0) / (edge1 - edge0)));
+    return t * t * (3.0 - 2.0 * t);
+  }
+
+  // ============================================================================
+  // 3D CAMERA & MATRIX UTILITIES
+  // ============================================================================
+  const viewMat = new Float32Array(16);
+  const projMat = new Float32Array(16);
+  const viewProjMat = new Float32Array(16);
+
+  function perspective(out, fovy, aspect, near, far) {
+    const f = 1.0 / Math.tan(fovy * 0.5);
+    const nf = 1.0 / (near - far);
+    out.fill(0);
+    out[0] = f / aspect;
+    out[5] = f;
+    out[10] = (far + near) * nf;
+    out[11] = -1.0;
+    out[14] = (2.0 * far * near) * nf;
+  }
+
+  function lookAt(out, eyeX, eyeY, eyeZ, centerX, centerY, centerZ, upX, upY, upZ) {
+    let zx = eyeX - centerX, zy = eyeY - centerY, zz = eyeZ - centerZ;
+    let len = Math.hypot(zx, zy, zz) || 1;
+    zx /= len; zy /= len; zz /= len;
+
+    let xx = upY * zz - upZ * zy;
+    let xy = upZ * zx - upX * zz;
+    let xz = upX * zy - upY * zx;
+    len = Math.hypot(xx, xy, xz) || 1;
+    xx /= len; xy /= len; xz /= len;
+
+    const yx = zy * xz - zz * xy;
+    const yy = zz * xx - zx * xz;
+    const yz = zx * xy - zy * xx;
+
+    out[0] = xx; out[1] = yx; out[2] = zx; out[3] = 0;
+    out[4] = xy; out[5] = yy; out[6] = zy; out[7] = 0;
+    out[8] = xz; out[9] = yz; out[10] = zz; out[11] = 0;
+    out[12] = -(xx * eyeX + xy * eyeY + xz * eyeZ);
+    out[13] = -(yx * eyeX + yy * eyeY + yz * eyeZ);
+    out[14] = -(zx * eyeX + zy * eyeY + zz * eyeZ);
+    out[15] = 1;
+  }
+
+  function multiplyMat4(out, a, b) {
+    for (let i = 0; i < 4; i++) {
+      const ai0 = a[i], ai1 = a[i + 4], ai2 = a[i + 8], ai3 = a[i + 12];
+      out[i]      = ai0 * b[0]  + ai1 * b[1]  + ai2 * b[2]  + ai3 * b[3];
+      out[i + 4]  = ai0 * b[4]  + ai1 * b[5]  + ai2 * b[6]  + ai3 * b[7];
+      out[i + 8]  = ai0 * b[8]  + ai1 * b[9]  + ai2 * b[10] + ai3 * b[11];
+      out[i + 12] = ai0 * b[12] + ai1 * b[13] + ai2 * b[14] + ai3 * b[15];
+    }
+  }
+
+  // Pre-warm slightly so the two galaxies are already sweeping into the frame on frame 1
+  for (let i = 0; i < 48; i++) {
+    simTime += 0.035;
+    stepPhysics(0.035);
+  }
+
+  // ============================================================================
+  // RENDER HELPERS
+  // ============================================================================
+  function drawQuad(prog) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadVBO);
+    const loc = gl.getAttribLocation(prog, 'aPos');
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+
+  const locBgRes = gl.getUniformLocation(bgProg, 'uResolution');
+  const locBgTime = gl.getUniformLocation(bgProg, 'uTime');
+  const locBgCamRot = gl.getUniformLocation(bgProg, 'uCamRot');
+
+  const locPartVP = gl.getUniformLocation(particleProg, 'uViewProj');
+  const locPartScale = gl.getUniformLocation(particleProg, 'uScale');
+  const locPartFade = gl.getUniformLocation(particleProg, 'uFade');
+  const attrPos = gl.getAttribLocation(particleProg, 'aPos');
+  const attrColor = gl.getAttribLocation(particleProg, 'aColor');
+  const attrParams = gl.getAttribLocation(particleProg, 'aParams');
+
+  const locBrightTex = gl.getUniformLocation(brightProg, 'uTex');
+  const locBlurTex = gl.getUniformLocation(blurProg, 'uTex');
+  const locBlurDir = gl.getUniformLocation(blurProg, 'uDirection');
+
+  const locCompScene = gl.getUniformLocation(compositeProg, 'uScene');
+  const locCompBloom1 = gl.getUniformLocation(compositeProg, 'uBloom1');
+  const locCompBloom2 = gl.getUniformLocation(compositeProg, 'uBloom2');
+
+  // ============================================================================
+  // MAIN ANIMATION LOOP
+  // ============================================================================
+  let lastTime = performance.now();
+  let totalElapsed = 0.0;
+
+  function render(now) {
+    const rawDt = Math.min(0.05, Math.max(0.001, (now - lastTime) * 0.001));
+    lastTime = now;
+    totalElapsed += rawDt;
+
+    // Advance astrophysical simulation time
+    const simSpeed = 0.92;
+    const dt = rawDt * simSpeed;
+    simTime += dt;
+
+    if (simTime >= CYCLE_DURATION) {
+      initSimulation();
+      for (let i = 0; i < 48; i++) {
+        simTime += 0.035;
+        stepPhysics(0.035);
+      }
+    } else {
+      stepPhysics(dt);
+    }
+
+    // Smooth fade-in at start of cycle and fade-out at end of cycle for seamless eternal loop
+    const fadeIn = smoothstep(1.6, 3.0, simTime);
+    const fadeOut = 1.0 - smoothstep(CYCLE_DURATION - 1.8, CYCLE_DURATION, simTime);
+    const masterFade = fadeIn * fadeOut;
+
+    // Cinematic camera choreography:
+    // Orbits gracefully in 3D, framing the initial approach, pulling back slightly as the vast
+    // Antennae-like tidal tails unfurl, and gliding around the blazing starburst merger core.
+    const camPhase = (simTime - 1.6) / (CYCLE_DURATION - 1.6);
+    const azimuth = -0.28 + camPhase * 1.18;
+    const elevation = 0.34 + 0.22 * Math.sin(camPhase * Math.PI * 1.35);
+
+    // Distance adjusts smoothly to keep both cores and sweeping tidal tails beautifully framed in 1080x1080
+    const coreSep = Math.hypot(coreB.x - coreA.x, coreB.y - coreA.y, coreB.z - coreA.z);
+    const tailExpansion = smoothstep(5.5, 16.0, simTime) * (1.0 - 0.35 * smoothstep(22.0, 32.0, simTime));
+    const camDist = 25.5 + coreSep * 0.36 + tailExpansion * 6.2;
+
+    const eyeX = camDist * Math.cos(elevation) * Math.sin(azimuth);
+    const eyeY = camDist * Math.sin(elevation);
+    const eyeZ = camDist * Math.cos(elevation) * Math.cos(azimuth);
+
+    // Track slightly toward the center of mass of the two cores
+    const targetX = (coreA.x * coreA.mass + coreB.x * coreB.mass) / (coreA.mass + coreB.mass) * 0.65;
+    const targetY = (coreA.y * coreA.mass + coreB.y * coreB.mass) / (coreA.mass + coreB.mass) * 0.65;
+    const targetZ = (coreA.z * coreA.mass + coreB.z * coreB.mass) / (coreA.mass + coreB.mass) * 0.65;
+
+    const aspect = fboWidth / fboHeight;
+    // If window is narrow, widen vertical FOV slightly so galaxies still fit
+    const baseFov = 0.78 / Math.min(1.0, aspect);
+    perspective(projMat, baseFov, aspect, 0.5, 250.0);
+    lookAt(viewMat, eyeX, eyeY, eyeZ, targetX, targetY, targetZ, -0.12, 0.98, 0.08);
+    multiplyMat4(viewProjMat, projMat, viewMat);
+
+    // --------------------------------------------------------------------------
+    // PASS 1: Render Deep Space Background + Galaxies into HDR Scene FBO
+    // --------------------------------------------------------------------------
+    gl.bindFramebuffer(gl.FRAMEBUFFER, sceneFBO.fbo);
+    gl.viewport(0, 0, sceneFBO.w, sceneFBO.h);
+    gl.disable(gl.BLEND);
+
+    gl.useProgram(bgProg);
+    gl.uniform2f(locBgRes, sceneFBO.w, sceneFBO.h);
+    gl.uniform1f(locBgTime, totalElapsed);
+    gl.uniform2f(locBgCamRot, azimuth, elevation);
+    drawQuad(bgProg);
+
+    // Upload updated particle buffer
+    gl.bindBuffer(gl.ARRAY_BUFFER, particleVBO);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, gpuData);
+
+    gl.useProgram(particleProg);
+    gl.uniformMatrix4fv(locPartVP, false, viewProjMat);
+    const minDim = Math.min(sceneFBO.w, sceneFBO.h);
+    gl.uniform1f(locPartScale, minDim * 0.0265);
+    gl.uniform1f(locPartFade, masterFade);
+
+    const stride = FLOATS_PER_VERTEX * 4;
+    gl.enableVertexAttribArray(attrPos);
+    gl.vertexAttribPointer(attrPos, 3, gl.FLOAT, false, stride, 0);
+    gl.enableVertexAttribArray(attrColor);
+    gl.vertexAttribPointer(attrColor, 4, gl.FLOAT, false, stride, 12);
+    gl.enableVertexAttribArray(attrParams);
+    gl.vertexAttribPointer(attrParams, 2, gl.FLOAT, false, stride, 28);
+
+    // Enable blending: first draw dark dust lanes (standard alpha blend), then luminous stars & nebulae (additive)
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.drawArrays(gl.POINTS, 0, TOTAL_DUST);
+
+    gl.blendFunc(gl.ONE, gl.ONE);
+    gl.drawArrays(gl.POINTS, TOTAL_DUST, TOTAL_LUMINOUS);
+
+    // --------------------------------------------------------------------------
+    // PASS 2: Multi-Scale Gaussian Bloom
+    // --------------------------------------------------------------------------
+    gl.disable(gl.BLEND);
+
+    // 2a. Bright-pass extract into half-res FBO1A
+    gl.bindFramebuffer(gl.FRAMEBUFFER, bloomFBO1A.fbo);
+    gl.viewport(0, 0, bloomFBO1A.w, bloomFBO1A.h);
+    gl.useProgram(brightProg);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, sceneFBO.tex);
+    gl.uniform1i(locBrightTex, 0);
+    drawQuad(brightProg);
+
+    // 2b. Blur Level 1 (Tight Glow)
+    gl.useProgram(blurProg);
+    gl.uniform1i(locBlurTex, 0);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, bloomFBO1B.fbo);
+    gl.bindTexture(gl.TEXTURE_2D, bloomFBO1A.tex);
+    gl.uniform2f(locBlurDir, 1.0 / bloomFBO1A.w, 0.0);
+    drawQuad(blurProg);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, bloomFBO1A.fbo);
+    gl.bindTexture(gl.TEXTURE_2D, bloomFBO1B.tex);
+    gl.uniform2f(locBlurDir, 0.0, 1.0 / bloomFBO1A.h);
+    drawQuad(blurProg);
+
+    // 2c. Downsample & Wide Blur Level 2 (Wide Galactic Halo & Core Bloom)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, bloomFBO2A.fbo);
+    gl.viewport(0, 0, bloomFBO2A.w, bloomFBO2A.h);
+    gl.bindTexture(gl.TEXTURE_2D, bloomFBO1A.tex);
+    gl.uniform2f(locBlurDir, 1.5 / bloomFBO2A.w, 0.0);
+    drawQuad(blurProg);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, bloomFBO2B.fbo);
+    gl.bindTexture(gl.TEXTURE_2D, bloomFBO2A.tex);
+    gl.uniform2f(locBlurDir, 0.0, 1.5 / bloomFBO2A.h);
+    drawQuad(blurProg);
+
+    // Extra pass on Level 2 for ultra-silky wide glow
+    gl.bindFramebuffer(gl.FRAMEBUFFER, bloomFBO2A.fbo);
+    gl.bindTexture(gl.TEXTURE_2D, bloomFBO2B.tex);
+    gl.uniform2f(locBlurDir, 2.2 / bloomFBO2A.w, 0.0);
+    drawQuad(blurProg);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, bloomFBO2B.fbo);
+    gl.bindTexture(gl.TEXTURE_2D, bloomFBO2A.tex);
+    gl.uniform2f(locBlurDir, 0.0, 2.2 / bloomFBO2A.h);
+    drawQuad(blurProg);
+
+    // --------------------------------------------------------------------------
+    // PASS 3: Final Composite & ACES Filmic Tone Mapping to Screen
+    // --------------------------------------------------------------------------
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, fboWidth, fboHeight);
+    gl.useProgram(compositeProg);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, sceneFBO.tex);
+    gl.uniform1i(locCompScene, 0);
+
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, bloomFBO1A.tex);
+    gl.uniform1i(locCompBloom1, 1);
+
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, bloomFBO2B.tex);
+    gl.uniform1i(locCompBloom2, 2);
+
+    drawQuad(compositeProg);
+
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>

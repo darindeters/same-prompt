@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#f3e8e1">
+<title>Cherry Blossom</title>
+<style>
+*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#f3e8e1}canvas{display:block;width:100%;height:100%}
+</style>
+</head>
+<body>
+<canvas aria-label="A cherry tree grows from a seed, blossoms, and releases its petals into the wind."></canvas>
+<script>
+'use strict';
+(() => {
+  const canvas = document.querySelector('canvas'), ctx = canvas.getContext('2d');
+  const TAU = Math.PI * 2, duration = 64;
+  let width, height, scale, offsetX, offsetY, background;
+  let state = 42177;
+  const random = () => { state = (Math.imul(state,1664525)+1013904223)>>>0; return state/4294967296; };
+  const between = (a,b) => a+(b-a)*random();
+  const clamp = x => Math.max(0,Math.min(1,x));
+  const ease = x => {x=clamp(x);return x*x*(3-2*x);};
+  const branches=[], flowers=[], roots=[];
+  const point = (b,t) => ({x:(1-t)*(1-t)*b.x+2*(1-t)*t*b.cx+t*t*b.ex,y:(1-t)*(1-t)*b.y+2*(1-t)*t*b.cy+t*t*b.ey});
+  function branch(x,y,length,angle,thickness,depth,start) {
+    const bend=between(-.19,.19);
+    const b={x,y,cx:x+Math.sin(angle+bend)*length*.52,cy:y-Math.cos(angle+bend)*length*.52,ex:x+Math.sin(angle)*length,ey:y-Math.cos(angle)*length,w:thickness,depth,start,span:depth===0?4.4:between(1.5,2.4)};
+    branches.push(b);
+    if(depth>=3){
+      const count=depth>=6?4:3;
+      for(let i=0;i<count;i++){
+        const p=point(b,between(.38,1));
+        flowers.push({x:p.x+between(-22,22),y:p.y+between(-19,19),size:between(5,10.8),rotation:between(0,TAU),tone:Math.floor(random()*6),birth:Math.max(11.5,start+b.span)+between(.2,5),fall:between(31,48),phase:between(0,TAU),speed:between(.75,1.35)});
+      }
+    }
+    if(depth>=8 || length<16) return;
+    const next=start+b.span*.68;
+    if(depth===0){
+      branch(b.ex,b.ey,length*.76,-.55,thickness*.7,1,next);
+      branch(b.ex,b.ey,length*.79,.54,thickness*.72,1,next+.25);
+      const p=point(b,.78);branch(p.x,p.y,length*.83,-.05,thickness*.66,1,next+.65);
+    } else {
+      const spread=between(.3,.53);
+      branch(b.ex,b.ey,length*between(.67,.79),Math.max(-1.52,angle-spread),thickness*.68,depth+1,next);
+      branch(b.ex,b.ey,length*between(.67,.79),Math.min(1.52,angle+spread),thickness*.65,depth+1,next+between(0,.45));
+    }
+  }
+  branch(540,866,199,-.085,29,0,2.5);
+  for(let i=0;i<11;i++) roots.push({x:540,y:864,ex:540+between(-88,88),ey:between(869,889),cx:540+between(-40,40),cy:between(866,882),w:between(2,6),start:2.5,span:2.6});
+  flowers.sort((a,b)=>a.y-b.y);
+  const stamps=Array.from({length:6},(_,j)=>{
+    const c=document.createElement('canvas');c.width=c.height=80;const g=c.getContext('2d');g.translate(40,40);
+    const colors=['#f9d4df','#f8c3d5','#ffe7e9','#efacc5','#fff0ed','#f6ccdc'];
+    for(let k=0;k<5;k++){
+      g.save();g.rotate(k*TAU/5);g.beginPath();g.moveTo(0,2);g.bezierCurveTo(-17,-5,-20,-24,-7,-28);g.lineTo(0,-24);g.lineTo(5,-29);g.bezierCurveTo(21,-24,16,-6,0,2);
+      const grad=g.createLinearGradient(0,-28,0,4);grad.addColorStop(0,colors[j]);grad.addColorStop(1,'#df87a9');g.fillStyle=grad;g.fill();g.restore();
+    }
+    g.fillStyle='#f5dfa4';g.beginPath();g.arc(0,0,3,0,TAU);g.fill();
+    g.strokeStyle='rgba(152,73,102,.5)';g.lineWidth=.7;
+    for(let k=0;k<7;k++){const a=k*TAU/7;g.beginPath();g.moveTo(0,0);g.lineTo(Math.cos(a)*8,Math.sin(a)*8);g.stroke();g.fillStyle='#b66c80';g.beginPath();g.arc(Math.cos(a)*8,Math.sin(a)*8,1.15,0,TAU);g.fill();}
+    return c;
+  });
+  function resize(){
+    width=innerWidth;height=innerHeight;const dpr=Math.min(devicePixelRatio||1,2);
+    canvas.width=Math.round(width*dpr);canvas.height=Math.round(height*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);
+    scale=Math.min(width/1080,height/1080);offsetX=(width-1080*scale)/2;offsetY=(height-1080*scale)/2;
+    background=document.createElement('canvas');background.width=canvas.width;background.height=canvas.height;
+    const g=background.getContext('2d');g.scale(dpr,dpr);
+    const sky=g.createLinearGradient(0,0,0,height);sky.addColorStop(0,'#e9e4e4');sky.addColorStop(.56,'#f7e9df');sky.addColorStop(1,'#e9dbd2');g.fillStyle=sky;g.fillRect(0,0,width,height);
+    g.translate(offsetX,offsetY);g.scale(scale,scale);
+    const glow=g.createRadialGradient(749,284,5,749,284,320);glow.addColorStop(0,'rgba(255,250,229,.82)');glow.addColorStop(1,'rgba(255,246,226,0)');g.fillStyle=glow;g.fillRect(300,-60,850,750);
+    g.fillStyle='rgba(255,250,234,.75)';g.beginPath();g.arc(760,268,77,0,TAU);g.fill();
+    g.fillStyle='rgba(181,168,175,.10)';g.beginPath();g.moveTo(-200,850);g.bezierCurveTo(70,705,180,755,385,802);g.bezierCurveTo(650,857,850,710,1300,803);g.lineTo(1300,1200);g.lineTo(-200,1200);g.fill();
+    g.fillStyle='rgba(181,159,164,.09)';g.beginPath();g.moveTo(-200,888);g.bezierCurveTo(200,776,420,889,700,827);g.bezierCurveTo(940,774,1110,853,1300,857);g.lineTo(1300,1200);g.lineTo(-200,1200);g.fill();
+    const ground=g.createRadialGradient(540,884,15,540,884,280);ground.addColorStop(0,'rgba(98,83,78,.17)');ground.addColorStop(.45,'rgba(119,100,90,.08)');ground.addColorStop(1,'rgba(119,100,90,0)');g.save();g.translate(0,688);g.scale(1,.23);g.fillStyle=ground;g.fillRect(220,570,640,650);g.restore();
+    // A fine, seeded paper grain is drawn once, not regenerated each frame.
+    let noise=7919;for(let i=0;i<32000;i++){noise=(Math.imul(noise,1664525)+1013904223)>>>0;const x=noise/4294967296*1080;noise=(Math.imul(noise,1664525)+1013904223)>>>0;const y=noise/4294967296*1080;g.fillStyle=i%2?'rgba(100,71,80,.025)':'rgba(255,255,255,.12)';g.fillRect(x,y,.7,.7);}
+  }
+  const sway=(x,y,t)=>x+Math.pow(clamp((868-y)/650),1.6)*(Math.sin(t*.75)*3.2+Math.sin(t*1.31+y*.008)*1.8);
+  function wood(b,t,root=false){
+    const progress=ease((t-b.start)/b.span);if(progress<=0)return;
+    const left=[],right=[];
+    for(let i=0;i<=9;i++){
+      const u=progress*i/9,p=point(b,u),q=point(b,Math.min(1,u+.01));
+      const a=Math.atan2(q.y-p.y,q.x-p.x)+Math.PI/2;
+      const w=b.w*(1-u*.52)*.5;const x=sway(p.x,p.y,t);
+      left.push([x+Math.cos(a)*w,p.y+Math.sin(a)*w]);right.push([x-Math.cos(a)*w,p.y-Math.sin(a)*w]);
+    }
+    ctx.beginPath();left.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));right.reverse().forEach(p=>ctx.lineTo(...p));ctx.closePath();ctx.fillStyle=root?'#66504d':b.depth<2?'#594448':b.depth<5?'#6b4d53':'#855d65';ctx.fill();
+    if(b.w>5){ctx.beginPath();for(let i=0;i<=9;i++){const p=point(b,progress*i/9),x=sway(p.x,p.y,t)-b.w*.19;if(i===0)ctx.moveTo(x,p.y);else ctx.lineTo(x,p.y);}ctx.strokeStyle='rgba(219,162,148,.24)';ctx.lineWidth=b.w*.14;ctx.stroke();}
+  }
+  function petal(x,y,size,angle,flip,alpha){
+    ctx.save();ctx.translate(x,y);ctx.rotate(angle);ctx.scale(1,Math.max(.16,Math.abs(flip)));ctx.globalAlpha=alpha;ctx.fillStyle='#edb2c6';ctx.beginPath();ctx.moveTo(-size*.7,0);ctx.bezierCurveTo(-size*.1,-size*.85,size*.9,-size*.65,size*.8,-size*.1);ctx.lineTo(size*.5,size*.05);ctx.lineTo(size*.72,size*.3);ctx.bezierCurveTo(size*.2,size*.8,-size*.4,size*.6,-size*.7,0);ctx.fill();ctx.restore();
+  }
+  function render(ms){
+    const t=((ms-start)/1000)%duration;
+    ctx.globalAlpha=1;ctx.drawImage(background,0,0,width,height);ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);
+    // The seed settles into the soil before the first shoot appears.
+    const seedY=790+ease(t/1.6)*77;
+    ctx.save();ctx.translate(540,seedY);ctx.rotate(-.45+ease(t/1.6)*.8);ctx.globalAlpha=1-ease((t-3)/2);ctx.fillStyle='#795443';ctx.beginPath();ctx.ellipse(0,0,5.8,8,0,0,TAU);ctx.fill();ctx.strokeStyle='#b58b66';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(-1,-6);ctx.quadraticCurveTo(2,0,0,6);ctx.stroke();ctx.restore();
+    const fade=1-ease((t-59)/4);
+    ctx.globalAlpha=fade;
+    roots.forEach(b=>wood(b,t,true));branches.forEach(b=>wood(b,t));
+    for(const f of flowers){
+      const bloom=ease((t-f.birth)/2.7);if(bloom===0)continue;
+      const age=t-f.fall;
+      if(age<0){
+        const x=sway(f.x,f.y,t),s=f.size*bloom;
+        ctx.save();ctx.translate(x,f.y);ctx.rotate(f.rotation+Math.sin(t*.9+f.phase)*.055);ctx.globalAlpha=fade;ctx.drawImage(stamps[f.tone],-s*1.25,-s*1.25,s*2.5,s*2.5);ctx.restore();
+      }else{
+        // Each blossom loosens into individual petals with different fall times.
+        for(let k=0;k<3;k++){
+          const a=Math.max(0,age-k*.24),v=f.speed;
+          let x=f.x+(19*a+2.0*a*a)*v+Math.sin(a*1.6+f.phase+k)*12;
+          let y=f.y+(12*a+1.35*a*a)*v+Math.sin(a*1.2+f.phase)*10;
+          const floor=881+Math.sin(f.phase*3+k)*14;
+          const landed=y>floor;
+          if(landed){y=floor;x=Math.min(x,1300);}
+          const alpha=fade*(1-ease((age-19)/9));if(x>1250||alpha<=0)continue;
+          petal(x,y,f.size*.65,f.rotation+a*(.8+k*.2),landed?.3:Math.cos(a*2+f.phase+k),alpha);
+        }
+      }
+    }
+    // Small backlit motes make the air feel alive even before flowering.
+    for(let i=0;i<25;i++){
+      const x=(i*173.7+t*(4+i%3))%1250-85,y=170+(i*97.3)%720+Math.sin(t*.3+i)*15;
+      ctx.globalAlpha=.16+.12*Math.sin(t+i);ctx.fillStyle='#fffaf0';ctx.beginPath();ctx.arc(x,y,1.1+(i%3)*.35,0,TAU);ctx.fill();
+    }
+    ctx.restore();ctx.globalAlpha=1;requestAnimationFrame(render);
+  }
+  addEventListener('resize',resize,{passive:true});resize();
+  const start=performance.now();requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>

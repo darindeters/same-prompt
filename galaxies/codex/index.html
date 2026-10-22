@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Galactic Merger</title>
+<style>
+*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#020309}canvas{display:block;width:100%;height:100%}
+</style>
+</head>
+<body>
+<canvas aria-label="Two spiral galaxies collide, shedding luminous tidal streams before merging into one galaxy."></canvas>
+<script>
+'use strict';
+(() => {
+  const canvas = document.querySelector('canvas');
+  const ctx = canvas.getContext('2d', {alpha:false});
+  const sky = document.createElement('canvas');
+  const skyCtx = sky.getContext('2d');
+  const halo = document.createElement('canvas');
+  const haloCtx = halo.getContext('2d');
+  const TAU = Math.PI*2, COUNT = 19000, G = 0.00072, SOFT = 0.00032;
+  const stars = [], bins = Array.from({length:32},()=>[]);
+  const colors = [
+    [255,190,114],[255,211,160],[255,233,200],[255,246,229],
+    [102,151,255],[139,185,255],[180,211,255],[218,234,255]
+  ];
+  let width, height, ratio, scale, time = 0, last = 0, fade = 1;
+  let seed = 41873;
+  function random(){seed=(Math.imul(seed,1664525)+1013904223)|0;return (seed>>>0)/4294967296;}
+  function smooth(a){return a*a*(3-2*a);}
+  function coreAt(t, side){
+    const keys=[[0,.335],[12,.225],[21,.085],[33,.192],[45,.107],[57,.035],[69,0],[100,0]];
+    let i=0;while(i<keys.length-2 && t>keys[i+1][0])i++;
+    const a=keys[i],b=keys[i+1],u=smooth(Math.max(0,Math.min(1,(t-a[0])/(b[0]-a[0]))));
+    const r=a[1]+(b[1]-a[1])*u;
+    const angle=-.46+t*.044+Math.pow(Math.min(t,69)/69,2)*4.6;
+    return {x:side*r*Math.cos(angle),y:side*r*Math.sin(angle),z:side*r*.10};
+  }
+  function project(x,y,z){
+    return {x:width*.5+(x*.966-y*.259)*scale,y:height*.5+(x*.259+y*.966)*scale*.82-z*scale*.58};
+  }
+  function reset(){
+    seed=41873;stars.length=0;time=0;
+    for(let n=0;n<COUNT;n++){
+      const galaxy=n<COUNT/2?0:1,side=galaxy===0?-1:1;
+      const center=coreAt(0,side),next=coreAt(.02,side);
+      const bulge=random()<.22;
+      const r=bulge?.053*Math.pow(random(),.72):.027+.237*Math.pow(random(),1.35);
+      const arm=Math.floor(random()*3)*TAU/3;
+      const a=bulge?random()*TAU:arm+Math.log(r/.025)*2.7+(random()-.5)*(.27+r*1.0);
+      const thickness=(random()+random()+random()-1.5)*(bulge?.04:.012);
+      const tilt=galaxy===0?.48:-.39,turn=galaxy===0?.3:1.4;
+      const transform=(x,y,z)=>({x:x*Math.cos(turn)-y*Math.cos(tilt)*Math.sin(turn)+z*Math.sin(tilt)*Math.sin(turn),y:x*Math.sin(turn)+y*Math.cos(tilt)*Math.cos(turn)-z*Math.sin(tilt)*Math.cos(turn),z:y*Math.sin(tilt)+z*Math.cos(tilt)});
+      const p=transform(r*Math.cos(a),r*Math.sin(a),thickness);
+      const speed=Math.sqrt(G*r*r/Math.pow(r*r+SOFT,1.5));
+      const v=transform(-Math.sin(a)*speed,Math.cos(a)*speed,0);
+      const family=(bulge||r<.07)?Math.floor(random()*4):4+Math.floor(random()*4);
+      const bright=random();
+      const level=bright>.99?3:bright>.90?2:bright>.51?1:0;
+      stars.push({x:center.x+p.x,y:center.y+p.y,z:center.z+p.z,vx:v.x+(next.x-center.x)/.02,vy:v.y+(next.y-center.y)/.02,vz:v.z+(next.z-center.z)/.02,bin:family*4+level,size:level===3?1.25:.45+random()*.55,phase:random()*TAU});
+    }
+  }
+  function glow(context,x,y,r,stops){
+    const g=context.createRadialGradient(x,y,0,x,y,r);
+    for(const stop of stops)g.addColorStop(stop[0],stop[1]);
+    context.fillStyle=g;context.fillRect(x-r,y-r,r*2,r*2);
+  }
+  function resize(){
+    ratio=Math.min(window.devicePixelRatio||1,2);
+    width=window.innerWidth;height=window.innerHeight;scale=Math.min(width,height)*.94;
+    canvas.width=Math.round(width*ratio);canvas.height=Math.round(height*ratio);
+    ctx.setTransform(ratio,0,0,ratio,0,0);
+    sky.width=canvas.width;sky.height=canvas.height;skyCtx.setTransform(ratio,0,0,ratio,0,0);
+    skyCtx.fillStyle='#020309';skyCtx.fillRect(0,0,width,height);
+    glow(skyCtx,width*.48,height*.48,Math.max(width,height)*.7,[[0,'#080d20'],[.45,'#040715'],[1,'#010207']]);
+    let s=seed;seed=7329;
+    for(let i=0;i<Math.min(1900,width*height/650);i++){
+      const x=random()*width,y=random()*height,r=random();
+      skyCtx.fillStyle=`rgba(${r>.8?'184,205,255':'134,154,192'},${.08+random()*.38})`;
+      const size=r>.99?1.5:r>.85?.95:.55;skyCtx.fillRect(x,y,size,size);
+      if(r>.995)glow(skyCtx,x,y,5,[[0,'#b3d2ff60'],[.2,'#819bd929'],[1,'#496abb00']]);
+    }
+    seed=s;
+    halo.width=Math.ceil(width*.4);halo.height=Math.ceil(height*.4);
+  }
+  function step(dt){
+    time+=dt;
+    const c1=coreAt(time,-1),c2=coreAt(time,1);
+    const merged=smooth(Math.max(0,Math.min(1,(time-56)/20)));
+    for(const p of stars){
+      let ax=0,ay=0,az=0;
+      for(const c of [c1,c2]){
+        const dx=c.x-p.x,dy=c.y-p.y,dz=c.z-p.z;
+        const f=G/Math.pow(dx*dx+dy*dy+dz*dz+SOFT,1.5);
+        ax+=dx*f;ay+=dy*f;az+=dz*f;
+      }
+      // Very gentle dynamical friction settles the bound remnant while tails drift freely.
+      const dist=p.x*p.x+p.y*p.y+p.z*p.z;
+      const drag=1-dt*merged*.025*Math.exp(-dist/.045);
+      p.vx=(p.vx+ax*dt)*drag;p.vy=(p.vy+ay*dt)*drag;p.vz=(p.vz+az*dt)*drag;
+      p.x+=p.vx*dt;p.y+=p.vy*dt;p.z+=p.vz*dt;
+    }
+  }
+  function draw(){
+    ctx.globalCompositeOperation='source-over';ctx.globalAlpha=1;
+    ctx.drawImage(sky,0,0,width,height);
+    const c1=coreAt(time,-1),c2=coreAt(time,1);
+    // Soft light is drawn separately at reduced resolution, keeping the individual stars crisp.
+    haloCtx.setTransform(.4,0,0,.4,0,0);haloCtx.clearRect(0,0,width,height);
+    haloCtx.globalCompositeOperation='lighter';
+    for(const c of [c1,c2]){
+      const q=project(c.x,c.y,c.z);
+      glow(haloCtx,q.x,q.y,scale*.24,[[0,'rgba(255,169,82,.13)'],[.15,'rgba(202,126,108,.065)'],[.5,'rgba(103,122,218,.03)'],[1,'rgba(36,62,160,0)']]);
+    }
+    for(const b of bins)b.length=0;
+    const unit=Math.max(.65,Math.min(width,height)/1080);
+    for(const p of stars){
+      const q=project(p.x,p.y,p.z);
+      if(q.x< -10||q.x>width+10||q.y< -10||q.y>height+10)continue;
+      p.sx=q.x;p.sy=q.y;bins[p.bin].push(p);
+      if(p.bin%4===3){
+        const rgb=colors[p.bin>>2];
+        haloCtx.fillStyle=`rgba(${rgb[0]},${rgb[1]},${rgb[2]},.085)`;
+        haloCtx.beginPath();haloCtx.arc(q.x,q.y,3.8*unit,0,TAU);haloCtx.fill();
+      }
+    }
+    ctx.globalCompositeOperation='lighter';ctx.drawImage(halo,0,0,width,height);
+    for(let i=0;i<bins.length;i++){
+      const color=colors[i>>2],level=i%4;
+      ctx.fillStyle=`rgba(${color[0]},${color[1]},${color[2]},${[.24,.43,.69,.95][level]})`;
+      ctx.beginPath();
+      for(const p of bins[i]){const s=p.size*unit;ctx.rect(p.sx,p.sy,s,s);}
+      ctx.fill();
+    }
+    for(const c of [c1,c2]){
+      const p=project(c.x,c.y,c.z);
+      glow(ctx,p.x,p.y,scale*.069,[[0,'rgba(255,247,224,.7)'],[.065,'rgba(255,230,183,.52)'],[.2,'rgba(255,190,115,.23)'],[.5,'rgba(255,150,84,.06)'],[1,'rgba(255,130,65,0)']]);
+      glow(ctx,p.x,p.y,scale*.013,[[0,'rgba(255,255,249,.95)'],[.13,'rgba(255,250,226,.8)'],[.4,'rgba(255,224,172,.28)'],[1,'rgba(255,199,132,0)']]);
+    }
+    ctx.globalCompositeOperation='source-over';
+    fade=time<2?smooth(time/2):time>96?1-smooth(Math.min(1,(time-96)/4)):1;
+    if(fade<1){ctx.fillStyle=`rgba(2,3,9,${1-fade})`;ctx.fillRect(0,0,width,height);}
+  }
+  function frame(now){
+    const dt=last?Math.min((now-last)/1000,.045):1/60;last=now;
+    // Substeps stabilize the close core encounters on slower displays.
+    const count=Math.ceil(dt/.012);
+    for(let i=0;i<count;i++)step(dt/count);
+    if(time>=100)reset();
+    draw();requestAnimationFrame(frame);
+  }
+  window.addEventListener('resize',resize);
+  document.addEventListener('visibilitychange',()=>{last=0;});
+  resize();reset();requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hundred Pendulums</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #06070c;
+  }
+  canvas {
+    display: block;
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function () {
+  'use strict';
+
+  var N = 100;              // number of pendulums
+  var G = 9.81;             // gravity
+  var L1 = 1.0, L2 = 1.0;   // rod lengths (physical units)
+  var M1 = 1.0, M2 = 1.0;   // bob masses
+  var DT = 1 / 600;         // integration step (seconds of simulated time)
+  var SPEED = 1.0;          // simulated seconds per real second
+  var MAX_FRAME = 1 / 20;   // clamp for tab-switch catch-up
+
+  var canvas = document.getElementById('c');
+  var ctx = canvas.getContext('2d');
+  var trail = document.createElement('canvas');
+  var tctx = trail.getContext('2d');
+
+  var W = 0, H = 0, DPR = 1;
+  var cx = 0, cy = 0, scale = 1;
+
+  // State arrays: theta1, theta2, omega1, omega2
+  var th1 = new Float64Array(N);
+  var th2 = new Float64Array(N);
+  var w1 = new Float64Array(N);
+  var w2 = new Float64Array(N);
+  var px = new Float64Array(N);   // previous bob-2 screen positions for trail
+  var py = new Float64Array(N);
+  var hasPrev = false;
+
+  // Colours: one hue per pendulum, sweeping the spectrum.
+  var colors = new Array(N);
+  var colorsDim = new Array(N);
+  for (var i = 0; i < N; i++) {
+    var hue = (i / N) * 300 + 190;   // cyan -> magenta -> amber, wraps nicely
+    colors[i] = 'hsl(' + (hue % 360) + ', 95%, 62%)';
+    colorsDim[i] = 'hsla(' + (hue % 360) + ', 95%, 62%, 0.55)';
+  }
+
+  function init() {
+    // All start nearly identical: both rods raised high so the motion
+    // is energetic enough to go chaotic quickly.
+    var base1 = Math.PI * 0.72;
+    var base2 = Math.PI * 0.95;
+    for (var i = 0; i < N; i++) {
+      var eps = (i - (N - 1) / 2) * 1e-6;   // spread of ~1e-4 rad across the set
+      th1[i] = base1 + eps;
+      th2[i] = base2 - eps * 0.5;
+      w1[i] = 0;
+      w2[i] = 0;
+    }
+    hasPrev = false;
+  }
+
+  // Equations of motion for the planar double pendulum.
+  var acc = new Float64Array(2);
+  function derivs(t1, t2, o1, o2) {
+    var d = t1 - t2;
+    var sd = Math.sin(d), cd = Math.cos(d);
+    var den = 2 * M1 + M2 - M2 * Math.cos(2 * d);
+    var a1 = (-G * (2 * M1 + M2) * Math.sin(t1)
+              - M2 * G * Math.sin(t1 - 2 * t2)
+              - 2 * sd * M2 * (o2 * o2 * L2 + o1 * o1 * L1 * cd))
+             / (L1 * den);
+    var a2 = (2 * sd * (o1 * o1 * L1 * (M1 + M2)
+              + G * (M1 + M2) * Math.cos(t1)
+              + o2 * o2 * L2 * M2 * cd))
+             / (L2 * den);
+    acc[0] = a1;
+    acc[1] = a2;
+  }
+
+  // Classic RK4 step for one pendulum.
+  function stepRK4(i, h) {
+    var t1 = th1[i], t2 = th2[i], o1 = w1[i], o2 = w2[i];
+
+    derivs(t1, t2, o1, o2);
+    var k1t1 = o1, k1t2 = o2, k1o1 = acc[0], k1o2 = acc[1];
+
+    derivs(t1 + 0.5 * h * k1t1, t2 + 0.5 * h * k1t2, o1 + 0.5 * h * k1o1, o2 + 0.5 * h * k1o2);
+    var k2t1 = o1 + 0.5 * h * k1o1, k2t2 = o2 + 0.5 * h * k1o2, k2o1 = acc[0], k2o2 = acc[1];
+
+    derivs(t1 + 0.5 * h * k2t1, t2 + 0.5 * h * k2t2, o1 + 0.5 * h * k2o1, o2 + 0.5 * h * k2o2);
+    var k3t1 = o1 + 0.5 * h * k2o1, k3t2 = o2 + 0.5 * h * k2o2, k3o1 = acc[0], k3o2 = acc[1];
+
+    derivs(t1 + h * k3t1, t2 + h * k3t2, o1 + h * k3o1, o2 + h * k3o2);
+    var k4t1 = o1 + h * k3o1, k4t2 = o2 + h * k3o2, k4o1 = acc[0], k4o2 = acc[1];
+
+    th1[i] = t1 + (h / 6) * (k1t1 + 2 * k2t1 + 2 * k3t1 + k4t1);
+    th2[i] = t2 + (h / 6) * (k1t2 + 2 * k2t2 + 2 * k3t2 + k4t2);
+    w1[i] = o1 + (h / 6) * (k1o1 + 2 * k2o1 + 2 * k3o1 + k4o1);
+    w2[i] = o2 + (h / 6) * (k1o2 + 2 * k2o2 + 2 * k3o2 + k4o2);
+  }
+
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = Math.round(W * DPR);
+    canvas.height = Math.round(H * DPR);
+    trail.width = canvas.width;
+    trail.height = canvas.height;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    tctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+    // Pivot sits above centre so the full swing stays inside a square window.
+    var side = Math.min(W, H);
+    scale = side * 0.215;          // pixels per physical unit; L1+L2 = 0.43 * side
+    cx = W / 2;
+    cy = H / 2 - side * 0.02;
+
+    tctx.fillStyle = '#06070c';
+    tctx.fillRect(0, 0, W, H);
+    hasPrev = false;
+  }
+
+  var simAccum = 0;
+  var lastTime = 0;
+
+  function frame(now) {
+    if (!lastTime) lastTime = now;
+    var real = (now - lastTime) / 1000;
+    lastTime = now;
+    if (real > MAX_FRAME) real = MAX_FRAME;
+    simAccum += real * SPEED;
+
+    // Advance physics in fixed steps.
+    var steps = Math.floor(simAccum / DT);
+    if (steps > 60) steps = 60;
+    simAccum -= steps * DT;
+    for (var s = 0; s < steps; s++) {
+      for (var i = 0; i < N; i++) stepRK4(i, DT);
+    }
+
+    // --- Trails: fade a little, then lay down bob-2 path segments. ---
+    tctx.globalCompositeOperation = 'source-over';
+    tctx.fillStyle = 'rgba(6, 7, 12, 0.045)';
+    tctx.fillRect(0, 0, W, H);
+
+    tctx.globalCompositeOperation = 'lighter';
+    tctx.lineCap = 'round';
+    tctx.lineWidth = Math.max(1, scale * 0.012);
+    for (var i = 0; i < N; i++) {
+      var x1 = cx + scale * L1 * Math.sin(th1[i]);
+      var y1 = cy + scale * L1 * Math.cos(th1[i]);
+      var x2 = x1 + scale * L2 * Math.sin(th2[i]);
+      var y2 = y1 + scale * L2 * Math.cos(th2[i]);
+      if (hasPrev) {
+        tctx.strokeStyle = colorsDim[i];
+        tctx.beginPath();
+        tctx.moveTo(px[i], py[i]);
+        tctx.lineTo(x2, y2);
+        tctx.stroke();
+      }
+      px[i] = x2;
+      py[i] = y2;
+    }
+    hasPrev = true;
+
+    // --- Main canvas: background, trails, then rods and bobs on top. ---
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#06070c';
+    ctx.fillRect(0, 0, W, H);
+
+    // Subtle radial vignette for depth.
+    var side = Math.min(W, H);
+    var grad = ctx.createRadialGradient(cx, cy, side * 0.1, cx, cy, side * 0.75);
+    grad.addColorStop(0, 'rgba(22, 26, 44, 1)');
+    grad.addColorStop(1, 'rgba(6, 7, 12, 1)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.drawImage(trail, 0, 0, trail.width, trail.height, 0, 0, W, H);
+
+    // Rods, thin and translucent so the overlapping bundle reads as one glow.
+    ctx.lineCap = 'round';
+    ctx.lineWidth = Math.max(1, scale * 0.008);
+    var bobR = Math.max(1.5, scale * 0.022);
+    for (var i = 0; i < N; i++) {
+      var x1 = cx + scale * L1 * Math.sin(th1[i]);
+      var y1 = cy + scale * L1 * Math.cos(th1[i]);
+      var x2 = px[i], y2 = py[i];
+
+      ctx.strokeStyle = 'rgba(200, 210, 240, 0.18)';
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+
+      ctx.fillStyle = colorsDim[i];
+      ctx.beginPath();
+      ctx.arc(x1, y1, bobR * 0.6, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = colors[i];
+      ctx.beginPath();
+      ctx.arc(x2, y2, bobR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Pivot.
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#e8ecff';
+    ctx.beginPath();
+    ctx.arc(cx, cy, Math.max(2, scale * 0.03), 0, Math.PI * 2);
+    ctx.fill();
+
+    requestAnimationFrame(frame);
+  }
+
+  window.addEventListener('resize', resize);
+  init();
+  resize();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

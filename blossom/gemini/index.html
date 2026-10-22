@@ -1,0 +1,1170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sakura</title>
+<style>
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #0f0c1b;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  // Offscreen sprite cache for high performance & rich detail
+  const petalSprites = [];
+  const flowerSprites = [];
+  const glowSprite = document.createElement('canvas');
+
+  let width = window.innerWidth;
+  let height = window.innerHeight;
+  let dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Deterministic/seeded PRNG so every tree is well-balanced and lush
+  let seedVal = 1337;
+  function rand() {
+    seedVal = (seedVal * 1664525 + 1013904223) % 4294967296;
+    return seedVal / 4294967296;
+  }
+  function randRange(min, max) {
+    return min + rand() * (max - min);
+  }
+
+  function clamp(v, lo, hi) {
+    return v < lo ? lo : v > hi ? hi : v;
+  }
+  function smoothstep(edge0, edge1, x) {
+    const t = clamp((x - edge0) / (edge1 - edge0), 0, 1);
+    return t * t * (3 - 2 * t);
+  }
+  function easeOutCubic(t) {
+    const u = 1 - clamp(t, 0, 1);
+    return 1 - u * u * u;
+  }
+  function easeOutBack(t) {
+    const c1 = 1.70158;
+    const c3 = c1 + 1;
+    const x = clamp(t, 0, 1) - 1;
+    return 1 + c3 * x * x * x + c1 * x * x;
+  }
+  function lerp(a, b, t) {
+    return a + (b - a) * t;
+  }
+  function lerpColor(c1, c2, t) {
+    return [
+      Math.round(lerp(c1[0], c2[0], t)),
+      Math.round(lerp(c1[1], c2[1], t)),
+      Math.round(lerp(c1[2], c2[2], t))
+    ];
+  }
+  function rgbStr(c, a = 1) {
+    return a < 1 ? `rgba(${c[0]},${c[1]},${c[2]},${a.toFixed(3)})` : `rgb(${c[0]},${c[1]},${c[2]})`;
+  }
+
+  // Pre-render notched sakura petals and full 5-petal blossoms in multiple palettes
+  function initSprites() {
+    // Soft radial glow sprite
+    glowSprite.width = 128;
+    glowSprite.height = 128;
+    const gctx = glowSprite.getContext('2d');
+    const grad = gctx.createRadialGradient(64, 64, 2, 64, 64, 62);
+    grad.addColorStop(0, 'rgba(255, 225, 238, 0.55)');
+    grad.addColorStop(0.45, 'rgba(255, 175, 208, 0.22)');
+    grad.addColorStop(1, 'rgba(255, 160, 200, 0)');
+    gctx.fillStyle = grad;
+    gctx.fillRect(0, 0, 128, 128);
+
+    const palettes = [
+      // Deep shadow layer (rich rose-pink)
+      { base: '#f28db2', mid: '#f9b4cd', tip: '#ffe0ec', core: '#c83e6b', stamen: '#ffd670' },
+      // Mid layer (classic sakura blush)
+      { base: '#f7a8c4', mid: '#fdd0e0', tip: '#fff4f8', core: '#d94b78', stamen: '#ffe184' },
+      // Highlight layer (luminous pearl pink-white)
+      { base: '#fbc5d8', mid: '#ffe4ee', tip: '#ffffff', core: '#e35d88', stamen: '#ffea9f' },
+      // Warm sunlit tint
+      { base: '#f9b5c8', mid: '#ffdfea', tip: '#fffaf7', core: '#d44870', stamen: '#ffdf78' }
+    ];
+
+    function drawSinglePetalPath(c, len, wid) {
+      c.beginPath();
+      c.moveTo(0, 0);
+      c.bezierCurveTo(-wid * 0.95, -len * 0.28, -wid * 1.05, -len * 0.78, -wid * 0.22, -len);
+      // Characteristic sakura notch at the tip
+      c.lineTo(0, -len * 0.86);
+      c.lineTo(wid * 0.22, -len);
+      c.bezierCurveTo(wid * 1.05, -len * 0.78, wid * 0.95, -len * 0.28, 0, 0);
+      c.closePath();
+    }
+
+    palettes.forEach((pal) => {
+      // 1. Individual petal sprite
+      const pCan = document.createElement('canvas');
+      pCan.width = 48;
+      pCan.height = 48;
+      const pCtx = pCan.getContext('2d');
+      pCtx.translate(24, 42);
+      const len = 34;
+      const wid = 15;
+      drawSinglePetalPath(pCtx, len, wid);
+      const pGrad = pCtx.createLinearGradient(0, 0, 0, -len);
+      pGrad.addColorStop(0, pal.base);
+      pGrad.addColorStop(0.5, pal.mid);
+      pGrad.addColorStop(1, pal.tip);
+      pCtx.fillStyle = pGrad;
+      pCtx.fill();
+      pCtx.strokeStyle = 'rgba(255,255,255,0.35)';
+      pCtx.lineWidth = 0.8;
+      pCtx.stroke();
+      petalSprites.push(pCan);
+
+      // 2. Full 5-petal blossom sprite
+      const fCan = document.createElement('canvas');
+      fCan.width = 96;
+      fCan.height = 96;
+      const fCtx = fCan.getContext('2d');
+      fCtx.translate(48, 48);
+
+      const fLen = 36;
+      const fWid = 16.5;
+      for (let i = 0; i < 5; i++) {
+        fCtx.save();
+        fCtx.rotate((i * Math.PI * 2) / 5);
+        drawSinglePetalPath(fCtx, fLen, fWid);
+        const fg = fCtx.createLinearGradient(0, 0, 0, -fLen);
+        fg.addColorStop(0, pal.base);
+        fg.addColorStop(0.45, pal.mid);
+        fg.addColorStop(1, pal.tip);
+        fCtx.fillStyle = fg;
+        fCtx.fill();
+
+        // Subtle petal vein
+        fCtx.strokeStyle = 'rgba(215, 75, 120, 0.16)';
+        fCtx.lineWidth = 0.9;
+        fCtx.beginPath();
+        fCtx.moveTo(0, -4);
+        fCtx.lineTo(0, -fLen * 0.65);
+        fCtx.stroke();
+        fCtx.restore();
+      }
+
+      // Blossom ruby-pink throat
+      const cGrad = fCtx.createRadialGradient(0, 0, 1, 0, 0, 11);
+      cGrad.addColorStop(0, pal.core);
+      cGrad.addColorStop(0.65, 'rgba(220, 75, 120, 0.35)');
+      cGrad.addColorStop(1, 'rgba(220, 75, 120, 0)');
+      fCtx.fillStyle = cGrad;
+      fCtx.beginPath();
+      fCtx.arc(0, 0, 11, 0, Math.PI * 2);
+      fCtx.fill();
+
+      // Delicate stamens
+      const stamenCount = 12;
+      fCtx.strokeStyle = 'rgba(255, 220, 230, 0.75)';
+      fCtx.lineWidth = 0.9;
+      for (let i = 0; i < stamenCount; i++) {
+        const a = (i / stamenCount) * Math.PI * 2 + (i % 2) * 0.2;
+        const r = (i % 2 === 0 ? 11.5 : 8.5);
+        const sx = Math.cos(a) * r;
+        const sy = Math.sin(a) * r;
+        fCtx.beginPath();
+        fCtx.moveTo(Math.cos(a) * 2, Math.sin(a) * 2);
+        fCtx.lineTo(sx, sy);
+        fCtx.stroke();
+
+        fCtx.fillStyle = pal.stamen;
+        fCtx.beginPath();
+        fCtx.arc(sx, sy, 1.4, 0, Math.PI * 2);
+        fCtx.fill();
+      }
+
+      flowerSprites.push(fCan);
+    });
+  }
+  initSprites();
+
+  // Virtual coordinate system: 1080 x 1080 anchor
+  const V_SIZE = 1080;
+  const GROUND_Y = 895;
+  const TREE_X = 540;
+  const TREE_Y = GROUND_Y + 6;
+
+  // Scene state
+  let branches = [];
+  let roots = [];
+  let blossoms = [];
+  let ambientGlows = [];
+  let fallingPetals = [];
+  let groundPetals = [];
+  let grassBlades = [];
+  let stars = [];
+  let motes = [];
+  let windRibbons = [];
+
+  // Timeline configuration (in seconds)
+  // 0..3.8: Seed falls & germinates
+  // 3.0..13.5: Roots & Tree trunk/branches grow
+  // 9.5..18.5: Buds swell & blossoms open into lush canopy
+  // 16.5..33.0: Wind builds, petals shed & dance across screen
+  // 33.0..38.0: Twilight transition & rebirth into next seed
+  const CYCLE_DURATION = 38.0;
+  let cycleTime = 0;
+  let cycleIndex = 0;
+  let lastTime = performance.now();
+
+  // Wind physics state
+  let windStrength = 0.15;
+  let windGust = 0;
+
+  function initEnvironment() {
+    stars = [];
+    for (let i = 0; i < 95; i++) {
+      stars.push({
+        x: Math.random() * V_SIZE * 1.8 - V_SIZE * 0.4,
+        y: Math.random() * (GROUND_Y * 0.72),
+        r: 0.6 + Math.random() * 1.4,
+        phase: Math.random() * Math.PI * 2,
+        speed: 1.2 + Math.random() * 2.5
+      });
+    }
+
+    motes = [];
+    for (let i = 0; i < 45; i++) {
+      motes.push({
+        x: Math.random() * V_SIZE * 1.4 - V_SIZE * 0.2,
+        y: Math.random() * GROUND_Y,
+        r: 1.2 + Math.random() * 2.4,
+        vx: 6 + Math.random() * 14,
+        vy: -4 - Math.random() * 10,
+        alpha: 0.2 + Math.random() * 0.5,
+        phase: Math.random() * Math.PI * 2
+      });
+    }
+
+    grassBlades = [];
+    for (let i = 0; i < 260; i++) {
+      const gx = (i / 260) * (V_SIZE * 1.6) - V_SIZE * 0.3 + (Math.random() - 0.5) * 8;
+      const distFromCenter = (gx - TREE_X) / 540;
+      const hillOffset = Math.pow(distFromCenter, 2) * 38;
+      const gy = GROUND_Y + hillOffset + (Math.random() - 0.5) * 10;
+      grassBlades.push({
+        x: gx,
+        y: gy,
+        h: 12 + Math.random() * 24 * Math.exp(-distFromCenter * distFromCenter * 0.8),
+        angle: (Math.random() - 0.5) * 0.28,
+        stiffness: 0.6 + Math.random() * 0.7,
+        hueOffset: (Math.random() - 0.5) * 15
+      });
+    }
+
+    windRibbons = [];
+    for (let i = 0; i < 5; i++) {
+      windRibbons.push({
+        x: -300 - Math.random() * 600,
+        y: 220 + Math.random() * 480,
+        len: 260 + Math.random() * 220,
+        amp: 14 + Math.random() * 22,
+        freq: 0.01 + Math.random() * 0.008,
+        speed: 260 + Math.random() * 140,
+        alpha: 0
+      });
+    }
+  }
+
+  function getHillY(x) {
+    const dx = (x - TREE_X) / 560;
+    return GROUND_Y + dx * dx * 42 + Math.sin(x * 0.008) * 4;
+  }
+
+  function buildTree(treeSeed) {
+    seedVal = treeSeed;
+    branches = [];
+    roots = [];
+    blossoms = [];
+    ambientGlows = [];
+    fallingPetals = [];
+    groundPetals = [];
+
+    const maxDepth = 10;
+
+    function createBranch(parent, depth, angle, length, radius, startT, duration) {
+      const swayFreq = 0.9 + depth * 0.18 + randRange(-0.1, 0.1);
+      const swayPhase = randRange(0, Math.PI * 2);
+      const flexibility = Math.pow(depth / maxDepth, 1.65) * 0.14;
+      const curveAngle = angle + randRange(-0.14, 0.14);
+
+      const branch = {
+        parent,
+        depth,
+        baseAngle: angle,
+        curveAngle,
+        length,
+        r0: radius,
+        r1: radius * (depth === maxDepth ? 0.45 : 0.72),
+        startT,
+        duration,
+        swayFreq,
+        swayPhase,
+        flexibility,
+        x0: TREE_X,
+        y0: TREE_Y,
+        cx: TREE_X,
+        cy: TREE_Y,
+        x1: TREE_X,
+        y1: TREE_Y,
+        curAngle: angle,
+        growth: 0,
+        hasKnot: depth < 5 && rand() < 0.35,
+        knotSide: rand() < 0.5 ? -1 : 1
+      };
+      branches.push(branch);
+
+      const nextStartT = startT + duration * 0.68;
+
+      if (depth < maxDepth) {
+        // Trunk & lower limbs split into 2 or 3 rich boughs
+        let numChildren = 2;
+        if (depth === 0) numChildren = 3;
+        else if (depth <= 3 && rand() < 0.38) numChildren = 3;
+        else if (depth >= 8 && rand() < 0.22) numChildren = 1;
+
+        const baseSpread = depth === 0 ? 0.46 : lerp(0.42, 0.28, depth / maxDepth);
+
+        for (let i = 0; i < numChildren; i++) {
+          let offsetAngle;
+          if (numChildren === 1) {
+            offsetAngle = randRange(-0.22, 0.22);
+          } else if (numChildren === 2) {
+            offsetAngle = (i === 0 ? -1 : 1) * baseSpread * randRange(0.75, 1.22);
+          } else {
+            offsetAngle = (i - 1) * baseSpread * randRange(0.78, 1.15) + randRange(-0.08, 0.08);
+          }
+
+          let childAngle = angle + offsetAngle;
+          // Gentle upward phototropism and graceful outward canopy drape
+          const horizDir = Math.cos(childAngle);
+          childAngle -= horizDir * 0.06;
+          // Keep branches above the horizon
+          const minAngle = -Math.PI + 0.18;
+          const maxAngle = -0.18;
+          childAngle = clamp(childAngle, minAngle, maxAngle);
+
+          const lenFactor = depth === 0
+            ? (i === 1 ? randRange(0.76, 0.85) : randRange(0.68, 0.78))
+            : randRange(0.71, 0.84);
+          const radFactor = depth === 0
+            ? (i === 1 ? 0.68 : 0.60)
+            : randRange(0.65, 0.74);
+
+          const childDur = duration * randRange(0.84, 0.96);
+          createBranch(
+            branch,
+            depth + 1,
+            childAngle,
+            length * lenFactor,
+            radius * radFactor,
+            nextStartT + randRange(0, 0.18),
+            childDur
+          );
+        }
+      }
+
+      // Attach blossom clusters on outer branches (depth >= 5)
+      if (depth >= 5) {
+        // Soft canopy glow anchor on medium-outer branches
+        if (depth === 7 || depth === 8) {
+          ambientGlows.push({
+            branch,
+            tPos: 0.7,
+            radius: randRange(58, 95),
+            bloomStart: nextStartT + 1.2 + randRange(0, 1.8)
+          });
+        }
+
+        const clusterCount = depth >= 8 ? Math.floor(randRange(4, 8)) : Math.floor(randRange(2, 4));
+        for (let k = 0; k < clusterCount; k++) {
+          const bloomStart = Math.max(9.6, nextStartT + 0.6 + randRange(0, 3.8));
+          const bloomDur = randRange(1.4, 2.6);
+          const layer = rand() < 0.28 ? 0 : (rand() < 0.65 ? 1 : (rand() < 0.88 ? 2 : 3));
+          const isFullFlower = rand() < 0.62;
+          const shedTime = 17.5 + randRange(0, 11.5) - (depth / maxDepth) * 1.2;
+
+          blossoms.push({
+            branch,
+            tAlong: randRange(0.25, 1.0),
+            ox: randRange(-18, 18),
+            oy: randRange(-16, 14),
+            size: isFullFlower ? randRange(18, 31) : randRange(11, 20),
+            rotation: randRange(0, Math.PI * 2),
+            rotSpeed: randRange(-0.4, 0.4),
+            layer,
+            isFullFlower,
+            bloomStart,
+            bloomDur,
+            shedTime,
+            shedded: false,
+            regrowAlpha: 1,
+            scale: 0,
+            wx: 0,
+            wy: 0
+          });
+        }
+      }
+    }
+
+    // Create main trunk
+    createBranch(null, 0, -Math.PI / 2 + randRange(-0.03, 0.03), 168, 29, 3.2, 1.45);
+
+    // Create underground/surface root system
+    function createRoot(parent, depth, angle, length, radius, startT, duration) {
+      const root = {
+        parent,
+        depth,
+        angle,
+        curveAngle: angle + randRange(-0.18, 0.18),
+        length,
+        r0: radius,
+        r1: radius * 0.55,
+        startT,
+        duration,
+        x0: TREE_X,
+        y0: TREE_Y - 2,
+        cx: TREE_X,
+        cy: TREE_Y - 2,
+        x1: TREE_X,
+        y1: TREE_Y - 2,
+        growth: 0
+      };
+      roots.push(root);
+
+      if (depth < 4) {
+        const count = depth === 0 ? 4 : 2;
+        for (let i = 0; i < count; i++) {
+          const spread = depth === 0
+            ? lerp(-1.15, 1.15, i / (count - 1)) + randRange(-0.12, 0.12)
+            : randRange(-0.45, 0.45);
+          const nextAngle = depth === 0 ? Math.PI / 2 + spread : angle + spread;
+          createRoot(
+            root,
+            depth + 1,
+            nextAngle,
+            length * randRange(0.62, 0.8),
+            radius * 0.62,
+            startT + duration * 0.6,
+            duration * 0.85
+          );
+        }
+      }
+    }
+    createRoot(null, 0, Math.PI / 2, 34, 14, 2.3, 1.1);
+
+    // Sort branches back-to-front by depth, and blossoms by layer for lush depth
+    branches.sort((a, b) => a.depth - b.depth);
+    blossoms.sort((a, b) => a.layer - b.layer);
+  }
+
+  initEnvironment();
+  buildTree(1337);
+
+  function spawnFallingPetal(x, y, size, layer, initialVx = 0, initialVy = 0) {
+    fallingPetals.push({
+      x,
+      y,
+      vx: initialVx + (Math.random() - 0.2) * 38,
+      vy: initialVy + (Math.random() - 0.5) * 25,
+      size: clamp(size * (0.55 + Math.random() * 0.35), 9, 20),
+      layer: layer % petalSprites.length,
+      angle: Math.random() * Math.PI * 2,
+      angVel: (Math.random() - 0.5) * 3.5,
+      tilt: Math.random() * Math.PI * 2,
+      tiltSpeed: 2.2 + Math.random() * 3.8,
+      flutterPhase: Math.random() * Math.PI * 2,
+      flutterAmp: 22 + Math.random() * 36,
+      alpha: 1,
+      canLand: Math.random() < 0.48
+    });
+  }
+
+  function updatePhysics(dt, t) {
+    // Wind profile across the cycle
+    // Gentle breeze during growth/bloom, sweeping gusts during Sakura Fubuki (16.5s - 32s)
+    const windPhaseActive = smoothstep(16.0, 19.5, t) * (1 - smoothstep(31.5, 35.5, t));
+    const baseBreeze = 0.12 + 0.08 * Math.sin(t * 0.9);
+    const gustWave = (
+      Math.sin(t * 1.45) * 0.45 +
+      Math.sin(t * 2.85 + 1.1) * 0.35 +
+      Math.cos(t * 0.75) * 0.2
+    );
+    windGust = Math.max(0, gustWave) * windPhaseActive;
+    windStrength = baseBreeze + windPhaseActive * (0.72 + windGust * 0.85);
+
+    // Update roots kinematics
+    for (let i = 0; i < roots.length; i++) {
+      const r = roots[i];
+      r.growth = easeOutCubic((t - r.startT) / r.duration);
+      if (r.parent) {
+        r.x0 = r.parent.x1;
+        r.y0 = r.parent.y1;
+      } else {
+        r.x0 = TREE_X;
+        r.y0 = TREE_Y - 2;
+      }
+      const len = r.length * r.growth;
+      r.cx = r.x0 + Math.cos(r.curveAngle) * (len * 0.5);
+      r.cy = r.y0 + Math.sin(r.curveAngle) * (len * 0.5);
+      r.x1 = r.x0 + Math.cos(r.angle) * len;
+      r.y1 = r.y0 + Math.sin(r.angle) * len;
+    }
+
+    // Update branches kinematics in topological order
+    for (let i = 0; i < branches.length; i++) {
+      const b = branches[i];
+      b.growth = easeOutCubic((t - b.startT) / b.duration);
+      if (b.growth <= 0) continue;
+
+      const parentAngleDelta = b.parent ? (b.parent.curAngle - b.parent.baseAngle) : 0;
+      const windSway = (
+        Math.sin(t * b.swayFreq + b.swayPhase) * (0.28 + windStrength * 0.55) +
+        windStrength * 1.15
+      ) * b.flexibility;
+
+      b.curAngle = b.baseAngle + parentAngleDelta * 0.72 + windSway;
+      const curCurve = b.curveAngle + parentAngleDelta * 0.72 + windSway * 0.6;
+
+      if (b.parent) {
+        b.x0 = b.parent.x1;
+        b.y0 = b.parent.y1;
+      } else {
+        b.x0 = TREE_X;
+        b.y0 = TREE_Y;
+      }
+
+      const len = b.length * b.growth;
+      b.cx = b.x0 + Math.cos(curCurve) * (len * 0.52);
+      b.cy = b.y0 + Math.sin(curCurve) * (len * 0.52);
+      b.x1 = b.x0 + Math.cos(b.curAngle) * len;
+      b.y1 = b.y0 + Math.sin(b.curAngle) * len;
+    }
+
+    // Update blossoms & trigger wind-driven shedding
+    for (let i = 0; i < blossoms.length; i++) {
+      const bl = blossoms[i];
+      if (bl.branch.growth < bl.tAlong) {
+        bl.scale = 0;
+        continue;
+      }
+
+      // Quadratic bezier interpolation along parent branch
+      const u = bl.tAlong;
+      const invU = 1 - u;
+      const bx = invU * invU * bl.branch.x0 + 2 * invU * u * bl.branch.cx + u * u * bl.branch.x1;
+      const by = invU * invU * bl.branch.y0 + 2 * invU * u * bl.branch.cy + u * u * bl.branch.y1;
+
+      const swayOffset = Math.sin(t * 2.2 + bl.rotation) * (1.5 + windStrength * 3.5);
+      bl.wx = bx + bl.ox * bl.branch.growth + swayOffset;
+      bl.wy = by + bl.oy * bl.branch.growth + Math.cos(t * 1.9 + bl.rotation) * 1.2;
+
+      if (t < bl.bloomStart) {
+        bl.scale = 0;
+      } else if (!bl.shedded) {
+        const bloomProg = (t - bl.bloomStart) / bl.bloomDur;
+        bl.scale = easeOutBack(bloomProg);
+
+        // Occasional early stray petals during full bloom, then main shedding wave
+        if (t >= bl.shedTime) {
+          bl.shedded = true;
+          const burstCount = bl.isFullFlower ? 3 : 1;
+          for (let p = 0; p < burstCount; p++) {
+            spawnFallingPetal(
+              bl.wx + (Math.random() - 0.5) * 8,
+              bl.wy + (Math.random() - 0.5) * 8,
+              bl.size,
+              bl.layer,
+              windStrength * 95,
+              -12 + Math.random() * 24
+            );
+          }
+        }
+      } else {
+        // After shedding, shrink smoothly
+        bl.scale = Math.max(0, bl.scale - dt * 2.4);
+      }
+    }
+
+    // Extra atmospheric wind-carried petals during peak storm so the sky feels rich
+    if (windPhaseActive > 0.15 && fallingPetals.length < 320 && Math.random() < windPhaseActive * 0.75) {
+      // Spawn from canopy region
+      const rx = TREE_X + (Math.random() - 0.55) * 440;
+      const ry = 420 + (Math.random() - 0.5) * 280;
+      spawnFallingPetal(rx, ry, 18 + Math.random() * 10, Math.floor(Math.random() * 4), windStrength * 110, 0);
+    }
+
+    // Update falling petals
+    const fadeOutCycle = 1 - smoothstep(34.5, 37.5, t);
+    for (let i = fallingPetals.length - 1; i >= 0; i--) {
+      const p = fallingPetals[i];
+      p.flutterPhase += dt * (2.5 + windStrength * 1.8);
+      p.tilt += dt * p.tiltSpeed;
+      p.angle += dt * p.angVel + Math.cos(p.flutterPhase) * dt * 1.2;
+
+      // Swirling eddy turbulence field
+      const swirlX = Math.sin(p.y * 0.012 + t * 1.8) * 45 * windStrength;
+      const swirlY = Math.cos(p.x * 0.011 - t * 1.5) * 28 * windStrength;
+      const targetVx = windStrength * 145 + Math.sin(p.flutterPhase) * p.flutterAmp + swirlX;
+      const targetVy = 36 + Math.abs(Math.cos(p.tilt)) * 26 + swirlY - windGust * 18;
+
+      p.vx = lerp(p.vx, targetVx, dt * 3.2);
+      p.vy = lerp(p.vy, targetVy, dt * 2.8);
+
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+
+      const groundLevel = getHillY(p.x);
+      if (p.y >= groundLevel) {
+        if (p.canLand && groundPetals.length < 420 && p.x > -250 && p.x < V_SIZE + 250) {
+          groundPetals.push({
+            x: p.x,
+            y: groundLevel + (Math.random() - 0.5) * 6,
+            size: p.size * 0.85,
+            layer: p.layer,
+            angle: p.angle,
+            tilt: 0.35 + Math.random() * 0.25,
+            alpha: 0.92
+          });
+        }
+        fallingPetals.splice(i, 1);
+        continue;
+      }
+
+      if (p.x > V_SIZE + 450 || p.x < -450 || p.y < -250) {
+        fallingPetals.splice(i, 1);
+      }
+    }
+
+    // Occasionally re-lift a few ground petals when a strong gust hits
+    if (windGust > 0.45 && groundPetals.length > 20 && Math.random() < 0.35) {
+      const idx = Math.floor(Math.random() * groundPetals.length);
+      const gp = groundPetals[idx];
+      groundPetals.splice(idx, 1);
+      spawnFallingPetal(gp.x, gp.y - 3, gp.size * 1.15, gp.layer, windStrength * 120, -45);
+    }
+
+    // Update wind ribbons
+    for (let i = 0; i < windRibbons.length; i++) {
+      const wr = windRibbons[i];
+      wr.x += (wr.speed * (0.6 + windStrength * 1.1)) * dt;
+      wr.alpha = windPhaseActive * 0.16 * Math.sin(clamp((wr.x + 200) / (V_SIZE + 400), 0, 1) * Math.PI);
+      if (wr.x > V_SIZE + 450) {
+        wr.x = -350 - Math.random() * 350;
+        wr.y = 200 + Math.random() * 520;
+      }
+    }
+
+    // Update floating light motes
+    for (let i = 0; i < motes.length; i++) {
+      const m = motes[i];
+      m.x += (m.vx + windStrength * 28) * dt;
+      m.y += (m.vy + Math.sin(t + m.phase) * 6) * dt;
+      if (m.x > V_SIZE + 250) m.x = -250;
+      if (m.y < -50) m.y = GROUND_Y - 10;
+    }
+
+    return fadeOutCycle;
+  }
+
+  function drawSkyAndBackdrop(t, viewLeft, viewTop, viewWidth, viewHeight) {
+    // Sky transitions gracefully through the cherry tree's life:
+    // 0-6s: Misty indigo-violet dawn (seed germination)
+    // 6-18s: Warm golden-rose spring morning (growth & full bloom)
+    // 18-30s: Radiant amber-blush afternoon breeze (petal shedding)
+    // 30-38s: Serene twilight return to indigo dawn
+    const kDawn = {
+      top: [16, 14, 36],
+      mid: [48, 34, 74],
+      bot: [118, 72, 108]
+    };
+    const kBloom = {
+      top: [34, 38, 78],
+      mid: [116, 76, 118],
+      bot: [236, 162, 166]
+    };
+    const kWind = {
+      top: [28, 30, 68],
+      mid: [102, 62, 108],
+      bot: [242, 148, 152]
+    };
+
+    let cTop, cMid, cBot;
+    if (t < 11) {
+      const u = smoothstep(1.5, 11.0, t);
+      cTop = lerpColor(kDawn.top, kBloom.top, u);
+      cMid = lerpColor(kDawn.mid, kBloom.mid, u);
+      cBot = lerpColor(kDawn.bot, kBloom.bot, u);
+    } else if (t < 24) {
+      const u = smoothstep(11.0, 22.0, t);
+      cTop = lerpColor(kBloom.top, kWind.top, u);
+      cMid = lerpColor(kBloom.mid, kWind.mid, u);
+      cBot = lerpColor(kBloom.bot, kWind.bot, u);
+    } else {
+      const u = smoothstep(26.0, 37.5, t);
+      cTop = lerpColor(kWind.top, kDawn.top, u);
+      cMid = lerpColor(kWind.mid, kDawn.mid, u);
+      cBot = lerpColor(kWind.bot, kDawn.bot, u);
+    }
+
+    const skyGrad = ctx.createLinearGradient(0, viewTop, 0, GROUND_Y);
+    skyGrad.addColorStop(0, rgbStr(cTop));
+    skyGrad.addColorStop(0.55, rgbStr(cMid));
+    skyGrad.addColorStop(1, rgbStr(cBot));
+    ctx.fillStyle = skyGrad;
+    ctx.fillRect(viewLeft - 2, viewTop - 2, viewWidth + 4, viewHeight + 4);
+
+    // Twinkling stars visible in early dawn and twilight
+    const starVis = 1 - smoothstep(4.0, 11.0, t) * (1 - smoothstep(26.0, 34.0, t));
+    if (starVis > 0.02) {
+      for (let i = 0; i < stars.length; i++) {
+        const s = stars[i];
+        const tw = (0.4 + 0.6 * Math.sin(t * s.speed + s.phase)) * starVis;
+        ctx.fillStyle = `rgba(255, 245, 252, ${tw.toFixed(3)})`;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // Glowing celestial sun/moon halo behind the tree
+    const sunProgress = clamp(t / CYCLE_DURATION, 0, 1);
+    const sunY = lerp(580, 415, Math.sin(sunProgress * Math.PI));
+    const sunX = TREE_X;
+
+    const haloGrad = ctx.createRadialGradient(sunX, sunY, 30, sunX, sunY, 440);
+    haloGrad.addColorStop(0, 'rgba(255, 238, 225, 0.42)');
+    haloGrad.addColorStop(0.35, 'rgba(255, 188, 195, 0.18)');
+    haloGrad.addColorStop(1, 'rgba(255, 160, 185, 0)');
+    ctx.fillStyle = haloGrad;
+    ctx.beginPath();
+    ctx.arc(sunX, sunY, 440, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Crisp luminous sun/moon disk
+    const diskGrad = ctx.createLinearGradient(sunX, sunY - 125, sunX, sunY + 125);
+    diskGrad.addColorStop(0, 'rgba(255, 250, 242, 0.92)');
+    diskGrad.addColorStop(1, 'rgba(255, 212, 215, 0.72)');
+    ctx.fillStyle = diskGrad;
+    ctx.beginPath();
+    ctx.arc(sunX, sunY, 122, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Distant layered mountain silhouettes with atmospheric mist
+    const m1Color = lerpColor([46, 32, 68], [88, 54, 92], smoothstep(3, 14, t) * (1 - smoothstep(27, 36, t)));
+    ctx.fillStyle = rgbStr(m1Color, 0.55);
+    ctx.beginPath();
+    ctx.moveTo(viewLeft - 50, GROUND_Y + 50);
+    for (let x = viewLeft - 50; x <= viewLeft + viewWidth + 50; x += 28) {
+      const mh = 760 - Math.sin(x * 0.0032 + 0.6) * 65 - Math.cos(x * 0.0075) * 32;
+      ctx.lineTo(x, mh);
+    }
+    ctx.lineTo(viewLeft + viewWidth + 50, GROUND_Y + 50);
+    ctx.closePath();
+    ctx.fill();
+
+    const m2Color = lerpColor([32, 22, 52], [62, 36, 72], smoothstep(3, 14, t) * (1 - smoothstep(27, 36, t)));
+    ctx.fillStyle = rgbStr(m2Color, 0.78);
+    ctx.beginPath();
+    ctx.moveTo(viewLeft - 50, GROUND_Y + 50);
+    for (let x = viewLeft - 50; x <= viewLeft + viewWidth + 50; x += 24) {
+      const mh = 825 - Math.sin(x * 0.0045 + 2.4) * 38 - Math.cos(x * 0.011 - 1.0) * 18;
+      ctx.lineTo(x, mh);
+    }
+    ctx.lineTo(viewLeft + viewWidth + 50, GROUND_Y + 50);
+    ctx.closePath();
+    ctx.fill();
+
+    // Horizon mist band
+    const mistGrad = ctx.createLinearGradient(0, 770, 0, GROUND_Y + 20);
+    mistGrad.addColorStop(0, 'rgba(255, 210, 225, 0)');
+    mistGrad.addColorStop(0.65, 'rgba(245, 190, 210, 0.16)');
+    mistGrad.addColorStop(1, 'rgba(30, 18, 42, 0)');
+    ctx.fillStyle = mistGrad;
+    ctx.fillRect(viewLeft, 770, viewWidth, 160);
+  }
+
+  function drawSeedAndSprout(t, treeAlpha) {
+    // Seed falls gently from top (0.0s -> 1.8s), lands at (TREE_X, TREE_Y - 4), glows & opens (1.8s -> 4.2s)
+    if (t > 5.0) return;
+
+    const fallProg = clamp(t / 1.85, 0, 1);
+    const seedAlpha = (1 - smoothstep(3.4, 4.8, t)) * treeAlpha;
+    if (seedAlpha <= 0.01) return;
+
+    let sx = TREE_X;
+    let sy = TREE_Y - 3;
+    let rot = 0;
+
+    if (fallProg < 1) {
+      const easeFall = 1 - Math.pow(1 - fallProg, 2.2);
+      sy = lerp(180, TREE_Y - 3, easeFall);
+      sx = TREE_X + Math.sin(fallProg * Math.PI * 3) * (1 - fallProg) * 36;
+      rot = Math.sin(fallProg * Math.PI * 3) * 0.35;
+    }
+
+    // Impact ripple on landing
+    if (t >= 1.82 && t < 3.6) {
+      const ripProg = (t - 1.82) / 1.78;
+      const ripAlpha = (1 - ripProg) * 0.55 * seedAlpha;
+      ctx.strokeStyle = `rgba(255, 215, 228, ${ripAlpha.toFixed(3)})`;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.ellipse(TREE_X, TREE_Y, ripProg * 58, ripProg * 12, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    // Warm germination pulse glow
+    const pulse = 0.65 + 0.35 * Math.sin(t * 6.5);
+    const glowR = (t > 1.8 ? lerp(26, 52, smoothstep(1.8, 3.2, t)) : 26) * pulse;
+    const sGlow = ctx.createRadialGradient(sx, sy, 1, sx, sy, glowR);
+    sGlow.addColorStop(0, `rgba(255, 235, 195, ${(0.85 * seedAlpha).toFixed(3)})`);
+    sGlow.addColorStop(0.45, `rgba(255, 165, 195, ${(0.38 * seedAlpha).toFixed(3)})`);
+    sGlow.addColorStop(1, 'rgba(255, 150, 190, 0)');
+    ctx.fillStyle = sGlow;
+    ctx.beginPath();
+    ctx.arc(sx, sy, glowR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Seed body (teardrop / cherry pit shape)
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(rot);
+    const swell = 1 + smoothstep(1.85, 3.3, t) * 0.35;
+    ctx.scale(swell, swell);
+
+    ctx.fillStyle = `rgba(235, 185, 135, ${seedAlpha.toFixed(3)})`;
+    ctx.beginPath();
+    ctx.moveTo(0, -8);
+    ctx.bezierCurveTo(6.5, -4, 6, 5.5, 0, 7);
+    ctx.bezierCurveTo(-6, 5.5, -6.5, -4, 0, -8);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = `rgba(255, 240, 210, ${(seedAlpha * 0.7).toFixed(3)})`;
+    ctx.beginPath();
+    ctx.ellipse(-1.5, -1, 1.8, 3.8, -0.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // Tender green-pink cotyledon leaves unfurling as the shoot rises (2.6s -> 4.8s)
+    if (t > 2.5) {
+      const sproutProg = smoothstep(2.5, 3.9, t);
+      const sproutY = TREE_Y - sproutProg * 36;
+      const leafOpen = smoothstep(2.8, 4.1, t);
+
+      for (let side = -1; side <= 1; side += 2) {
+        ctx.save();
+        ctx.translate(TREE_X, sproutY);
+        ctx.rotate(side * (0.25 + leafOpen * 0.65));
+        ctx.scale(leafOpen, leafOpen);
+        ctx.fillStyle = `rgba(175, 215, 155, ${(seedAlpha * 0.85).toFixed(3)})`;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.quadraticCurveTo(side * 9, -8, side * 14, -2);
+        ctx.quadraticCurveTo(side * 7, 4, 0, 0);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+  }
+
+  function drawHillside(viewLeft, viewWidth, viewBottom) {
+    // Rich dark foreground hill
+    const hillGrad = ctx.createLinearGradient(0, GROUND_Y - 10, 0, viewBottom);
+    hillGrad.addColorStop(0, '#1f152c');
+    hillGrad.addColorStop(0.35, '#150e20');
+    hillGrad.addColorStop(1, '#0b0712');
+
+    ctx.fillStyle = hillGrad;
+    ctx.beginPath();
+    ctx.moveTo(viewLeft - 20, viewBottom + 20);
+    for (let x = viewLeft - 20; x <= viewLeft + viewWidth + 20; x += 20) {
+      ctx.lineTo(x, getHillY(x));
+    }
+    ctx.lineTo(viewLeft + viewWidth + 20, viewBottom + 20);
+    ctx.closePath();
+    ctx.fill();
+
+    // Subtle rim light on hill crest
+    ctx.strokeStyle = 'rgba(245, 175, 200, 0.22)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let x = viewLeft - 20; x <= viewLeft + viewWidth + 20; x += 20) {
+      const y = getHillY(x);
+      if (x === viewLeft - 20) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  function drawRootsAndTree(t, treeAlpha) {
+    if (treeAlpha <= 0.01) return;
+
+    ctx.save();
+    ctx.globalAlpha = treeAlpha;
+
+    // 1. Subtle glowing root filaments beneath the soil surface
+    for (let i = 0; i < roots.length; i++) {
+      const r = roots[i];
+      if (r.growth <= 0.01) continue;
+      const r0 = r.r0 * r.growth;
+      const r1 = r.r1 * r.growth;
+
+      ctx.strokeStyle = r.depth === 0
+        ? 'rgba(72, 46, 62, 0.85)'
+        : `rgba(185, 125, 150, ${(0.35 * (1 - r.depth * 0.18)).toFixed(3)})`;
+      ctx.lineWidth = (r0 + r1) * 0.5;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(r.x0, r.y0);
+      ctx.quadraticCurveTo(r.cx, r.cy, r.x1, r.y1);
+      ctx.stroke();
+    }
+
+    // 2. Tree trunk & branches with tapered bezier silhouette and warm rim lighting
+    for (let i = 0; i < branches.length; i++) {
+      const b = branches[i];
+      if (b.growth <= 0.01) continue;
+
+      const r0 = b.r0 * Math.min(1, b.growth * 1.25);
+      const r1 = b.r1 * b.growth;
+
+      if (b.depth <= 5) {
+        // Tapered filled polygon along the quadratic bezier for realistic organic wood
+        const nx0 = -Math.sin(b.baseAngle);
+        const ny0 = Math.cos(b.baseAngle);
+        const nx1 = -Math.sin(b.curAngle);
+        const ny1 = Math.cos(b.curAngle);
+        const rm = (r0 + r1) * 0.52;
+
+        ctx.fillStyle = b.depth <= 2 ? '#231624' : '#2d1c2e';
+        ctx.beginPath();
+        ctx.moveTo(b.x0 + nx0 * r0, b.y0 + ny0 * r0);
+        ctx.quadraticCurveTo(b.cx + nx0 * rm, b.cy + ny0 * rm, b.x1 + nx1 * r1, b.y1 + ny1 * r1);
+        ctx.arc(b.x1, b.y1, r1, b.curAngle + Math.PI / 2, b.curAngle - Math.PI / 2, false);
+        ctx.quadraticCurveTo(b.cx - nx0 * rm, b.cy - ny0 * rm, b.x0 - nx0 * r0, b.y0 - ny0 * r0);
+        ctx.closePath();
+        ctx.fill();
+
+        // Warm sunlit bark highlight edge
+        if (b.depth <= 3) {
+          ctx.strokeStyle = 'rgba(135, 86, 106, 0.38)';
+          ctx.lineWidth = Math.max(1.2, r0 * 0.16);
+          ctx.beginPath();
+          ctx.moveTo(b.x0 + nx0 * (r0 * 0.72), b.y0 + ny0 * (r0 * 0.72));
+          ctx.quadraticCurveTo(
+            b.cx + nx0 * (rm * 0.72),
+            b.cy + ny0 * (rm * 0.72),
+            b.x1 + nx1 * (r1 * 0.72),
+            b.y1 + ny1 * (r1 * 0.72)
+          );
+          ctx.stroke();
+        }
+      } else {
+        // Fine twigs
+        ctx.strokeStyle = b.depth < 8 ? '#362238' : '#472d49';
+        ctx.lineWidth = Math.max(0.9, (r0 + r1) * 0.5);
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(b.x0, b.y0);
+        ctx.quadraticCurveTo(b.cx, b.cy, b.x1, b.y1);
+        ctx.stroke();
+      }
+    }
+
+    // 3. Soft ambient canopy glow behind and between blossom clusters
+    for (let i = 0; i < ambientGlows.length; i++) {
+      const ag = ambientGlows[i];
+      if (t < ag.bloomStart) continue;
+      const gAlpha = smoothstep(ag.bloomStart, ag.bloomStart + 3.0, t) * (1 - smoothstep(23.0, 31.0, t));
+      if (gAlpha <= 0.01) continue;
+
+      const u = ag.tPos;
+      const gx = (1 - u) * ag.branch.x0 + u * ag.branch.x1;
+      const gy = (1 - u) * ag.branch.y0 + u * ag.branch.y1;
+      const r = ag.radius;
+
+      ctx.globalAlpha = treeAlpha * gAlpha * 0.65;
+      ctx.drawImage(glowSprite, gx - r, gy - r, r * 2, r * 2);
+    }
+
+    // 4. Blossoms (buds -> unfurled 5-petal flowers & soft cluster petals)
+    ctx.globalAlpha = treeAlpha;
+    for (let i = 0; i < blossoms.length; i++) {
+      const bl = blossoms[i];
+      if (bl.scale <= 0.02) continue;
+
+      const s = bl.size * bl.scale;
+      const sprite = bl.isFullFlower ? flowerSprites[bl.layer] : petalSprites[bl.layer];
+
+      ctx.save();
+      ctx.translate(bl.wx, bl.wy);
+      ctx.rotate(bl.rotation + Math.sin(t * 1.6 + bl.rotation) * (0.08 + windStrength * 0.18));
+      ctx.drawImage(sprite, -s * 0.5, -s * 0.5, s, s);
+      ctx.restore();
+    }
+
+    ctx.restore();
+  }
+
+  function drawPetalsAndForeground(t, treeAlpha) {
+    // 1. Ground accumulated petals
+    if (groundPetals.length > 0) {
+      ctx.save();
+      ctx.globalAlpha = treeAlpha;
+      for (let i = 0; i < groundPetals.length; i++) {
+        const gp = groundPetals[i];
+        const sprite = petalSprites[gp.layer];
+        ctx.save();
+        ctx.translate(gp.x, gp.y);
+        ctx.rotate(gp.angle);
+        ctx.scale(1, gp.tilt);
+        ctx.drawImage(sprite, -gp.size * 0.5, -gp.size * 0.5, gp.size, gp.size);
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+
+    // 2. Grass blades swaying along the hillside
+    ctx.lineCap = 'round';
+    for (let i = 0; i < grassBlades.length; i++) {
+      const g = grassBlades[i];
+      const sway = (Math.sin(t * 2.4 + g.x * 0.03) * 0.14 + windStrength * 0.55) / g.stiffness;
+      const tipX = g.x + Math.sin(g.angle + sway) * g.h;
+      const tipY = g.y - Math.cos(g.angle + sway) * g.h;
+
+      ctx.strokeStyle = i % 3 === 0 ? 'rgba(68, 42, 74, 0.78)' : 'rgba(38, 24, 48, 0.85)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(g.x, g.y);
+      ctx.quadraticCurveTo(g.x + (tipX - g.x) * 0.35, g.y - g.h * 0.55, tipX, tipY);
+      ctx.stroke();
+    }
+
+    // 3. Translucent wind ribbons during gusts
+    for (let i = 0; i < windRibbons.length; i++) {
+      const wr = windRibbons[i];
+      if (wr.alpha <= 0.005) continue;
+      ctx.strokeStyle = `rgba(255, 225, 238, ${wr.alpha.toFixed(3)})`;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      for (let s = 0; s <= 1; s += 0.08) {
+        const px = wr.x + s * wr.len;
+        const py = wr.y + Math.sin(px * wr.freq + t * 4) * wr.amp;
+        if (s === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+
+    // 4. Airborne 3D tumbling petals
+    if (fallingPetals.length > 0) {
+      ctx.save();
+      ctx.globalAlpha = treeAlpha;
+      for (let i = 0; i < fallingPetals.length; i++) {
+        const p = fallingPetals[i];
+        const sprite = petalSprites[p.layer];
+        const scaleY = 0.22 + 0.78 * Math.abs(Math.cos(p.tilt));
+        const scaleX = 0.65 + 0.35 * Math.abs(Math.sin(p.tilt * 0.7));
+
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.angle);
+        ctx.scale(scaleX, scaleY);
+        ctx.drawImage(sprite, -p.size * 0.5, -p.size * 0.5, p.size, p.size);
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+
+    // 5. Floating atmospheric pollen/light motes
+    for (let i = 0; i < motes.length; i++) {
+      const m = motes[i];
+      const glow = (0.4 + 0.6 * Math.sin(t * 2.2 + m.phase)) * m.alpha;
+      ctx.fillStyle = `rgba(255, 232, 240, ${glow.toFixed(3)})`;
+      ctx.beginPath();
+      ctx.arc(m.x, m.y, m.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function frame(now) {
+    const dt = Math.min(0.05, (now - lastTime) / 1000);
+    lastTime = now;
+
+    cycleTime += dt;
+    if (cycleTime >= CYCLE_DURATION) {
+      cycleTime -= CYCLE_DURATION;
+      cycleIndex++;
+      // Generate a fresh, well-balanced cherry tree variation each cycle
+      buildTree(1337 + cycleIndex * 7919);
+    }
+
+    const treeAlpha = updatePhysics(dt, cycleTime);
+
+    // Map the 1080x1080 virtual canvas to fill the window while keeping the 1080x1080 square framed perfectly
+    const scale = Math.min(width / V_SIZE, height / V_SIZE);
+    const offsetX = (width - V_SIZE * scale) * 0.5;
+    const offsetY = (height - V_SIZE * scale) * 0.5;
+
+    const viewLeft = -offsetX / scale;
+    const viewTop = -offsetY / scale;
+    const viewWidth = width / scale;
+    const viewHeight = height / scale;
+    const viewBottom = viewTop + viewHeight;
+
+    ctx.save();
+    ctx.scale(dpr, dpr);
+    ctx.translate(offsetX, offsetY);
+    ctx.scale(scale, scale);
+
+    drawSkyAndBackdrop(cycleTime, viewLeft, viewTop, viewWidth, viewHeight);
+    drawHillside(viewLeft, viewWidth, viewBottom);
+    drawRootsAndTree(cycleTime, treeAlpha);
+    drawSeedAndSprout(cycleTime, treeAlpha);
+    drawPetalsAndForeground(cycleTime, treeAlpha);
+
+    ctx.restore();
+
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
