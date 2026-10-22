@@ -1,0 +1,930 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Starling Murmuration</title>
+<style>
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #120422;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  // Offscreen static/semi-static sky & terrain cache for blazing performance
+  const bgCanvas = document.createElement('canvas');
+  const bgCtx = bgCanvas.getContext('2d', { alpha: false });
+
+  // Pre-rendered bird sprite sheet across bank/pitch angles and wing phases
+  // plus direct path rendering for close foreground birds
+  let width = 1080;
+  let height = 1080;
+  let dpr = 1;
+  let minDim = 1080;
+  let horizonY = 0;
+  let sunX = 0;
+  let sunY = 0;
+
+  // Starling count: 3,600 birds for rich, dense folding ribbons
+  const NUM_BIRDS = 3600;
+
+  // 3D world coordinates roughly in [-1.2, 1.2] x [-1.0, 1.0] x [-0.8, 0.8]
+  const px = new Float32Array(NUM_BIRDS);
+  const py = new Float32Array(NUM_BIRDS);
+  const pz = new Float32Array(NUM_BIRDS);
+  const vx = new Float32Array(NUM_BIRDS);
+  const vy = new Float32Array(NUM_BIRDS);
+  const vz = new Float32Array(NUM_BIRDS);
+  const phase = new Float32Array(NUM_BIRDS);
+  const flockGroup = new Uint8Array(NUM_BIRDS);
+  const localDensity = new Float32Array(NUM_BIRDS);
+
+  // Screen projection buffers + depth sort buckets
+  const screenX = new Float32Array(NUM_BIRDS);
+  const screenY = new Float32Array(NUM_BIRDS);
+  const screenScale = new Float32Array(NUM_BIRDS);
+  const depthBucketHead = new Int32Array(128);
+  const depthBucketNext = new Int32Array(NUM_BIRDS);
+
+  // 3D Spatial hash grid for fast O(N) neighbor interaction
+  const GRID_X = 22;
+  const GRID_Y = 20;
+  const GRID_Z = 14;
+  const GRID_TOTAL = GRID_X * GRID_Y * GRID_Z;
+  const gridHead = new Int32Array(GRID_TOTAL);
+  const gridNext = new Int32Array(NUM_BIRDS);
+  const gridCount = new Uint16Array(GRID_TOTAL);
+
+  // Drifting sunset clouds and crepuscular rays
+  const clouds = [];
+  const rays = [];
+  const reeds = [];
+
+  function initEnvironmentData() {
+    clouds.length = 0;
+    const cloudSpecs = [
+      { y: 0.16, w: 0.75, h: 0.045, speed: 0.004, seed: 1.1, layer: 0 },
+      { y: 0.25, w: 0.90, h: 0.055, speed: -0.003, seed: 2.4, layer: 0 },
+      { y: 0.36, w: 0.85, h: 0.050, speed: 0.005, seed: 3.7, layer: 1 },
+      { y: 0.48, w: 0.95, h: 0.060, speed: 0.0035, seed: 5.2, layer: 1 },
+      { y: 0.59, w: 0.80, h: 0.045, speed: -0.0025, seed: 6.8, layer: 2 },
+      { y: 0.68, w: 0.92, h: 0.040, speed: 0.003, seed: 8.1, layer: 2 },
+      { y: 0.76, w: 0.88, h: 0.032, speed: 0.002, seed: 9.5, layer: 3 }
+    ];
+    for (let i = 0; i < cloudSpecs.length; i++) {
+      const c = cloudSpecs[i];
+      const puffs = [];
+      const count = 16;
+      for (let j = 0; j < count; j++) {
+        const u = (j / (count - 1)) * 2 - 1;
+        const env = Math.cos(u * Math.PI * 0.5);
+        puffs.push({
+          ox: u * 0.5,
+          oy: (Math.sin(j * 4.3 + c.seed) * 0.35) * env,
+          rx: (0.09 + 0.07 * Math.sin(j * 2.1 + c.seed)) * (0.5 + 0.6 * env),
+          ry: (0.28 + 0.22 * Math.cos(j * 3.7 + c.seed)) * (0.4 + 0.7 * env)
+        });
+      }
+      clouds.push({ ...c, x: ((i * 0.37) % 1.0) - 0.5, puffs });
+    }
+
+    rays.length = 0;
+    for (let i = 0; i < 14; i++) {
+      const angle = -Math.PI * 0.92 + (i / 13) * Math.PI * 0.84;
+      rays.push({
+        baseAngle: angle,
+        width: 0.035 + (i % 3) * 0.018,
+        speed: 0.25 + (i % 5) * 0.09,
+        offset: i * 1.7
+      });
+    }
+
+    reeds.length = 0;
+    for (let i = 0; i < 140; i++) {
+      const side = i < 85 ? 0 : 1;
+      const baseU = side === 0
+        ? (i / 85) * 0.42
+        : 0.64 + ((i - 85) / 55) * 0.36;
+      reeds.push({
+        x: baseU + (Math.sin(i * 12.9898) * 0.008),
+        h: 0.018 + Math.abs(Math.sin(i * 78.233)) * 0.048 * (1 - Math.abs(baseU - 0.5) * 0.6),
+        lean: (Math.cos(i * 31.7) * 0.012),
+        freq: 1.4 + (i % 7) * 0.25,
+        phase: i * 0.9,
+        hasPlume: (i % 3 === 0)
+      });
+    }
+  }
+
+  function renderStaticSky() {
+    bgCanvas.width = width;
+    bgCanvas.height = height;
+    horizonY = Math.floor(height * 0.835);
+    sunX = width * 0.52;
+    sunY = horizonY - height * 0.045;
+
+    // 1. Vivid saturated sunset gradient
+    const skyGrad = bgCtx.createLinearGradient(0, 0, 0, horizonY);
+    skyGrad.addColorStop(0.00, '#0d0221');
+    skyGrad.addColorStop(0.14, '#240646');
+    skyGrad.addColorStop(0.30, '#590d56');
+    skyGrad.addColorStop(0.46, '#9e1946');
+    skyGrad.addColorStop(0.62, '#dc392b');
+    skyGrad.addColorStop(0.77, '#fa6e1e');
+    skyGrad.addColorStop(0.90, '#ffa812');
+    skyGrad.addColorStop(1.00, '#ffe359');
+    bgCtx.fillStyle = skyGrad;
+    bgCtx.fillRect(0, 0, width, horizonY + 2);
+
+    // 2. Intense solar atmospheric bloom
+    const sunRadius = minDim * 0.58;
+    const sunBloom = bgCtx.createRadialGradient(sunX, sunY, minDim * 0.01, sunX, sunY, sunRadius);
+    sunBloom.addColorStop(0.00, 'rgba(255, 252, 215, 0.96)');
+    sunBloom.addColorStop(0.08, 'rgba(255, 230, 120, 0.82)');
+    sunBloom.addColorStop(0.22, 'rgba(255, 140, 35, 0.48)');
+    sunBloom.addColorStop(0.48, 'rgba(235, 35, 85, 0.24)');
+    sunBloom.addColorStop(0.78, 'rgba(120, 10, 90, 0.08)');
+    sunBloom.addColorStop(1.00, 'rgba(30, 0, 50, 0)');
+    bgCtx.fillStyle = sunBloom;
+    bgCtx.fillRect(0, 0, width, horizonY + 2);
+
+    // 3. Glowing solar disc
+    const discR = minDim * 0.068;
+    const discGrad = bgCtx.createRadialGradient(sunX, sunY, discR * 0.1, sunX, sunY, discR * 1.35);
+    discGrad.addColorStop(0.0, '#ffffff');
+    discGrad.addColorStop(0.55, '#fff4b8');
+    discGrad.addColorStop(0.78, 'rgba(255, 200, 70, 0.75)');
+    discGrad.addColorStop(1.0, 'rgba(255, 120, 30, 0)');
+    bgCtx.fillStyle = discGrad;
+    bgCtx.beginPath();
+    bgCtx.arc(sunX, sunY, discR * 1.35, 0, Math.PI * 2);
+    bgCtx.fill();
+
+    // 4. Estuary water base gradient below horizon
+    const waterGrad = bgCtx.createLinearGradient(0, horizonY, 0, height);
+    waterGrad.addColorStop(0.00, '#ffba38');
+    waterGrad.addColorStop(0.14, '#e85328');
+    waterGrad.addColorStop(0.35, '#9d1b48');
+    waterGrad.addColorStop(0.65, '#460a3f');
+    waterGrad.addColorStop(1.00, '#120321');
+    bgCtx.fillStyle = waterGrad;
+    bgCtx.fillRect(0, horizonY, width, height - horizonY);
+
+    // Sun column reflection in water
+    const reflGrad = bgCtx.createRadialGradient(
+      sunX, horizonY, minDim * 0.01,
+      sunX, horizonY + (height - horizonY) * 0.45, minDim * 0.42
+    );
+    reflGrad.addColorStop(0.0, 'rgba(255, 245, 175, 0.85)');
+    reflGrad.addColorStop(0.25, 'rgba(255, 165, 45, 0.55)');
+    reflGrad.addColorStop(0.6, 'rgba(210, 40, 80, 0.22)');
+    reflGrad.addColorStop(1.0, 'rgba(40, 5, 50, 0)');
+    bgCtx.fillStyle = reflGrad;
+    bgCtx.fillRect(0, horizonY, width, height - horizonY);
+
+    // 5. Distant purple-indigo hills along the horizon
+    drawMountainRange(bgCtx, horizonY, height * 0.052, '#3a0a3e', 1.2, 0.0);
+    drawMountainRange(bgCtx, horizonY + 2, height * 0.032, '#23052b', 2.7, 0.35);
+  }
+
+  function drawMountainRange(targetCtx, baseY, maxH, color, seed, ridgeShift) {
+    targetCtx.fillStyle = color;
+    targetCtx.beginPath();
+    targetCtx.moveTo(0, baseY + 4);
+    const steps = 90;
+    for (let i = 0; i <= steps; i++) {
+      const u = i / steps;
+      const x = u * width;
+      // Dip near the sun so the glowing sun sits in a coastal valley gap
+      const valleyDip = 1.0 - 0.65 * Math.exp(-Math.pow((u - (0.52 + ridgeShift * 0.15)) / 0.22, 2));
+      const n =
+        Math.sin(u * 5.5 + seed) * 0.45 +
+        Math.sin(u * 13.2 + seed * 2.1) * 0.28 +
+        Math.cos(u * 27.0 + seed * 0.7) * 0.12 +
+        0.55;
+      const h = Math.max(2, n * maxH * valleyDip);
+      targetCtx.lineTo(x, baseY - h);
+    }
+    targetCtx.lineTo(width, baseY + 4);
+    targetCtx.closePath();
+    targetCtx.fill();
+  }
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    width = Math.max(1, Math.floor(window.innerWidth * dpr));
+    height = Math.max(1, Math.floor(window.innerHeight * dpr));
+    minDim = Math.min(width, height);
+    canvas.width = width;
+    canvas.height = height;
+    renderStaticSky();
+  }
+
+  function initBirds() {
+    for (let i = 0; i < NUM_BIRDS; i++) {
+      // Two primary ribbon streams that constantly weave, merge, and fold
+      const group = i < NUM_BIRDS * 0.68 ? 0 : 1;
+      flockGroup[i] = group;
+      const t = (i / NUM_BIRDS) * Math.PI * 6;
+      const spread = 0.16 + Math.random() * 0.22;
+      const angle = Math.random() * Math.PI * 2;
+      const zSpread = (Math.random() - 0.5) * 0.38;
+
+      const cx = group === 0 ? -0.15 : 0.25;
+      const cy = group === 0 ? 0.05 : -0.12;
+
+      px[i] = cx + Math.cos(t) * 0.35 + Math.cos(angle) * spread;
+      py[i] = cy + Math.sin(t * 1.5) * 0.22 + Math.sin(angle) * spread * 0.75;
+      pz[i] = zSpread + Math.sin(t) * 0.18;
+
+      const speed = 0.35 + Math.random() * 0.15;
+      vx[i] = -Math.sin(t) * speed;
+      vy[i] = Math.cos(t) * speed * 0.5;
+      vz[i] = Math.cos(t * 0.7) * speed * 0.3;
+      phase[i] = Math.random() * Math.PI * 2;
+    }
+  }
+
+  // Smooth 3D curl-like flow field to give authentic ribbon-like twisting sheets
+  function sampleFlowField(x, y, z, time) {
+    const s1 = 2.6;
+    const t1 = time * 0.42;
+    const nx = Math.sin(y * s1 + t1) * Math.cos(z * s1 - t1 * 0.7) + Math.sin((x + y) * 4.1 - t1 * 1.2) * 0.45;
+    const ny = Math.cos(z * s1 + t1 * 0.8) * Math.sin(x * s1 + t1) + Math.cos((y - z) * 3.8 + t1 * 1.1) * 0.45;
+    const nz = Math.sin(x * s1 * 1.2 - t1 * 0.9) * Math.cos(y * s1 + t1 * 0.6) * 0.8;
+    return [nx, ny, nz];
+  }
+
+  // Dynamic choreographed attractors + falcon shockwaves
+  const attractors = [
+    { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 },
+    { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 }
+  ];
+  const predator = { x: 0, y: 0, z: 0, vx: 0, vy: 0, strength: 0 };
+
+  function updateChoreography(time) {
+    // Primary murmuration core traces a sweeping, asymmetrical 3D figure-eight ribbon
+    const tA = time * 0.36;
+    const ax0 = Math.sin(tA) * 0.56 + Math.cos(tA * 2.1) * 0.18;
+    const ay0 = Math.sin(tA * 1.7 + 0.6) * 0.28 + Math.cos(tA * 0.8) * 0.12 + 0.04;
+    const az0 = Math.cos(tA * 1.3) * 0.32;
+
+    attractors[0].vx = (ax0 - attractors[0].x) * 3.0;
+    attractors[0].vy = (ay0 - attractors[0].y) * 3.0;
+    attractors[0].vz = (az0 - attractors[0].z) * 3.0;
+    attractors[0].x = ax0;
+    attractors[0].y = ay0;
+    attractors[0].z = az0;
+
+    // Secondary lobe orbits, merges into the main cloud, and peels away in dramatic folds
+    const mergeWave = 0.5 + 0.5 * Math.sin(time * 0.27);
+    const orbitR = 0.12 + 0.44 * mergeWave;
+    const tB = time * 0.52 + 1.4;
+    const ax1 = ax0 * (1 - mergeWave * 0.55) + Math.cos(tB) * orbitR;
+    const ay1 = ay0 * (1 - mergeWave * 0.45) + Math.sin(tB * 1.4) * (orbitR * 0.72);
+    const az1 = az0 * 0.5 + Math.sin(tB * 0.9) * 0.34;
+
+    attractors[1].vx = (ax1 - attractors[1].x) * 3.0;
+    attractors[1].vy = (ay1 - attractors[1].y) * 3.0;
+    attractors[1].vz = (az1 - attractors[1].z) * 3.0;
+    attractors[1].x = ax1;
+    attractors[1].y = ay1;
+    attractors[1].z = az1;
+
+    // Periodic evasive wave (like a hunting falcon diving through the edge of the flock)
+    // Creates the iconic compressed dark edge & sudden directional folding wave
+    const pulseCycle = Math.sin(time * 0.65) * Math.sin(time * 0.23 + 0.8);
+    predator.strength = Math.max(0, (pulseCycle - 0.15) / 0.85);
+    const pAngle = time * 1.15;
+    const targetPx = attractors[0].x + Math.cos(pAngle) * 0.28;
+    const targetPy = attractors[0].y + Math.sin(pAngle * 1.3) * 0.22;
+    const targetPz = attractors[0].z + Math.sin(pAngle * 0.7) * 0.20;
+    predator.vx = targetPx - predator.x;
+    predator.vy = targetPy - predator.y;
+    predator.x = targetPx;
+    predator.y = targetPy;
+    predator.z = targetPz;
+  }
+
+  function updateBirds(dt, time) {
+    updateChoreography(time);
+
+    // 1. Clear spatial grid
+    gridHead.fill(-1);
+    gridCount.fill(0);
+
+    // Domain bounds for spatial hashing: x in [-1.3, 1.3], y in [-0.9, 0.9], z in [-0.9, 0.9]
+    const invX = GRID_X / 2.6;
+    const invY = GRID_Y / 1.8;
+    const invZ = GRID_Z / 1.8;
+
+    for (let i = 0; i < NUM_BIRDS; i++) {
+      let gx = ((px[i] + 1.3) * invX) | 0;
+      let gy = ((py[i] + 0.9) * invY) | 0;
+      let gz = ((pz[i] + 0.9) * invZ) | 0;
+      if (gx < 0) gx = 0; else if (gx >= GRID_X) gx = GRID_X - 1;
+      if (gy < 0) gy = 0; else if (gy >= GRID_Y) gy = GRID_Y - 1;
+      if (gz < 0) gz = 0; else if (gz >= GRID_Z) gz = GRID_Z - 1;
+
+      const cell = (gz * GRID_Y + gy) * GRID_X + gx;
+      gridNext[i] = gridHead[cell];
+      gridHead[cell] = i;
+      gridCount[cell]++;
+    }
+
+    // Swirl / torsion phase that alternates to make the flock twist like silk in the wind
+    const twistDir = Math.sin(time * 0.48) * 1.35;
+    const sheetCompression = 1.15 + 0.55 * Math.sin(time * 0.39);
+
+    const sepDistSq = 0.0024;
+    const neighDistSq = 0.026;
+
+    for (let i = 0; i < NUM_BIRDS; i++) {
+      const x = px[i];
+      const y = py[i];
+      const z = pz[i];
+      let bvx = vx[i];
+      let bvy = vy[i];
+      let bvz = vz[i];
+
+      let gx = ((x + 1.3) * invX) | 0;
+      let gy = ((y + 0.9) * invY) | 0;
+      let gz = ((z + 0.9) * invZ) | 0;
+      if (gx < 1) gx = 1; else if (gx >= GRID_X - 1) gx = GRID_X - 2;
+      if (gy < 1) gy = 1; else if (gy >= GRID_Y - 1) gy = GRID_Y - 2;
+      if (gz < 1) gz = 1; else if (gz >= GRID_Z - 1) gz = GRID_Z - 2;
+
+      let sepX = 0, sepY = 0, sepZ = 0;
+      let aliX = 0, aliY = 0, aliZ = 0;
+      let cohX = 0, cohY = 0, cohZ = 0;
+      let neighbors = 0;
+
+      // Sample 3x3x3 neighborhood cells (capped at 18 topological neighbors like real starlings!)
+      const strideStride = (i % 3) + 1;
+      outer:
+      for (let dz = -1; dz <= 1; dz++) {
+        const zOff = (gz + dz) * GRID_Y;
+        for (let dy = -1; dy <= 1; dy++) {
+          const yOff = (zOff + gy + dy) * GRID_X + gx;
+          for (let dx = -1; dx <= 1; dx++) {
+            let other = gridHead[yOff + dx];
+            while (other !== -1) {
+              if (other !== i) {
+                const rx = x - px[other];
+                const ry = y - py[other];
+                const rz = z - pz[other];
+                const dSq = rx * rx + ry * ry + rz * rz;
+                if (dSq < neighDistSq && dSq > 1e-8) {
+                  if (dSq < sepDistSq) {
+                    const invD = 1.0 / (dSq + 0.00025);
+                    sepX += rx * invD;
+                    sepY += ry * invD;
+                    sepZ += rz * invD;
+                  }
+                  aliX += vx[other];
+                  aliY += vy[other];
+                  aliZ += vz[other];
+                  cohX += px[other];
+                  cohY += py[other];
+                  cohZ += pz[other];
+                  neighbors++;
+                  if (neighbors >= 14) break outer;
+                }
+              }
+              // Step through linked list
+              for (let s = 0; s < strideStride && other !== -1; s++) {
+                other = gridNext[other];
+              }
+            }
+          }
+        }
+      }
+
+      localDensity[i] = neighbors;
+
+      let fx = 0, fy = 0, fz = 0;
+
+      if (neighbors > 0) {
+        const invN = 1.0 / neighbors;
+        // Alignment (strong in starlings to propagate fast turning waves)
+        fx += (aliX * invN - bvx) * 4.2;
+        fy += (aliY * invN - bvy) * 4.2;
+        fz += (aliZ * invN - bvz) * 4.2;
+
+        // Cohesion
+        fx += (cohX * invN - x) * 2.1;
+        fy += (cohY * invN - y) * 2.1;
+        fz += (cohZ * invN - z) * 2.1;
+
+        // Separation
+        fx += sepX * 0.022;
+        fy += sepY * 0.022;
+        fz += sepZ * 0.024;
+      }
+
+      // Attractor ribbon pull + vortex curl around the attractor axis
+      const grp = flockGroup[i];
+      const att = attractors[grp];
+      const dxA = att.x - x;
+      const dyA = att.y - y;
+      const dzA = att.z - z;
+      const distA = Math.sqrt(dxA * dxA + dyA * dyA + dzA * dzA) + 0.001;
+
+      // Pull toward moving attractor + match its sweep velocity
+      const pullStrength = 1.85 + distA * 2.4;
+      fx += dxA * pullStrength + att.vx * 0.75;
+      fy += dyA * pullStrength * sheetCompression + att.vy * 0.75;
+      fz += dzA * pullStrength + att.vz * 0.75;
+
+      // Cross-product vortex around attractor to create folding ribbon edges
+      const swirlEnvelope = Math.exp(-distA * 1.8) * twistDir;
+      fx += (-dyA * 1.2 + dzA * 0.5) * swirlEnvelope;
+      fy += (dxA * 1.1 - dzA * 0.4) * swirlEnvelope;
+      fz += (-dxA * 0.7 + dyA * 0.7) * swirlEnvelope;
+
+      // 3D Curl flow field for organic billowing folds
+      const [cfx, cfy, cfz] = sampleFlowField(x, y, z, time);
+      fx += cfx * 0.95;
+      fy += cfy * 0.85;
+      fz += cfz * 0.85;
+
+      // Predator shockwave repulsion & folding wave
+      if (predator.strength > 0.01) {
+        const pdx = x - predator.x;
+        const pdy = y - predator.y;
+        const pdz = z - predator.z;
+        const pDistSq = pdx * pdx + pdy * pdy + pdz * pdz;
+        if (pDistSq < 0.24) {
+          const pDist = Math.sqrt(pDistSq) + 0.01;
+          const repulse = (0.49 - pDist) * predator.strength * 9.5;
+          // Push radially outward + tangential roll (creates the dark compressed shockwave crest)
+          fx += (pdx / pDist) * repulse - (pdy / pDist) * repulse * 0.55;
+          fy += (pdy / pDist) * repulse + (pdx / pDist) * repulse * 0.55;
+          fz += (pdz / pDist) * repulse * 0.8;
+        }
+      }
+
+      // Soft sky & horizon boundary containment so the flock stays gracefully framed
+      if (x < -0.92) fx += (-0.92 - x) * 6.0;
+      else if (x > 0.92) fx += (0.92 - x) * 6.0;
+
+      if (y < -0.52) fy += (-0.52 - y) * 7.5; // Stay above the water horizon
+      else if (y > 0.74) fy += (0.74 - y) * 6.0;
+
+      if (z < -0.65) fz += (-0.65 - z) * 5.5;
+      else if (z > 0.65) fz += (0.65 - z) * 5.5;
+
+      // Occasional subtle group exchange for seamless splitting & merging
+      if (((i + ((time * 60) | 0)) & 511) === 0) {
+        flockGroup[i] = flockGroup[i] ^ 1;
+      }
+
+      bvx += fx * dt;
+      bvy += fy * dt;
+      bvz += fz * dt;
+
+      // Clamp speed within natural starling flight envelope
+      const spdSq = bvx * bvx + bvy * bvy + bvz * bvz;
+      const minSpd = 0.34;
+      const maxSpd = 0.98;
+      if (spdSq > maxSpd * maxSpd) {
+        const scale = maxSpd / Math.sqrt(spdSq);
+        bvx *= scale;
+        bvy *= scale;
+        bvz *= scale;
+      } else if (spdSq < minSpd * minSpd) {
+        const scale = minSpd / (Math.sqrt(spdSq) + 1e-5);
+        bvx *= scale;
+        bvy *= scale;
+        bvz *= scale;
+      }
+
+      vx[i] = bvx;
+      vy[i] = bvy;
+      vz[i] = bvz;
+
+      px[i] = x + bvx * dt;
+      py[i] = y + bvy * dt;
+      pz[i] = z + bvz * dt;
+
+      // Wingbeat frequency speeds up slightly when climbing or accelerating
+      const climbFactor = Math.max(0.65, 1.0 + bvy * 0.55);
+      phase[i] = (phase[i] + dt * (17.5 + (i % 7) * 0.6) * climbFactor) % (Math.PI * 2);
+    }
+  }
+
+  function drawCrepuscularRays(time) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    const maxRayLen = Math.hypot(width, horizonY);
+
+    for (let i = 0; i < rays.length; i++) {
+      const r = rays[i];
+      const wave = Math.sin(time * r.speed + r.offset);
+      const angle = r.baseAngle + wave * 0.035;
+      const halfSpread = r.width * (0.85 + 0.25 * Math.cos(time * 0.4 + r.offset));
+      const alpha = 0.045 + 0.035 * (0.5 + 0.5 * Math.sin(time * (r.speed * 1.3) + r.offset * 2.0));
+
+      const x1 = sunX + Math.cos(angle - halfSpread) * maxRayLen;
+      const y1 = sunY + Math.sin(angle - halfSpread) * maxRayLen;
+      const x2 = sunX + Math.cos(angle + halfSpread) * maxRayLen;
+      const y2 = sunY + Math.sin(angle + halfSpread) * maxRayLen;
+
+      const grad = ctx.createLinearGradient(
+        sunX, sunY,
+        sunX + Math.cos(angle) * (maxRayLen * 0.75),
+        sunY + Math.sin(angle) * (maxRayLen * 0.75)
+      );
+      grad.addColorStop(0.0, `rgba(255, 220, 115, ${alpha * 1.4})`);
+      grad.addColorStop(0.45, `rgba(255, 110, 55, ${alpha})`);
+      grad.addColorStop(1.0, 'rgba(180, 20, 90, 0)');
+
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.moveTo(sunX, sunY);
+      ctx.lineTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawClouds(time, targetLayer) {
+    for (let i = 0; i < clouds.length; i++) {
+      const c = clouds[i];
+      if (c.layer !== targetLayer) continue;
+
+      // Slow horizontal drift wrapping smoothly
+      let cx = ((c.x + time * c.speed + 1.5) % 2.0) - 0.5;
+      const screenCX = cx * width;
+      const screenCY = c.y * horizonY;
+      const cw = c.w * width;
+      const ch = c.h * horizonY;
+
+      // Color palette shifts from deep plum-violet high up to molten crimson/gold near the sun
+      let topColor, botColor;
+      if (c.y < 0.28) {
+        topColor = 'rgba(42, 7, 64, 0.72)';
+        botColor = 'rgba(195, 35, 95, 0.55)';
+      } else if (c.y < 0.52) {
+        topColor = 'rgba(72, 11, 68, 0.76)';
+        botColor = 'rgba(248, 88, 42, 0.65)';
+      } else {
+        topColor = 'rgba(95, 16, 58, 0.78)';
+        botColor = 'rgba(255, 168, 38, 0.72)';
+      }
+
+      const cGrad = ctx.createLinearGradient(0, screenCY - ch, 0, screenCY + ch * 1.1);
+      cGrad.addColorStop(0.0, topColor);
+      cGrad.addColorStop(0.68, topColor);
+      cGrad.addColorStop(1.0, botColor);
+      ctx.fillStyle = cGrad;
+
+      ctx.beginPath();
+      const puffs = c.puffs;
+      for (let j = 0; j < puffs.length; j++) {
+        const p = puffs[j];
+        const px = screenCX + p.ox * cw;
+        const py = screenCY + p.oy * ch;
+        const rx = p.rx * cw;
+        const ry = p.ry * ch;
+        ctx.moveTo(px + rx, py);
+        ctx.ellipse(px, py, rx, ry, 0, 0, Math.PI * 2);
+      }
+      ctx.fill();
+    }
+  }
+
+  function projectAndDrawMurmuration(time) {
+    depthBucketHead.fill(-1);
+
+    // Camera projection settings: tuned so 1080x1080 square frame showcases the entire
+    // sweeping sky theater with deep perspective
+    const camCenterX = width * 0.5;
+    const camCenterY = horizonY * 0.54;
+    const fovScale = minDim * 0.62;
+    const camDist = 1.65;
+
+    for (let i = 0; i < NUM_BIRDS; i++) {
+      const z = pz[i];
+      const depth = camDist - z;
+      const invDepth = 1.0 / Math.max(0.35, depth);
+      const persp = fovScale * invDepth;
+
+      screenX[i] = camCenterX + px[i] * persp;
+      // In world space, +y is up; in screen space, -y is up
+      screenY[i] = camCenterY - py[i] * persp;
+      screenScale[i] = invDepth;
+
+      // Bucket by depth from farthest (z = -0.8) to nearest (z = +0.8)
+      let b = (((z + 0.85) / 1.7) * 127) | 0;
+      if (b < 0) b = 0; else if (b > 127) b = 127;
+      depthBucketNext[i] = depthBucketHead[b];
+      depthBucketHead[b] = i;
+    }
+
+    // 1. Subtle water reflection of the murmuration in the lagoon below horizon
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, horizonY, width, height - horizonY);
+    ctx.clip();
+    ctx.fillStyle = 'rgba(28, 4, 38, 0.22)';
+    ctx.beginPath();
+    const waterScaleY = (height - horizonY) / horizonY;
+    for (let i = 0; i < NUM_BIRDS; i += 2) {
+      const sx = screenX[i];
+      const sy = screenY[i];
+      if (sy < horizonY && sx > 0 && sx < width) {
+        const distFromHorizon = horizonY - sy;
+        const ry = horizonY + distFromHorizon * waterScaleY * 0.88;
+        const ripple = Math.sin(ry * 0.18 + time * 4.5 + i) * (minDim * 0.004);
+        const rSize = Math.max(1.2, screenScale[i] * minDim * 0.0045);
+        ctx.moveTo(sx + ripple - rSize, ry);
+        ctx.lineTo(sx + ripple + rSize, ry);
+        ctx.lineTo(sx + ripple, ry + rSize * 0.7);
+      }
+    }
+    ctx.fill();
+    ctx.restore();
+
+    // 2. Render birds in 4 atmospheric depth/lighting passes for ultra-clean silhouettes
+    // plus warm golden-magenta rim-lit wing flashes when banking near the sun
+    const baseWingSpan = minDim * 0.0082;
+
+    // Pass A: Farthest birds (buckets 0..42) - atmospheric purple-plum tint
+    renderBirdBucketRange(0, 42, baseWingSpan, '#35093e', 'rgba(255, 135, 65, 0.55)');
+
+    // Mid-distant cloud wisp layer for 3D depth interleaving
+    drawClouds(time, 3);
+
+    // Pass B: Mid-far birds (buckets 43..75) - deep wine-indigo silhouette
+    renderBirdBucketRange(43, 75, baseWingSpan, '#24052e', 'rgba(255, 160, 60, 0.70)');
+
+    // Pass C: Mid-near dense folding core (buckets 76..102) - rich velvet dark plum
+    renderBirdBucketRange(76, 102, baseWingSpan, '#160220', 'rgba(255, 190, 75, 0.82)');
+
+    // Pass D: Closest foreground starlings (buckets 103..127) - crisp obsidian-indigo
+    renderBirdBucketRange(103, 127, baseWingSpan, '#0b0112', 'rgba(255, 218, 105, 0.90)');
+  }
+
+  function renderBirdBucketRange(startBucket, endBucket, baseWingSpan, darkColor, rimColor) {
+    // Batch main silhouettes into a single compound path per depth tier,
+    // and collect sun-catching banking birds into a secondary rim-lit path
+    ctx.fillStyle = darkColor;
+    ctx.beginPath();
+
+    const rimBirds = [];
+    const sunRadiusSq = (minDim * 0.44) * (minDim * 0.44);
+
+    for (let b = startBucket; b <= endBucket; b++) {
+      let i = depthBucketHead[b];
+      while (i !== -1) {
+        const sx = screenX[i];
+        const sy = screenY[i];
+
+        if (sx > -30 && sx < width + 30 && sy > -30 && sy < horizonY + 15) {
+          const bvx = vx[i];
+          const bvy = vy[i];
+          const bvz = vz[i];
+
+          // Screen-space velocity components (note: +vy in world is -vy on screen)
+          const svx = bvx;
+          const svy = -bvy;
+          const speed2D = Math.hypot(svx, svy) + 1e-4;
+
+          // Forward unit vector on screen
+          const dirX = svx / speed2D;
+          const dirY = svy / speed2D;
+          // Perpendicular wing axis on screen
+          const perpX = -dirY;
+          const perpY = dirX;
+
+          // Perspective foreshortening of wings when flying toward/away from camera
+          // or banking hard into a turn (creates the dynamic changing dot-to-crescent look
+          // that makes folding edges appear extra dark and graphic!)
+          const foreshorten = Math.min(1.0, speed2D / (Math.sqrt(bvx * bvx + bvy * bvy + bvz * bvz) + 1e-4));
+          const span = baseWingSpan * screenScale[i] * (0.68 + 0.35 * foreshorten);
+          const bodyLen = span * (0.42 + 0.25 * foreshorten);
+
+          const flap = Math.sin(phase[i]);
+          const wingArch = flap * span * 0.52;
+          const tipSweep = -Math.abs(flap) * bodyLen * 0.35;
+
+          // Nose, tail, and left/right wingtips
+          const noseX = sx + dirX * bodyLen;
+          const noseY = sy + dirY * bodyLen;
+          const tailX = sx - dirX * (bodyLen * 0.85);
+          const tailY = sy - dirY * (bodyLen * 0.85);
+
+          const lwX = sx + perpX * span + dirX * tipSweep;
+          const lwY = sy + perpY * span + dirY * tipSweep - wingArch;
+
+          const rwX = sx - perpX * span + dirX * tipSweep;
+          const rwY = sy - perpY * span + dirY * tipSweep - wingArch;
+
+          const shoulderY = sy - wingArch * 0.45;
+
+          // Crisp gull/starling M-wing silhouette
+          ctx.moveTo(noseX, noseY);
+          ctx.lineTo(lwX, lwY);
+          ctx.lineTo(sx + perpX * (span * 0.28), shoulderY - dirY * (bodyLen * 0.25));
+          ctx.lineTo(tailX, tailY);
+          ctx.lineTo(sx - perpX * (span * 0.28), shoulderY - dirY * (bodyLen * 0.25));
+          ctx.lineTo(rwX, rwY);
+          ctx.closePath();
+
+          // Check if bird is banking near the solar glow and catches rim light on its upper wing
+          const dxSun = sx - sunX;
+          const dySun = sy - sunY;
+          const dSunSq = dxSun * dxSun + dySun * dySun;
+          if (dSunSq < sunRadiusSq && flap > 0.45 && localDensity[i] < 10) {
+            rimBirds.push(noseX, noseY, lwX, lwY, rwX, rwY);
+          }
+        }
+        i = depthBucketNext[i];
+      }
+    }
+    ctx.fill();
+
+    // Subtle sunlit wing-edge glint on birds banking near the sun
+    if (rimBirds.length > 0) {
+      ctx.fillStyle = rimColor;
+      ctx.beginPath();
+      for (let k = 0; k < rimBirds.length; k += 6) {
+        const nx = rimBirds[k];
+        const ny = rimBirds[k + 1];
+        const lx = rimBirds[k + 2];
+        const ly = rimBirds[k + 3];
+        const rx = rimBirds[k + 4];
+        const ry = rimBirds[k + 5];
+        ctx.moveTo(nx, ny);
+        ctx.lineTo(lx, ly);
+        ctx.lineTo((nx + lx) * 0.5, (ny + ly) * 0.5 + 1.1);
+        ctx.moveTo(nx, ny);
+        ctx.lineTo(rx, ry);
+        ctx.lineTo((nx + rx) * 0.5, (ny + ry) * 0.5 + 1.1);
+      }
+      ctx.fill();
+    }
+  }
+
+  function drawWaterAndForeground(time) {
+    // Shimmering horizontal sunset ripples on the estuary water
+    ctx.save();
+    const waterH = height - horizonY;
+    const numRipples = 34;
+
+    for (let i = 0; i < numRipples; i++) {
+      const v = i / numRipples;
+      const y = horizonY + Math.pow(v, 1.35) * waterH * 0.92 + 2;
+      const spread = (0.18 + v * 0.55) * width;
+      const waveShift = Math.sin(time * 1.6 + i * 1.9) * (width * 0.03 * (1 - v * 0.5));
+      const rx = sunX + waveShift;
+      const rw = spread * (0.35 + 0.25 * Math.sin(time * 2.1 + i * 3.1));
+      const rh = Math.max(1.2, (1.2 + v * 3.5) * dpr);
+
+      if (i % 2 === 0) {
+        const alpha = (1 - v) * 0.48;
+        ctx.fillStyle = v < 0.35
+          ? `rgba(255, 238, 140, ${alpha})`
+          : `rgba(255, 130, 50, ${alpha * 0.85})`;
+      } else {
+        const alpha = (0.25 + v * 0.5) * 0.42;
+        ctx.fillStyle = `rgba(22, 3, 36, ${alpha})`;
+      }
+
+      ctx.fillRect(rx - rw * 0.5, y, rw, rh);
+    }
+
+    // Foreground dark headland banks framing the bottom corners
+    ctx.fillStyle = '#090112';
+    ctx.beginPath();
+    ctx.moveTo(0, height);
+    ctx.lineTo(0, horizonY + waterH * 0.42);
+    ctx.quadraticCurveTo(width * 0.18, horizonY + waterH * 0.46, width * 0.42, height);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(width, height);
+    ctx.lineTo(width, horizonY + waterH * 0.48);
+    ctx.quadraticCurveTo(width * 0.82, horizonY + waterH * 0.54, width * 0.62, height);
+    ctx.closePath();
+    ctx.fill();
+
+    // Gently swaying wetland reeds in silhouette along the bottom shore
+    ctx.strokeStyle = '#090112';
+    ctx.fillStyle = '#090112';
+    ctx.lineWidth = Math.max(1.2, minDim * 0.0016);
+
+    ctx.beginPath();
+    for (let i = 0; i < reeds.length; i++) {
+      const r = reeds[i];
+      const bx = r.x * width;
+      const by = height;
+      const sway = Math.sin(time * r.freq + r.phase) * 0.0055 * width;
+      const tx = bx + r.lean * width + sway;
+      const ty = height - r.h * height;
+
+      ctx.moveTo(bx, by);
+      ctx.quadraticCurveTo(bx + (tx - bx) * 0.35, (by + ty) * 0.5, tx, ty);
+    }
+    ctx.stroke();
+
+    // Soft seed plumes on tall reeds
+    ctx.beginPath();
+    for (let i = 0; i < reeds.length; i++) {
+      const r = reeds[i];
+      if (!r.hasPlume) continue;
+      const bx = r.x * width;
+      const sway = Math.sin(time * r.freq + r.phase) * 0.0055 * width;
+      const tx = bx + r.lean * width + sway;
+      const ty = height - r.h * height;
+      const pr = Math.max(1.5, minDim * 0.0022);
+      ctx.moveTo(tx + pr, ty);
+      ctx.ellipse(tx, ty, pr * 0.8, pr * 2.4, (tx - bx) * 0.02, 0, Math.PI * 2);
+    }
+    ctx.fill();
+
+    // Subtle atmospheric vignette to deepen contrast on mobile/square screens
+    const vig = ctx.createRadialGradient(
+      width * 0.5, height * 0.48, minDim * 0.36,
+      width * 0.5, height * 0.5, minDim * 0.78
+    );
+    vig.addColorStop(0.0, 'rgba(0, 0, 0, 0)');
+    vig.addColorStop(1.0, 'rgba(10, 1, 20, 0.34)');
+    ctx.fillStyle = vig;
+    ctx.fillRect(0, 0, width, height);
+
+    ctx.restore();
+  }
+
+  // Initialize and start animation immediately on load
+  initEnvironmentData();
+  resize();
+  initBirds();
+
+  // Pre-warm physics by 80 steps so the murmuration is already in a gorgeous
+  // swirling, folded ribbon formation on the very first rendered frame
+  for (let w = 0; w < 80; w++) {
+    updateBirds(0.016, w * 0.016);
+  }
+
+  window.addEventListener('resize', resize, { passive: true });
+
+  let lastTime = performance.now();
+  let simTime = 80 * 0.016;
+
+  function animate(now) {
+    const rawDt = (now - lastTime) * 0.001;
+    lastTime = now;
+    const dt = Math.min(0.033, Math.max(0.005, rawDt));
+    simTime += dt;
+
+    updateBirds(dt, simTime);
+
+    // 1. Blit cached sunset sky & mountain backdrop
+    ctx.drawImage(bgCanvas, 0, 0);
+
+    // 2. High-altitude clouds & volumetric crepuscular sun rays
+    drawClouds(simTime, 0);
+    drawClouds(simTime, 1);
+    drawCrepuscularRays(simTime);
+    drawClouds(simTime, 2);
+
+    // 3. Swirling 3D starling murmuration + lagoon reflection
+    projectAndDrawMurmuration(simTime);
+
+    // 4. Shimmering estuary ripples and foreground reed silhouettes
+    drawWaterAndForeground(simTime);
+
+    requestAnimationFrame(animate);
+  }
+
+  requestAnimationFrame(animate);
+})();
+</script>
+</body>
+</html>

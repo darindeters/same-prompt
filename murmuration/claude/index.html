@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Murmuration</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #3b0a5a; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+'use strict';
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d', { alpha: false });
+const sky = document.createElement('canvas');
+const sctx = sky.getContext('2d');
+
+let W = 0, H = 0, DPR = 1, unit = 1, cx = 0, cy = 0;
+
+// ---------- deterministic random for the sky ----------
+let seed = 1337;
+function srand() { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }
+
+// ---------- sky ----------
+function paintSky() {
+  sky.width = W; sky.height = H;
+  const g = sctx;
+  const m = Math.min(W, H);
+
+  // base gradient: indigo -> violet -> magenta -> orange -> gold
+  const lin = g.createLinearGradient(0, 0, 0, H);
+  lin.addColorStop(0.00, '#170a4d');
+  lin.addColorStop(0.20, '#4a1390');
+  lin.addColorStop(0.42, '#a81a9c');
+  lin.addColorStop(0.58, '#e8257a');
+  lin.addColorStop(0.72, '#ff5a22');
+  lin.addColorStop(0.86, '#ffa41a');
+  lin.addColorStop(1.00, '#ffd95a');
+  g.fillStyle = lin;
+  g.fillRect(0, 0, W, H);
+
+  // sun glow
+  const sx = W * 0.60, sy = H * 0.80;
+  const glow = g.createRadialGradient(sx, sy, 0, sx, sy, m * 0.75);
+  glow.addColorStop(0.00, 'rgba(255,246,200,1)');
+  glow.addColorStop(0.08, 'rgba(255,220,120,0.95)');
+  glow.addColorStop(0.25, 'rgba(255,150,60,0.55)');
+  glow.addColorStop(0.55, 'rgba(255,90,80,0.18)');
+  glow.addColorStop(1.00, 'rgba(255,60,120,0)');
+  g.fillStyle = glow;
+  g.fillRect(0, 0, W, H);
+
+  // sun disc
+  const disc = g.createRadialGradient(sx, sy, 0, sx, sy, m * 0.075);
+  disc.addColorStop(0.0, '#fffbe6');
+  disc.addColorStop(0.7, '#fff0a8');
+  disc.addColorStop(1.0, 'rgba(255,220,120,0)');
+  g.fillStyle = disc;
+  g.beginPath(); g.arc(sx, sy, m * 0.075, 0, Math.PI * 2); g.fill();
+
+  // cloud streaks
+  seed = 1337;
+  for (let i = 0; i < 18; i++) {
+    const yy = H * (0.22 + 0.62 * Math.pow(srand(), 0.8));
+    const xx = W * (0.1 + 0.8 * srand());
+    const len = m * (0.18 + 0.55 * srand());
+    const th = m * (0.012 + 0.03 * srand());
+    const near = 1 - Math.abs(yy - sy) / H;
+    g.save();
+    g.translate(xx, yy);
+    g.scale(len, th);
+    const cg = g.createRadialGradient(0, 0, 0, 0, 0, 1);
+    const lit = 0.25 + 0.35 * near;
+    cg.addColorStop(0.0, `rgba(${yy > H * 0.6 ? '110,20,80' : '70,10,120'},${0.55})`);
+    cg.addColorStop(0.6, `rgba(${yy > H * 0.6 ? '140,30,90' : '90,15,130'},${0.35})`);
+    cg.addColorStop(1.0, 'rgba(60,10,110,0)');
+    g.fillStyle = cg;
+    g.beginPath(); g.arc(0, 0, 1, 0, Math.PI * 2); g.fill();
+    // lit upper rim
+    const rim = g.createRadialGradient(0, -0.35, 0, 0, -0.35, 1);
+    rim.addColorStop(0.0, `rgba(255,170,90,${lit})`);
+    rim.addColorStop(0.5, `rgba(255,120,80,${lit * 0.35})`);
+    rim.addColorStop(1.0, 'rgba(255,120,80,0)');
+    g.fillStyle = rim;
+    g.beginPath(); g.arc(0, -0.25, 1, 0, Math.PI * 2); g.fill();
+    g.restore();
+  }
+
+  // distant hills silhouette
+  g.fillStyle = '#1b0520';
+  g.beginPath();
+  g.moveTo(0, H);
+  const base = H * 0.905;
+  for (let x = 0; x <= W; x += 4) {
+    const u = x / W;
+    const y = base
+      - m * 0.035 * Math.sin(u * 5.1 + 0.7)
+      - m * 0.02 * Math.sin(u * 13.3 + 2.1)
+      - m * 0.008 * Math.sin(u * 37 + 4.3)
+      - m * 0.02 * Math.max(0, Math.sin(u * 2.3 + 1.2));
+    g.lineTo(x, y);
+  }
+  g.lineTo(W, H);
+  g.closePath();
+  g.fill();
+
+  // nearer treeline
+  g.fillStyle = '#0e0214';
+  g.beginPath();
+  g.moveTo(0, H);
+  const base2 = H * 0.955;
+  for (let x = 0; x <= W; x += 3) {
+    const u = x / W;
+    const spike = Math.pow(Math.abs(Math.sin(u * 91 + 1.3)), 6) * m * 0.03;
+    const y = base2 - m * 0.012 * Math.sin(u * 7.7 + 3) - spike - m * 0.006 * Math.sin(u * 23 + 1);
+    g.lineTo(x, y);
+  }
+  g.lineTo(W, H);
+  g.closePath();
+  g.fill();
+
+  // top vignette for depth
+  const vig = g.createLinearGradient(0, 0, 0, H * 0.35);
+  vig.addColorStop(0, 'rgba(8,2,30,0.55)');
+  vig.addColorStop(1, 'rgba(8,2,30,0)');
+  g.fillStyle = vig;
+  g.fillRect(0, 0, W, H * 0.35);
+}
+
+// ---------- flock ----------
+const N = 5200;
+const px = new Float32Array(N), py = new Float32Array(N), pz = new Float32Array(N);
+const vx = new Float32Array(N), vy = new Float32Array(N), vz = new Float32Array(N);
+const flapPhase = new Float32Array(N), flapFreq = new Float32Array(N);
+let activeN = N;
+
+for (let i = 0; i < N; i++) {
+  // start as a loose ball
+  let x, y, z, r2;
+  do { x = Math.random() * 2 - 1; y = Math.random() * 2 - 1; z = Math.random() * 2 - 1; r2 = x * x + y * y + z * z; } while (r2 > 1);
+  px[i] = x * 0.4; py[i] = 0.05 + y * 0.3; pz[i] = z * 0.4;
+  const a = Math.random() * Math.PI * 2;
+  vx[i] = Math.cos(a) * 0.35; vy[i] = (Math.random() - 0.5) * 0.1; vz[i] = Math.sin(a) * 0.35;
+  flapPhase[i] = Math.random() * Math.PI * 2;
+  flapFreq[i] = 14 + Math.random() * 9;
+}
+
+// spatial hash (cell = 2R, check the 8 cells on the bird's side)
+const R = 0.085, R2 = R * R, CELL = R * 2, GMIN = -2.4, GN = Math.ceil(4.8 / CELL), GN2 = GN * GN, NC = GN * GN2;
+const cellStart = new Int32Array(NC + 1), cellPtr = new Int32Array(NC + 1);
+const sorted = new Int32Array(N), cellIdx = new Int32Array(N);
+const K = 9;
+
+const MAXS = 0.62, MINS = 0.24;
+const SEP = 2.6, ALI = 4.5, COH = 5.0;
+
+// wandering goal
+let tx = 0, ty = 0, tz = 0;
+// falcon
+let fx = 0, fy = 0, fz = 0, falconOn = false;
+let lastCycle = -1, fsx = 0, fsy = 0, fsz = 0, fex = 0, fey = 0, fez = 0;
+
+function updateGoal(t) {
+  tx = 0.42 * Math.sin(t * 0.21) + 0.18 * Math.sin(t * 0.53 + 1.0);
+  ty = 0.08 + 0.22 * Math.sin(t * 0.17 + 2.0) + 0.10 * Math.sin(t * 0.41 + 0.4);
+  tz = 0.42 * Math.sin(t * 0.13 + 4.0) + 0.16 * Math.sin(t * 0.37 + 2.5);
+}
+
+function updateFalcon(t) {
+  const P = 12.5, DUR = 4.2;
+  const cycle = Math.floor(t / P), u = t - cycle * P;
+  if (cycle !== lastCycle) {
+    lastCycle = cycle;
+    const a = Math.random() * Math.PI * 2, b = (Math.random() - 0.5) * 1.2;
+    const dx = Math.cos(a) * Math.cos(b), dy = Math.sin(b), dz = Math.sin(a) * Math.cos(b);
+    fsx = tx + dx * 1.1; fsy = ty + dy * 1.1; fsz = tz + dz * 1.1;
+    fex = tx - dx * 1.1; fey = ty - dy * 1.1; fez = tz - dz * 1.1;
+  }
+  falconOn = u > 2.0 && u < 2.0 + DUR;
+  if (falconOn) {
+    let k = (u - 2.0) / DUR; k = k * k * (3 - 2 * k);
+    fx = fsx + (fex - fsx) * k; fy = fsy + (fey - fsy) * k; fz = fsz + (fez - fsz) * k;
+  }
+}
+
+let frame = 0;
+function step(dt, t) {
+  updateGoal(t);
+  updateFalcon(t);
+  const n = activeN;
+  frame++;
+
+  // build grid
+  cellStart.fill(0);
+  for (let i = 0; i < n; i++) {
+    let a = ((px[i] - GMIN) / CELL) | 0, b = ((py[i] - GMIN) / CELL) | 0, c = ((pz[i] - GMIN) / CELL) | 0;
+    if (a < 0) a = 0; else if (a >= GN) a = GN - 1;
+    if (b < 0) b = 0; else if (b >= GN) b = GN - 1;
+    if (c < 0) c = 0; else if (c >= GN) c = GN - 1;
+    const idx = a + b * GN + c * GN2;
+    cellIdx[i] = idx;
+    cellStart[idx + 1]++;
+  }
+  for (let c = 0; c < NC; c++) cellStart[c + 1] += cellStart[c];
+  cellPtr.set(cellStart);
+  for (let i = 0; i < n; i++) sorted[cellPtr[cellIdx[i]]++] = i;
+
+  const FR = 0.38, FR2 = FR * FR;
+
+  for (let i = 0; i < n; i++) {
+    const x = px[i], y = py[i], z = pz[i];
+    const ux = vx[i], uy = vy[i], uz = vz[i];
+
+    const gx = (x - GMIN) / CELL, gy = (y - GMIN) / CELL, gz = (z - GMIN) / CELL;
+    let ca = gx | 0, cb = gy | 0, cc = gz | 0;
+    if (ca < 0) ca = 0; else if (ca >= GN) ca = GN - 1;
+    if (cb < 0) cb = 0; else if (cb >= GN) cb = GN - 1;
+    if (cc < 0) cc = 0; else if (cc >= GN) cc = GN - 1;
+    const oa = (gx - ca) < 0.5 ? -1 : 1, ob = (gy - cb) < 0.5 ? -1 : 1, oc = (gz - cc) < 0.5 ? -1 : 1;
+
+    let found = 0;
+    let sx = 0, sy = 0, sz = 0, ax = 0, ay = 0, az = 0, hx = 0, hy = 0, hz = 0;
+
+    outer:
+    for (let dc = 0; dc < 2; dc++) {
+      const zc = cc + (dc ? oc : 0); if (zc < 0 || zc >= GN) continue;
+      for (let db = 0; db < 2; db++) {
+        const yc = cb + (db ? ob : 0); if (yc < 0 || yc >= GN) continue;
+        for (let da = 0; da < 2; da++) {
+          const xc = ca + (da ? oa : 0); if (xc < 0 || xc >= GN) continue;
+          const cidx = xc + yc * GN + zc * GN2;
+          const s0 = cellStart[cidx], cnt = cellStart[cidx + 1] - s0;
+          if (!cnt) continue;
+          const off = (i * 7 + frame * 3) % cnt;
+          for (let k = 0; k < cnt; k++) {
+            let q = off + k; if (q >= cnt) q -= cnt;
+            const j = sorted[s0 + q];
+            if (j === i) continue;
+            const ddx = x - px[j], ddy = y - py[j], ddz = z - pz[j];
+            const d2 = ddx * ddx + ddy * ddy + ddz * ddz;
+            if (d2 > R2) continue;
+            const d = Math.sqrt(d2) + 1e-4;
+            const w = 1 - d / R;
+            const ww = w * w / d;
+            sx += ddx * ww; sy += ddy * ww; sz += ddz * ww;
+            ax += vx[j]; ay += vy[j]; az += vz[j];
+            hx += px[j]; hy += py[j]; hz += pz[j];
+            if (++found >= K) break outer;
+          }
+        }
+      }
+    }
+
+    let accx = 0, accy = 0, accz = 0;
+    if (found) {
+      const inv = 1 / found;
+      accx += SEP * sx + ALI * (ax * inv - ux) + COH * (hx * inv - x);
+      accy += SEP * sy + ALI * (ay * inv - uy) + COH * (hy * inv - y);
+      accz += SEP * sz + ALI * (az * inv - uz) + COH * (hz * inv - z);
+    }
+
+    // goal attraction, stronger when far
+    const gxd = tx - x, gyd = ty - y, gzd = tz - z;
+    const gd = Math.sqrt(gxd * gxd + gyd * gyd + gzd * gzd) + 1e-4;
+    const gw = 0.8 + 4.0 * Math.max(0, gd - 0.38);
+    accx += gxd * gw; accy += gyd * gw; accz += gzd * gw;
+
+    // falcon avoidance
+    if (falconOn) {
+      const dx = x - fx, dy = y - fy, dz = z - fz;
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 < FR2) {
+        const d = Math.sqrt(d2) + 1e-4;
+        const s = 9.0 * (1 - d / FR) / d;
+        accx += dx * s; accy += dy * s; accz += dz * s;
+      }
+    }
+
+    // ground + ceiling
+    if (y < -0.55) accy += (-0.55 - y) * 12;
+    if (y > 0.8) accy -= (y - 0.8) * 8;
+
+    // jitter
+    accx += (Math.random() - 0.5) * 0.8;
+    accy += (Math.random() - 0.5) * 0.8;
+    accz += (Math.random() - 0.5) * 0.8;
+
+    let nvx = ux + accx * dt, nvy = uy + accy * dt, nvz = uz + accz * dt;
+    const sp = Math.sqrt(nvx * nvx + nvy * nvy + nvz * nvz) + 1e-6;
+    let f = 1;
+    if (sp > MAXS) f = MAXS / sp; else if (sp < MINS) f = MINS / sp;
+    nvx *= f; nvy *= f; nvz *= f;
+    vx[i] = nvx; vy[i] = nvy; vz[i] = nvz;
+    px[i] = x + nvx * dt; py[i] = y + nvy * dt; pz[i] = z + nvz * dt;
+  }
+}
+
+// ---------- render ----------
+const F = 2.4;
+const bucketX = [new Float32Array(N), new Float32Array(N), new Float32Array(N)];
+const bucketY = [new Float32Array(N), new Float32Array(N), new Float32Array(N)];
+const bucketDX = [new Float32Array(N), new Float32Array(N), new Float32Array(N)];
+const bucketDY = [new Float32Array(N), new Float32Array(N), new Float32Array(N)];
+const bucketL = [new Float32Array(N), new Float32Array(N), new Float32Array(N)];
+const bucketCount = [0, 0, 0];
+const bucketColor = ['rgba(60,22,70,0.62)', 'rgba(36,12,48,0.84)', 'rgba(18,6,26,0.97)'];
+
+function render(t) {
+  ctx.drawImage(sky, 0, 0);
+
+  bucketCount[0] = bucketCount[1] = bucketCount[2] = 0;
+  const n = activeN;
+  const baseLen = unit * 0.0115;
+
+  for (let i = 0; i < n; i++) {
+    const s = F / (F + pz[i]);
+    if (s <= 0) continue;
+    const X = cx + px[i] * s * unit;
+    const Y = cy - py[i] * s * unit;
+    if (X < -20 || X > W + 20 || Y < -20 || Y > H + 20) continue;
+    let dx = vx[i] * s, dy = -vy[i] * s;
+    const dl = Math.sqrt(dx * dx + dy * dy) + 1e-6;
+    dx /= dl; dy /= dl;
+    const flap = 0.72 + 0.34 * Math.sin(flapPhase[i] + t * flapFreq[i]);
+    const b = s < 0.95 ? 0 : s < 1.12 ? 1 : 2;
+    const k = bucketCount[b]++;
+    bucketX[b][k] = X; bucketY[b][k] = Y;
+    bucketDX[b][k] = dx; bucketDY[b][k] = dy;
+    bucketL[b][k] = baseLen * s * flap;
+  }
+
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  for (let b = 0; b < 3; b++) {
+    const cnt = bucketCount[b];
+    if (!cnt) continue;
+    const scale = b === 0 ? 0.85 : b === 1 ? 1.0 : 1.2;
+    ctx.lineWidth = Math.max(1, unit * 0.0024 * scale);
+    ctx.strokeStyle = bucketColor[b];
+    ctx.beginPath();
+    const BX = bucketX[b], BY = bucketY[b], DX = bucketDX[b], DY = bucketDY[b], L = bucketL[b];
+    for (let k = 0; k < cnt; k++) {
+      const x = BX[k], y = BY[k], dx = DX[k], dy = DY[k], l = L[k];
+      const perpx = -dy * l * 0.55, perpy = dx * l * 0.55;
+      const backx = -dx * l * 0.28, backy = -dy * l * 0.28;
+      const tipx = x + dx * l * 0.22, tipy = y + dy * l * 0.22;
+      ctx.moveTo(x + perpx + backx, y + perpy + backy);
+      ctx.lineTo(tipx, tipy);
+      ctx.lineTo(x - perpx + backx, y - perpy + backy);
+    }
+    ctx.stroke();
+  }
+}
+
+// ---------- loop ----------
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = Math.max(1, Math.floor(window.innerWidth * DPR));
+  H = Math.max(1, Math.floor(window.innerHeight * DPR));
+  canvas.width = W; canvas.height = H;
+  unit = Math.min(W, H) * 0.5;
+  cx = W * 0.5; cy = H * 0.46;
+  paintSky();
+}
+
+let last = performance.now(), start = last, slowFrames = 0;
+function loop(now) {
+  let dt = (now - last) / 1000;
+  last = now;
+  if (dt > 0.05) dt = 0.05;
+  const t = (now - start) / 1000;
+
+  // adapt flock size on slow devices
+  if (dt > 0.034) { if (++slowFrames > 40 && activeN > 1800) { activeN = Math.floor(activeN * 0.85); slowFrames = 0; } }
+  else if (slowFrames > 0) slowFrames--;
+
+  step(dt, t);
+  render(t);
+  requestAnimationFrame(loop);
+}
+
+window.addEventListener('resize', resize);
+resize();
+requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

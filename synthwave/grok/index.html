@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Synthwave Drive</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #240850;
+    overflow: hidden;
+    overscroll-behavior: none;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  canvas {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+</style>
+</head>
+<body>
+<canvas id="c" aria-hidden="true"></canvas>
+<script>
+(function () {
+  var canvas = document.getElementById("c");
+  var ctx = canvas.getContext("2d", { alpha: false });
+
+  var EXP = 1.7;
+  var SPEED = 0.46;
+  var HORIZON_FRAC = 0.455;
+  var ROAD = 0.224;
+
+  var BACK = [
+    [0.00, 0.07], [0.05, 0.12], [0.09, 0.08], [0.14, 0.16],
+    [0.18, 0.10], [0.23, 0.195], [0.28, 0.11], [0.33, 0.15],
+    [0.38, 0.075], [0.43, 0.205], [0.48, 0.12], [0.52, 0.085],
+    [0.57, 0.17], [0.62, 0.215], [0.67, 0.10], [0.72, 0.16],
+    [0.77, 0.08], [0.83, 0.145], [0.88, 0.07], [0.93, 0.13],
+    [1.00, 0.09]
+  ];
+  var FRONT = [
+    [0.00, 0.045], [0.04, 0.09], [0.08, 0.038], [0.12, 0.112],
+    [0.16, 0.048], [0.21, 0.128], [0.25, 0.046], [0.30, 0.10],
+    [0.34, 0.032], [0.39, 0.118], [0.44, 0.05], [0.49, 0.086],
+    [0.53, 0.036], [0.58, 0.108], [0.63, 0.044], [0.68, 0.122],
+    [0.73, 0.05], [0.78, 0.132], [0.83, 0.052], [0.88, 0.098],
+    [0.93, 0.04], [1.00, 0.078]
+  ];
+
+  function mulberry32(seed) {
+    var a = seed >>> 0;
+    return function () {
+      a |= 0;
+      a = (a + 0x6d2b79f5) | 0;
+      var t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  var stars = (function () {
+    var rand = mulberry32(0x51a7c0de);
+    var list = [];
+    var i;
+    for (i = 0; i < 80; i++) {
+      list.push({
+        x: rand(),
+        y: rand(),
+        r: 0.7 + rand() * 1.5,
+        phase: rand() * Math.PI * 2,
+        speed: 0.5 + rand() * 1.6,
+        tint: rand()
+      });
+    }
+    for (i = 0; i < 10; i++) {
+      list.push({
+        x: rand(),
+        y: rand() * 0.72,
+        r: 2.1 + rand() * 1.5,
+        phase: rand() * Math.PI * 2,
+        speed: 0.4 + rand() * 0.8,
+        tint: rand()
+      });
+    }
+    return list;
+  })();
+
+  var w = 1;
+  var h = 1;
+  var dpr = 1;
+  var horizon = 1;
+  var scroll = 0;
+  var last = 0;
+
+  function resize() {
+    var rect = canvas.getBoundingClientRect();
+    w = rect.width || window.innerWidth || 1;
+    h = rect.height || window.innerHeight || 1;
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.max(1, Math.round(w * dpr));
+    canvas.height = Math.max(1, Math.round(h * dpr));
+    horizon = h * HORIZON_FRAC;
+  }
+
+  function sOf(depth) {
+    var d = depth < 0 ? 0 : depth > 1 ? 1 : depth;
+    return Math.pow(d, EXP);
+  }
+
+  function yAt(depth) {
+    return horizon + sOf(depth) * (h - horizon);
+  }
+
+  function xAt(depth, bottomX) {
+    return w * 0.5 + (bottomX - w * 0.5) * sOf(depth);
+  }
+
+  function unit() {
+    return Math.min(w, h) / 1080;
+  }
+
+  function skyGradient() {
+    var g = ctx.createLinearGradient(0, 0, 0, horizon);
+    g.addColorStop(0, "#2c0870");
+    g.addColorStop(0.34, "#6d12b0");
+    g.addColorStop(0.58, "#c41480");
+    g.addColorStop(0.78, "#ff3b6e");
+    g.addColorStop(0.9, "#ff6418");
+    g.addColorStop(1, "#ffc247");
+    return g;
+  }
+
+  function sunGeom() {
+    var sunR = Math.min(w, h) * 0.232;
+    return {
+      sunR: sunR,
+      sx: w * 0.5,
+      sy: horizon - sunR * 0.16
+    };
+  }
+
+  function drawSunGlow(time) {
+    var sun = sunGeom();
+    var sunR = sun.sunR;
+    var sx = sun.sx;
+    var sy = sun.sy;
+    var pulse = 0.9 + 0.1 * Math.sin(time * 0.75);
+
+    ctx.globalAlpha = pulse;
+    var glow = ctx.createRadialGradient(sx, sy, sunR * 0.15, sx, sy, sunR * 2.75);
+    glow.addColorStop(0, "rgba(255, 236, 150, 0.98)");
+    glow.addColorStop(0.16, "rgba(255, 150, 30, 0.72)");
+    glow.addColorStop(0.36, "rgba(255, 40, 100, 0.38)");
+    glow.addColorStop(0.62, "rgba(190, 20, 255, 0.16)");
+    glow.addColorStop(1, "rgba(80, 0, 140, 0)");
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, w, Math.max(horizon, sy + sunR * 2.8));
+    ctx.globalAlpha = 1;
+  }
+
+  function drawSunBody() {
+    var sun = sunGeom();
+    var sunR = sun.sunR;
+    var sx = sun.sx;
+    var sy = sun.sy;
+    var body = ctx.createLinearGradient(sx, sy - sunR, sx, sy + sunR);
+    body.addColorStop(0, "#fff8c4");
+    body.addColorStop(0.32, "#ffd428");
+    body.addColorStop(0.58, "#ff7a12");
+    body.addColorStop(0.8, "#ff3a62");
+    body.addColorStop(1, "#e418a4");
+    ctx.beginPath();
+    ctx.arc(sx, sy, sunR, 0, Math.PI * 2);
+    ctx.fillStyle = body;
+    ctx.fill();
+    ctx.lineWidth = Math.max(2, sunR * 0.014);
+    ctx.strokeStyle = "rgba(255, 252, 220, 0.95)";
+    ctx.stroke();
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(sx, sy, sunR - 0.5, 0, Math.PI * 2);
+    ctx.clip();
+    var y = sy - sunR * 0.1;
+    var gap = Math.max(4, sunR * 0.048);
+    var thick = Math.max(2, sunR * 0.013);
+    var end = sy + sunR + 2;
+    ctx.fillStyle = "#1a0636";
+    while (y < end && thick < sunR * 0.55) {
+      ctx.fillRect(sx - sunR - 4, y, sunR * 2 + 8, thick);
+      y += thick + gap;
+      gap *= 1.155;
+      thick *= 1.175;
+    }
+    ctx.restore();
+  }
+
+  function drawStars(time) {
+    var u = Math.max(0.72, unit());
+    var skyLimit = horizon - Math.min(w, h) * 0.2;
+    if (skyLimit < 8) return;
+    var i;
+    for (i = 0; i < stars.length; i++) {
+      var s = stars[i];
+      var x = s.x * w;
+      var y = s.y * skyLimit;
+      var tw = 0.55 + 0.45 * Math.sin(time * s.speed + s.phase);
+      var alpha = 0.35 + 0.65 * (0.5 + 0.5 * tw);
+      var rad = Math.max(1, s.r * u);
+      ctx.globalAlpha = alpha;
+      if (s.tint < 0.62) ctx.fillStyle = "#ffffff";
+      else if (s.tint < 0.84) ctx.fillStyle = "#ffc2f4";
+      else ctx.fillStyle = "#b9fff8";
+      ctx.beginPath();
+      ctx.arc(x, y, rad, 0, Math.PI * 2);
+      ctx.fill();
+      if (s.r > 2) {
+        ctx.globalAlpha = 0.18 * alpha;
+        ctx.beginPath();
+        ctx.arc(x, y, rad * 3.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawRange(pts, topColor, bottomColor, rim) {
+    var span = Math.min(w, h);
+    var topY = horizon;
+    var i;
+    for (i = 0; i < pts.length; i++) {
+      var yy = horizon - pts[i][1] * span;
+      if (yy < topY) topY = yy;
+    }
+    ctx.beginPath();
+    ctx.moveTo(-2, horizon + 1);
+    for (i = 0; i < pts.length; i++) {
+      ctx.lineTo(pts[i][0] * w, horizon - pts[i][1] * span);
+    }
+    ctx.lineTo(w + 2, horizon + 1);
+    ctx.closePath();
+    var fill = ctx.createLinearGradient(0, topY, 0, horizon);
+    fill.addColorStop(0, topColor);
+    fill.addColorStop(1, bottomColor);
+    ctx.fillStyle = fill;
+    ctx.fill();
+
+    ctx.beginPath();
+    for (i = 0; i < pts.length; i++) {
+      var x = pts[i][0] * w;
+      var y = horizon - pts[i][1] * span;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.strokeStyle = rim;
+    ctx.globalAlpha = 0.4;
+    ctx.lineWidth = Math.max(4, 8 * unit());
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = Math.max(1.75, 2.6 * unit());
+    ctx.stroke();
+  }
+
+  function drawGround() {
+    var g = ctx.createLinearGradient(0, horizon, 0, h);
+    g.addColorStop(0, "#6a1a92");
+    g.addColorStop(0.16, "#3a0c78");
+    g.addColorStop(0.42, "#1a0638");
+    g.addColorStop(1, "#090014");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, horizon, w, h - horizon + 2);
+  }
+
+  function drawGrid() {
+    var gap = Math.max(34, Math.min(w, h) / 15);
+    var u = unit();
+    var depth;
+    var s;
+    var y;
+    var bottomX;
+    var x0;
+    var x1;
+    var alpha;
+    var r;
+    var gc;
+    var b;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, horizon + 1, w, h - horizon + 8);
+    ctx.moveTo(xAt(0.012, w * 0.5 - w * ROAD), yAt(0.012));
+    ctx.lineTo(w * 0.5 - w * ROAD, h + 4);
+    ctx.lineTo(w * 0.5 + w * ROAD, h + 4);
+    ctx.lineTo(xAt(0.012, w * 0.5 + w * ROAD), yAt(0.012));
+    ctx.closePath();
+    ctx.clip("evenodd");
+
+    ctx.lineCap = "butt";
+    for (bottomX = w * 0.5; bottomX <= w + gap; bottomX += gap) {
+      strokeVertical(bottomX);
+    }
+    for (bottomX = w * 0.5 - gap; bottomX >= -gap; bottomX -= gap) {
+      strokeVertical(bottomX);
+    }
+
+    var rows = 18;
+    var i;
+    for (i = 0; i < rows; i++) {
+      depth = ((i / rows) + scroll) % 1;
+      if (depth < 0.02) continue;
+      s = sOf(depth);
+      y = horizon + s * (h - horizon);
+      alpha = Math.min(1, depth / 0.09) * (0.42 + 0.58 * Math.min(1, s * 1.35));
+      r = (255 + (30 - 255) * s) | 0;
+      gc = (45 + (255 - 45) * s) | 0;
+      b = (230 + (255 - 230) * s) | 0;
+      ctx.strokeStyle = "rgb(" + r + "," + gc + "," + b + ")";
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(w, y);
+      ctx.globalAlpha = alpha * 0.32;
+      ctx.lineWidth = Math.max(2.5, (2 + 9 * s) * Math.max(u, 0.75));
+      ctx.stroke();
+      ctx.globalAlpha = alpha;
+      ctx.lineWidth = Math.max(1.35, (1.15 + 2.8 * s) * Math.max(u, 0.75));
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+
+    function strokeVertical(bx) {
+      var near = Math.abs(bx - w * 0.5) / (w * 0.5);
+      var a = 0.18 + 0.62 * Math.min(1, near * 1.15);
+      var y0 = yAt(0.07);
+      var xStart = xAt(0.07, bx);
+      ctx.strokeStyle = "#ff4ad8";
+      ctx.beginPath();
+      ctx.moveTo(xStart, y0);
+      ctx.lineTo(bx, h + 2);
+      ctx.globalAlpha = a * 0.28;
+      ctx.lineWidth = Math.max(2.2, 4.5 * Math.max(u, 0.7));
+      ctx.stroke();
+      ctx.globalAlpha = a;
+      ctx.lineWidth = Math.max(1.15, 1.7 * Math.max(u, 0.7));
+      ctx.stroke();
+    }
+  }
+
+  function drawHorizon() {
+    var reach = Math.min(w, h) * 0.055;
+    var g = ctx.createLinearGradient(0, horizon - reach, 0, horizon + reach * 1.5);
+    g.addColorStop(0, "rgba(255, 70, 150, 0)");
+    g.addColorStop(0.38, "rgba(255, 50, 140, 0.22)");
+    g.addColorStop(0.5, "rgba(255, 214, 140, 0.9)");
+    g.addColorStop(0.64, "rgba(255, 40, 150, 0.26)");
+    g.addColorStop(1, "rgba(255, 30, 120, 0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, horizon - reach, w, reach * 2.6);
+
+    var line = ctx.createLinearGradient(0, 0, w, 0);
+    line.addColorStop(0, "#2af4ff");
+    line.addColorStop(0.5, "#fff1b4");
+    line.addColorStop(1, "#ff45d8");
+    ctx.strokeStyle = line;
+    ctx.lineWidth = Math.max(1.6, 2.4 * unit());
+    ctx.beginPath();
+    ctx.moveTo(0, horizon);
+    ctx.lineTo(w, horizon);
+    ctx.stroke();
+  }
+
+  function edgeQuad(side, innerFrac, outerFrac) {
+    var d0 = 0.02;
+    var b0 = w * 0.5 + side * w * innerFrac;
+    var b1 = w * 0.5 + side * w * outerFrac;
+    ctx.beginPath();
+    ctx.moveTo(xAt(d0, b0), yAt(d0));
+    ctx.lineTo(b0, h + 3);
+    ctx.lineTo(b1, h + 3);
+    ctx.lineTo(xAt(d0, b1), yAt(d0));
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawRoad() {
+    var d0 = 0.018;
+    var left = w * 0.5 - w * ROAD;
+    var right = w * 0.5 + w * ROAD;
+    var u = unit();
+
+    var asphalt = ctx.createLinearGradient(0, horizon, 0, h);
+    asphalt.addColorStop(0, "#2a0848");
+    asphalt.addColorStop(0.35, "#140422");
+    asphalt.addColorStop(1, "#070010");
+    ctx.beginPath();
+    ctx.moveTo(xAt(d0, left), yAt(d0));
+    ctx.lineTo(left, h + 3);
+    ctx.lineTo(right, h + 3);
+    ctx.lineTo(xAt(d0, right), yAt(d0));
+    ctx.closePath();
+    ctx.fillStyle = asphalt;
+    ctx.fill();
+
+    ctx.save();
+    ctx.clip();
+    var ref = ctx.createLinearGradient(w * 0.5, horizon, w * 0.5, h);
+    ref.addColorStop(0, "rgba(255, 186, 70, 0.62)");
+    ref.addColorStop(0.22, "rgba(255, 50, 130, 0.2)");
+    ref.addColorStop(0.55, "rgba(255, 30, 110, 0)");
+    ctx.fillStyle = ref;
+    ctx.beginPath();
+    ctx.moveTo(xAt(d0, w * 0.5 - w * 0.02), yAt(d0));
+    ctx.lineTo(w * 0.5 - w * 0.07, h + 3);
+    ctx.lineTo(w * 0.5 + w * 0.07, h + 3);
+    ctx.lineTo(xAt(d0, w * 0.5 + w * 0.02), yAt(d0));
+    ctx.closePath();
+    ctx.fill();
+
+    var pool = ctx.createRadialGradient(w * 0.5, h * 1.01, w * 0.02, w * 0.5, h * 1.01, w * 0.48);
+    pool.addColorStop(0, "rgba(170, 255, 255, 0.2)");
+    pool.addColorStop(0.42, "rgba(255, 40, 170, 0.08)");
+    pool.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.fillStyle = pool;
+    ctx.fillRect(left, horizon, right - left, h - horizon + 4);
+    ctx.restore();
+
+    ctx.globalAlpha = 0.38;
+    ctx.fillStyle = "#00fff0";
+    edgeQuad(-1, ROAD - 0.002, ROAD + 0.02);
+    ctx.fillStyle = "#ff2ad4";
+    edgeQuad(1, ROAD - 0.002, ROAD + 0.02);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "#7dfff8";
+    edgeQuad(-1, ROAD - 0.001, ROAD + 0.0065);
+    ctx.fillStyle = "#ff5ae0";
+    edgeQuad(1, ROAD - 0.001, ROAD + 0.0065);
+
+    var period = 0.105;
+    var dashLen = 0.042;
+    var d = scroll % period;
+    var d1;
+    var hw0;
+    var hw1;
+    var y0;
+    var y1;
+    for (; d < 1.02; d += period) {
+      d1 = d + dashLen;
+      if (d1 < 0.035) continue;
+      var a0 = d < 0.03 ? 0.03 : d;
+      var a1 = d1 > 1 ? 1 : d1;
+      if (a1 <= a0) continue;
+      y0 = yAt(a0);
+      y1 = yAt(a1);
+      hw0 = Math.min(w * ROAD * sOf(a0) * 0.16, Math.max(1.2, w * 0.0105 * sOf(a0)));
+      hw1 = Math.min(w * ROAD * sOf(a1) * 0.16, Math.max(1.2, w * 0.0105 * sOf(a1)));
+      if (hw1 < 0.7) continue;
+      ctx.beginPath();
+      ctx.moveTo(w * 0.5 - hw0 * 2.1, y0);
+      ctx.lineTo(w * 0.5 - hw1 * 2.1, y1);
+      ctx.lineTo(w * 0.5 + hw1 * 2.1, y1);
+      ctx.lineTo(w * 0.5 + hw0 * 2.1, y0);
+      ctx.closePath();
+      ctx.globalAlpha = 0.4;
+      ctx.fillStyle = "#ff3ad0";
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(w * 0.5 - hw0, y0);
+      ctx.lineTo(w * 0.5 - hw1, y1);
+      ctx.lineTo(w * 0.5 + hw1, y1);
+      ctx.lineTo(w * 0.5 + hw0, y0);
+      ctx.closePath();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = "#ffe56a";
+      ctx.fill();
+    }
+
+    drawPosts(u);
+  }
+
+  function drawPosts(u) {
+    var postFrac = 0.318;
+    var postHFrac = 0.155;
+    var period = 0.095;
+    var d = scroll % period;
+    var side;
+    var s;
+    var x;
+    var baseY;
+    var height;
+    var top;
+    var bar;
+    var cap;
+    var color;
+    var fade;
+
+    ctx.lineCap = "round";
+    for (side = -1; side <= 1; side += 2) {
+      var p0 = railPoint(0.06, side);
+      var p1 = railPoint(1, side);
+      color = side < 0 ? "#3dfff6" : "#ff43d6";
+      ctx.strokeStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(p0[0], p0[1]);
+      ctx.lineTo(p1[0], p1[1]);
+      ctx.globalAlpha = 0.28;
+      ctx.lineWidth = Math.max(3, 6 * Math.max(u, 0.7));
+      ctx.stroke();
+      ctx.globalAlpha = 0.9;
+      ctx.lineWidth = Math.max(1.2, 2 * Math.max(u, 0.7));
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    for (; d < 1; d += period) {
+      if (d < 0.055) continue;
+      s = sOf(d);
+      fade = Math.min(1, (d - 0.055) / 0.12);
+      height = h * postHFrac * s;
+      if (height < 4) continue;
+      baseY = horizon + (h - horizon) * s;
+      bar = Math.max(2, w * 0.014 * s);
+      cap = Math.max(1.8, height * 0.1);
+      for (side = -1; side <= 1; side += 2) {
+        x = w * 0.5 + side * w * postFrac * s;
+        top = baseY - height;
+        color = side < 0 ? "#4dfff8" : "#ff4ad8";
+        ctx.globalAlpha = 0.95 * fade;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = Math.max(1.25, height * 0.045);
+        ctx.beginPath();
+        ctx.moveTo(x, baseY);
+        ctx.lineTo(x, top);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x - bar, top);
+        ctx.lineTo(x + bar, top);
+        ctx.lineWidth = Math.max(1.1, height * 0.03);
+        ctx.stroke();
+        ctx.fillStyle = color;
+        ctx.globalAlpha = 0.3 * fade;
+        ctx.beginPath();
+        ctx.arc(x, top, cap * 2.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = fade;
+        ctx.beginPath();
+        ctx.arc(x, top, cap, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+
+    function railPoint(depth, side) {
+      var sv = sOf(depth);
+      return [
+        w * 0.5 + side * w * postFrac * sv,
+        horizon + (h - horizon) * sv - h * postHFrac * sv
+      ];
+    }
+  }
+
+  function drawVignette() {
+    var g = ctx.createRadialGradient(
+      w * 0.5,
+      h * 0.48,
+      Math.min(w, h) * 0.38,
+      w * 0.5,
+      h * 0.5,
+      Math.max(w, h) * 0.72
+    );
+    g.addColorStop(0, "rgba(0, 0, 0, 0)");
+    g.addColorStop(1, "rgba(0, 0, 0, 0.38)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+  }
+
+  function draw(time) {
+    if (w < 2 || h < 2) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+    ctx.lineJoin = "round";
+    ctx.lineCap = "butt";
+
+    ctx.fillStyle = skyGradient();
+    ctx.fillRect(0, 0, w, h);
+    drawSunGlow(time);
+    drawStars(time);
+    drawSunBody();
+    drawRange(BACK, "#5c1c9e", "#24064e", "#ff4af2");
+    drawRange(FRONT, "#3a146c", "#0c0118", "#3dfff4");
+    drawGround();
+    drawGrid();
+    drawHorizon();
+    drawRoad();
+    drawVignette();
+  }
+
+  function frame(now) {
+    if (!last) last = now;
+    var dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    scroll = (scroll + dt * SPEED) % 1;
+    draw(now / 1000);
+    requestAnimationFrame(frame);
+  }
+
+  window.addEventListener("resize", resize);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", resize);
+  }
+  resize();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

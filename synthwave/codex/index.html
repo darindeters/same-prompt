@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#100422">
+  <title>Neon Horizon</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #100422; }
+    canvas { display: block; width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+<canvas aria-label="An animated neon highway through glowing mountains toward a striped sunset"></canvas>
+<script>
+(() => {
+  'use strict';
+  const canvas = document.querySelector('canvas');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const backdrop = document.createElement('canvas');
+  const sky = backdrop.getContext('2d');
+  let w, h, u, horizon, ground, dpr;
+  let seed = 9264;
+  const random = () => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+
+  function line(c, points, color, width, glow = 0) {
+    c.beginPath();
+    points.forEach(([x, y], i) => i ? c.lineTo(x, y) : c.moveTo(x, y));
+    c.strokeStyle = color;
+    c.lineWidth = width;
+    c.shadowColor = color;
+    c.shadowBlur = glow;
+    c.stroke();
+    c.shadowBlur = 0;
+  }
+
+  function mountains(side, layer) {
+    const points = [];
+    const count = 24;
+    const span = w * (layer ? 0.49 : 0.64);
+    const start = side < 0 ? 0 : w;
+    for (let i = 0; i <= count; i++) {
+      const t = i / count;
+      const envelope = Math.pow(1 - t, 0.8);
+      const rise = (0.055 + random() * 0.19) * u * envelope;
+      const x = start - side * t * span;
+      points.push([x, horizon - rise + (layer ? u * 0.035 : 0)]);
+    }
+    sky.beginPath();
+    sky.moveTo(start, horizon + 2);
+    points.forEach(p => sky.lineTo(...p));
+    sky.lineTo(points[count][0], horizon + 2);
+    sky.closePath();
+    sky.fillStyle = layer ? '#13082d' : '#351046';
+    sky.fill();
+    line(sky, points, layer ? '#d327b9' : '#973bba', u * (layer ? 0.0014 : 0.001), layer ? u * 0.007 : 0);
+    if (layer) {
+      for (let i = 0; i < count; i++) {
+        const p = points[i];
+        const baseX = p[0] + side * (random() - 0.2) * u * 0.14;
+        line(sky, [p, [baseX, horizon], points[i + 1]], 'rgba(157,30,174,0.45)', u * 0.0008);
+        if (i % 2 === 0) {
+          const q = points[i + 1];
+          line(sky, [[(p[0] + baseX) / 2, (p[1] + horizon) / 2], [(q[0] + baseX) / 2, (q[1] + horizon) / 2]], '#572263', u * 0.0007);
+        }
+      }
+    }
+  }
+
+  function buildBackdrop() {
+    seed = 9264;
+    const bg = sky.createLinearGradient(0, 0, 0, h);
+    bg.addColorStop(0, '#07051b');
+    bg.addColorStop(0.24, '#210836');
+    bg.addColorStop(0.44, '#66124f');
+    bg.addColorStop(0.55, '#200931');
+    bg.addColorStop(1, '#070917');
+    sky.fillStyle = bg;
+    sky.fillRect(0, 0, w, h);
+
+    const sunX = w * 0.5, sunY = horizon - u * 0.15, radius = u * 0.161;
+    const aura = sky.createRadialGradient(sunX, sunY, radius * 0.3, sunX, sunY, radius * 2.7);
+    aura.addColorStop(0, 'rgba(255,94,51,0.48)');
+    aura.addColorStop(0.4, 'rgba(255,38,109,0.2)');
+    aura.addColorStop(1, 'rgba(255,0,123,0)');
+    sky.fillStyle = aura;
+    sky.fillRect(0, 0, w, horizon);
+
+    for (let i = 0; i < 155; i++) {
+      const x = random() * w, y = random() * horizon * 0.91;
+      const r = (0.35 + random() * 1.1) * u / 1080;
+      sky.globalAlpha = (0.2 + random() * 0.65) * (1 - y / horizon * 0.7);
+      sky.fillStyle = i % 3 ? '#a0b9ff' : '#ffd0f3';
+      sky.beginPath(); sky.arc(x, y, r, 0, Math.PI * 2); sky.fill();
+      if (i % 28 === 0) {
+        line(sky, [[x - r * 4, y], [x + r * 4, y]], '#d2cdff', r * 0.5);
+        line(sky, [[x, y - r * 4], [x, y + r * 4]], '#d2cdff', r * 0.5);
+      }
+    }
+    sky.globalAlpha = 1;
+
+    sky.save();
+    sky.beginPath(); sky.arc(sunX, sunY, radius, 0, Math.PI * 2); sky.clip();
+    const sun = sky.createLinearGradient(0, sunY - radius, 0, sunY + radius);
+    sun.addColorStop(0, '#fff676');
+    sun.addColorStop(0.28, '#ffbc3c');
+    sun.addColorStop(0.57, '#ff663e');
+    sun.addColorStop(0.8, '#ff286d');
+    sun.addColorStop(1, '#fd168f');
+    sky.fillStyle = sun;
+    sky.fillRect(sunX - radius, sunY - radius, radius * 2, radius * 1.06);
+    let bandY = sunY + radius * 0.06;
+    for (let i = 0; i < 9; i++) {
+      const thickness = radius * (0.085 - i * 0.006);
+      sky.fillRect(sunX - radius, bandY, radius * 2, thickness);
+      bandY += thickness + radius * (0.018 + i * 0.009);
+    }
+    sky.restore();
+
+    mountains(-1, 0); mountains(1, 0);
+    mountains(-1, 1); mountains(1, 1);
+    const haze = sky.createLinearGradient(0, horizon - u * 0.025, 0, horizon + u * 0.026);
+    haze.addColorStop(0, 'rgba(255,23,181,0)');
+    haze.addColorStop(0.5, 'rgba(255,23,181,0.3)');
+    haze.addColorStop(1, 'rgba(255,23,181,0)');
+    sky.fillStyle = haze; sky.fillRect(0, horizon - u * 0.025, w, u * 0.051);
+  }
+
+  function resize() {
+    w = innerWidth; h = innerHeight; u = Math.min(w, h);
+    horizon = h * 0.455; ground = h - horizon;
+    dpr = Math.min(devicePixelRatio || 1, 2);
+    canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+    backdrop.width = canvas.width; backdrop.height = canvas.height;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    sky.setTransform(dpr, 0, 0, dpr, 0, 0);
+    buildBackdrop();
+  }
+
+  function render(ms) {
+    const t = ms * 0.001;
+    ctx.drawImage(backdrop, 0, 0, w, h);
+    const cx = w * 0.5;
+    const edge = w * 0.355;
+    const project = (x, z) => [cx + x * edge / z, horizon + ground / z];
+
+    // The ground is projected from equally spaced lines in world space.
+    ctx.save();
+    ctx.beginPath(); ctx.rect(0, horizon, w, ground); ctx.clip();
+    for (let i = -12; i <= 12; i++) {
+      if (i === 0) continue;
+      line(ctx, [[cx, horizon], [cx + i * edge * 0.32, h]], '#a51cb7', u * 0.0011, u * 0.003);
+    }
+    for (let i = 0; i < 55; i++) {
+      const z = 1 + ((i - t * 3.8) % 55 + 55) % 55;
+      const y = horizon + ground / z;
+      ctx.globalAlpha = 0.25 + 0.7 / Math.sqrt(z);
+      line(ctx, [[0, y], [w, y]], '#ff29cc', u * 0.0014, u * 0.006);
+    }
+    ctx.globalAlpha = 1;
+
+    const road = ctx.createLinearGradient(0, horizon, 0, h);
+    road.addColorStop(0, '#210c36'); road.addColorStop(1, '#090b20');
+    ctx.beginPath(); ctx.moveTo(cx, horizon);
+    ctx.lineTo(cx + edge, h); ctx.lineTo(cx - edge, h); ctx.closePath();
+    ctx.fillStyle = road; ctx.fill();
+
+    const reflection = ctx.createLinearGradient(0, horizon, 0, h);
+    reflection.addColorStop(0, 'rgba(255,36,147,0.28)');
+    reflection.addColorStop(0.55, 'rgba(168,21,132,0.055)');
+    reflection.addColorStop(1, 'rgba(168,21,132,0)');
+    ctx.fillStyle = reflection;
+    ctx.beginPath(); ctx.moveTo(cx, horizon); ctx.lineTo(cx + edge * 0.6, h); ctx.lineTo(cx - edge * 0.6, h); ctx.fill();
+
+    for (const side of [-1, 1]) {
+      line(ctx, [project(side * 1.045, 1), [cx, horizon]], '#ff1cce', u * 0.005, u * 0.018);
+      line(ctx, [project(side, 1), [cx, horizon]], '#24eaff', u * 0.0032, u * 0.014);
+      line(ctx, [project(side, 1), [cx, horizon]], '#c2ffff', u * 0.0009, u * 0.003);
+    }
+
+    for (let i = 0; i < 38; i++) {
+      const z = 1 + ((i * 2 - t * 3.8) % 76 + 76) % 76;
+      const end = z + 0.85;
+      ctx.globalAlpha = Math.min(1, 2.4 / Math.sqrt(z));
+      for (const side of [-1, 1]) {
+        const halfWidth = 0.009;
+        const x = side * 0.022;
+        ctx.beginPath();
+        [project(x - halfWidth, z), project(x + halfWidth, z), project(x + halfWidth, end), project(x - halfWidth, end)].forEach(([px, py], j) => j ? ctx.lineTo(px, py) : ctx.moveTo(px, py));
+        ctx.closePath();
+        ctx.fillStyle = '#ffc5ff'; ctx.shadowColor = '#ff40ef'; ctx.shadowBlur = u * 0.012; ctx.fill();
+      }
+    }
+    ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+
+    // Small roadside lights share the grid's speed and perspective.
+    for (let i = 0; i < 18; i++) {
+      const z = 1 + ((i * 3.1 - t * 3.8) % 55.8 + 55.8) % 55.8;
+      for (const side of [-1, 1]) {
+        const p = project(side * 1.13, z);
+        line(ctx, [p, [p[0], p[1] - u * 0.047 / z]], '#2bf6ff', Math.max(0.5, u * 0.0025 / z), u * 0.009 / Math.sqrt(z));
+      }
+    }
+    ctx.restore();
+
+    const vignette = ctx.createRadialGradient(cx, h * 0.46, u * 0.24, cx, h * 0.48, Math.max(w, h) * 0.77);
+    vignette.addColorStop(0, 'rgba(3,1,15,0)');
+    vignette.addColorStop(1, 'rgba(3,1,15,0.6)');
+    ctx.fillStyle = vignette; ctx.fillRect(0, 0, w, h);
+    requestAnimationFrame(render);
+  }
+
+  addEventListener('resize', resize, { passive: true });
+  resize();
+  requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>

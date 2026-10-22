@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Synthwave Drive</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0b001c; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function () {
+  'use strict';
+
+  var canvas = document.getElementById('c');
+  var ctx = canvas.getContext('2d');
+  var W = 1, H = 1, DPR = 1;
+
+  // Deterministic PRNG so a resize keeps the same scenery
+  var seed = 1337;
+  function rnd() { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }
+
+  var stars = [], mtnFar = [], mtnNear = [], scanPattern = null;
+
+  function mountain(amp, freq, jag, valley) {
+    var pts = [], N = 220;
+    var a1 = rnd() * 6.283, a2 = rnd() * 6.283, a3 = rnd() * 6.283;
+    for (var i = 0; i <= N; i++) {
+      var u = -0.7 + 2.4 * i / N;
+      var h = 0.5 + 0.5 * Math.sin(u * freq * 6.283 + a1);
+      h += 0.45 * Math.sin(u * freq * 2.3 * 6.283 + a2);
+      h += 0.3 * Math.abs(Math.sin(u * freq * jag * 6.283 + a3));
+      h += (rnd() - 0.5) * 0.12;
+      var d = (u - 0.5) / valley;
+      h *= 1 - 0.75 * Math.exp(-d * d);  // dip in the middle so the sun shows
+      pts.push({ u: u, h: Math.max(0.02, h) * amp });
+    }
+    return pts;
+  }
+
+  function buildStatic() {
+    seed = 1337;
+    stars = [];
+    var n = Math.floor(W * H / 3000);
+    for (var i = 0; i < n; i++) {
+      stars.push({ x: rnd(), y: rnd() * 0.62, r: rnd() * 1.4 + 0.4, p: rnd() * 6.283, s: 0.6 + rnd() * 2.5 });
+    }
+    mtnFar = mountain(0.21, 2.6, 2, 0.22);
+    mtnNear = mountain(0.14, 4.2, 3, 0.16);
+
+    // Subtle scanline pattern
+    var pc = document.createElement('canvas');
+    pc.width = 1; pc.height = 3;
+    var pctx = pc.getContext('2d');
+    pctx.fillStyle = 'rgba(0,0,0,0.18)';
+    pctx.fillRect(0, 2, 1, 1);
+    scanPattern = ctx.createPattern(pc, 'repeat');
+  }
+
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = Math.floor(W * DPR); canvas.height = Math.floor(H * DPR);
+    canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    buildStatic();
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  function glowStroke(color, w) {
+    ctx.strokeStyle = color;
+    ctx.lineCap = 'round';
+    ctx.globalAlpha = 0.28; ctx.lineWidth = w * 4; ctx.stroke();
+    ctx.globalAlpha = 1; ctx.lineWidth = w; ctx.stroke();
+  }
+
+  function drawSky(hy) {
+    var g = ctx.createLinearGradient(0, 0, 0, hy);
+    g.addColorStop(0.00, '#07001a');
+    g.addColorStop(0.35, '#23075c');
+    g.addColorStop(0.65, '#6d1792');
+    g.addColorStop(0.88, '#d92a8c');
+    g.addColorStop(1.00, '#ff7a3c');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, hy + 1);
+    return g;
+  }
+
+  function drawStars(t) {
+    ctx.fillStyle = '#ffffff';
+    for (var i = 0; i < stars.length; i++) {
+      var s = stars[i];
+      var a = 0.45 + 0.55 * Math.sin(t * s.s + s.p);
+      ctx.globalAlpha = a * (1 - s.y / 0.7);
+      ctx.fillRect(s.x * W, s.y * H, s.r, s.r);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawSun(t, cx, hy, skyGrad) {
+    var r = Math.min(W, H) * 0.19;
+    var sy = hy - r * 0.42 + Math.sin(t * 0.15) * r * 0.03;
+
+    // Big soft glow
+    var gl = ctx.createRadialGradient(cx, sy, r * 0.5, cx, sy, r * 2.6);
+    gl.addColorStop(0, 'rgba(255,90,170,0.65)');
+    gl.addColorStop(0.5, 'rgba(255,60,140,0.22)');
+    gl.addColorStop(1, 'rgba(255,40,120,0)');
+    ctx.fillStyle = gl;
+    ctx.fillRect(cx - r * 2.6, sy - r * 2.6, r * 5.2, r * 5.2);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, sy, r, 0, 6.283);
+    ctx.clip();
+
+    var sg = ctx.createLinearGradient(0, sy - r, 0, sy + r);
+    sg.addColorStop(0.0, '#fff4a8');
+    sg.addColorStop(0.3, '#ffd23f');
+    sg.addColorStop(0.6, '#ff6a3d');
+    sg.addColorStop(1.0, '#ff1f8f');
+    ctx.fillStyle = sg;
+    ctx.fillRect(cx - r, sy - r, r * 2, r * 2);
+
+    // Scrolling horizontal cutouts in the lower half
+    ctx.fillStyle = skyGrad;
+    var phase = (t * 0.06) % 1;
+    for (var k = 0; k < 9; k++) {
+      var q = (k + phase) / 9;               // 0 (top of band zone) .. 1 (bottom)
+      var yc = sy + r * (-0.05 + q * 1.1);
+      var th = r * (0.012 + q * 0.075);
+      ctx.fillRect(cx - r, yc - th / 2, r * 2, th);
+    }
+    ctx.restore();
+
+    // Bright rim
+    ctx.beginPath();
+    ctx.arc(cx, sy, r, 0, 6.283);
+    ctx.globalAlpha = 0.35;
+    ctx.strokeStyle = '#ffe9a8'; ctx.lineWidth = 3; ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  function drawMountains(pts, hy, shift, fillA, fillB, edge, w) {
+    ctx.beginPath();
+    ctx.moveTo(-10, hy + 2);
+    for (var i = 0; i < pts.length; i++) {
+      var p = pts[i];
+      ctx.lineTo((p.u + shift) * W, hy - p.h * H);
+    }
+    ctx.lineTo(W + 10, hy + 2);
+    ctx.closePath();
+    var g = ctx.createLinearGradient(0, hy - 0.25 * H, 0, hy);
+    g.addColorStop(0, fillA);
+    g.addColorStop(1, fillB);
+    ctx.fillStyle = g;
+    ctx.fill();
+
+    ctx.beginPath();
+    for (var j = 0; j < pts.length; j++) {
+      var q = pts[j];
+      var x = (q.u + shift) * W, y = hy - q.h * H;
+      if (j === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    glowStroke(edge, w);
+  }
+
+  function drawGround(t, cx, hy) {
+    // Ground base
+    var gg = ctx.createLinearGradient(0, hy, 0, H);
+    gg.addColorStop(0, '#2a0455');
+    gg.addColorStop(0.25, '#140232');
+    gg.addColorStop(1, '#05000f');
+    ctx.fillStyle = gg;
+    ctx.fillRect(0, hy, W, H - hy);
+
+    // Horizon glow line
+    var hg = ctx.createLinearGradient(0, hy - 6, 0, hy + 30);
+    hg.addColorStop(0, 'rgba(255,60,200,0)');
+    hg.addColorStop(0.2, 'rgba(255,70,210,0.75)');
+    hg.addColorStop(1, 'rgba(255,70,210,0)');
+    ctx.fillStyle = hg;
+    ctx.fillRect(0, hy - 6, W, 36);
+
+    var f = H * 0.95;           // focal length
+    var ch = 1.0;               // camera height (world units)
+    var zNear = f * ch / (H - hy + 1);
+    var zFar = 45;
+    var sp = 1.0;               // grid spacing
+    var speed = 7.0;
+    var off = (t * speed) % sp;
+
+    ctx.lineCap = 'butt';
+
+    // Horizontal grid lines (coming toward the viewer)
+    ctx.strokeStyle = '#ff2fd0';
+    for (var z = sp - off + 0.0001; z < zFar; z += sp) {
+      if (z < zNear * 0.95) continue;
+      var y = hy + f * ch / z;
+      var a = Math.max(0, 1 - z / zFar);
+      a = a * a;
+      var wdt = 1 + 2.5 * Math.max(0, 1 - z / 10);
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y);
+      ctx.globalAlpha = a * 0.35; ctx.lineWidth = wdt * 4; ctx.stroke();
+      ctx.globalAlpha = a; ctx.lineWidth = wdt; ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    // Vertical grid lines (converging to the vanishing point)
+    var M = Math.ceil(W * zNear / (f * sp)) + 2;
+    var yFar = hy + f * ch / zFar;
+    var yNear = H + 2;
+    var zN = f * ch / (yNear - hy);
+    ctx.strokeStyle = '#2ee6ff';
+    for (var m = -M; m <= M; m++) {
+      var xw = m * sp;
+      var x1 = cx + f * xw / zFar, x2 = cx + f * xw / zN;
+      ctx.beginPath(); ctx.moveTo(x1, yFar); ctx.lineTo(x2, yNear);
+      ctx.globalAlpha = 0.3; ctx.lineWidth = 5; ctx.stroke();
+      ctx.globalAlpha = 0.95; ctx.lineWidth = 1.4; ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    // Road
+    var rw = 1.45;
+    var rxF = f * rw / zFar, rxN = f * rw / zN;
+    ctx.beginPath();
+    ctx.moveTo(cx - rxF, yFar); ctx.lineTo(cx + rxF, yFar);
+    ctx.lineTo(cx + rxN, yNear); ctx.lineTo(cx - rxN, yNear);
+    ctx.closePath();
+    var rg = ctx.createLinearGradient(0, hy, 0, H);
+    rg.addColorStop(0, '#2a0a4a');
+    rg.addColorStop(0.3, '#120428');
+    rg.addColorStop(1, '#07011a');
+    ctx.fillStyle = rg;
+    ctx.fill();
+
+    // Road edge lines
+    ctx.beginPath();
+    ctx.moveTo(cx - rxF, yFar); ctx.lineTo(cx - rxN, yNear);
+    ctx.moveTo(cx + rxF, yFar); ctx.lineTo(cx + rxN, yNear);
+    glowStroke('#9df9ff', 2.5);
+
+    // Center dashes
+    var dashLen = 1.6, gap = 1.6, period = dashLen + gap;
+    var doff = (t * speed) % period;
+    var hw = 0.09;
+    ctx.fillStyle = '#ffe14d';
+    for (var z0 = -doff; z0 < zFar; z0 += period) {
+      var za = Math.max(z0, zN), zb = Math.min(z0 + dashLen, zFar);
+      if (zb <= za) continue;
+      var ya = hy + f * ch / za, yb = hy + f * ch / zb;
+      var xa = f * hw / za, xb = f * hw / zb;
+      var al = Math.max(0, 1 - zb / zFar);
+      ctx.beginPath();
+      ctx.moveTo(cx - xb, yb); ctx.lineTo(cx + xb, yb);
+      ctx.lineTo(cx + xa, ya); ctx.lineTo(cx - xa, ya);
+      ctx.closePath();
+      ctx.globalAlpha = al * 0.35; ctx.strokeStyle = '#ffe14d'; ctx.lineWidth = 6; ctx.stroke();
+      ctx.globalAlpha = al; ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawOverlay(cx, hy) {
+    // Vignette
+    var vg = ctx.createRadialGradient(W / 2, H * 0.5, Math.min(W, H) * 0.35, W / 2, H * 0.5, Math.max(W, H) * 0.8);
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, 'rgba(0,0,0,0.6)');
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, W, H);
+
+    // Scanlines
+    if (scanPattern) {
+      ctx.fillStyle = scanPattern;
+      ctx.fillRect(0, 0, W, H);
+    }
+  }
+
+  var start = null, last = 0, tAcc = 0;
+  function frame(ts) {
+    if (start === null) { start = ts; last = ts; }
+    var dt = Math.min(0.05, (ts - last) / 1000);
+    last = ts;
+    tAcc += dt;
+    var t = tAcc;
+
+    var sway = Math.sin(t * 0.35) * 0.028 + Math.sin(t * 0.9) * 0.008;
+    var cx = W * (0.5 + sway);
+    var hy = H * 0.56 + Math.sin(t * 1.7) * H * 0.003;
+
+    var skyGrad = drawSky(hy);
+    drawStars(t);
+    drawSun(t, W * (0.5 + sway * 0.25), hy, skyGrad);
+    drawMountains(mtnFar, hy, sway * 0.35, '#2a0a60', '#4a1180', '#36e6ff', 1.6);
+    drawMountains(mtnNear, hy, sway * 0.6, '#12032e', '#22064a', '#ff3bd6', 1.8);
+    drawGround(t, cx, hy);
+    drawOverlay(cx, hy);
+
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

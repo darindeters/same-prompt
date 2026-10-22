@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#421348">
+<title>Murmuration</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #421348; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas aria-label="Thousands of starlings flowing and folding above a glowing sunset landscape"></canvas>
+<script>
+(() => {
+  'use strict';
+  const canvas = document.querySelector('canvas');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const sky = document.createElement('canvas');
+  const bg = sky.getContext('2d');
+  const TAU = Math.PI * 2;
+  let width, height, unit, ratio;
+  let seed = 82741;
+  function random() {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed / 4294967296;
+  }
+  const birds = Array.from({ length: 7400 }, () => {
+    const u = random() * 2 - 1;
+    const angle = random() * TAU;
+    const radius = Math.sqrt(random());
+    return {
+      u, a: Math.cos(angle) * radius, b: Math.sin(angle) * radius,
+      phase: random() * TAU, speed: .8 + random() * .6,
+      size: .65 + random() * .65, group: Math.floor(random() * 4),
+      x: 0, y: 0, lastX: null, lastY: null, dx: 1, dy: 0, depth: 0
+    };
+  });
+  const strays = Array.from({ length: 170 }, () => ({
+    x: random(), y: random(), phase: random() * TAU, size: .4 + random() * .7
+  }));
+  const haze = Array.from({ length: 36 }, () => ({
+    x: random(), y: .12 + random() * .6,
+    w: .12 + random() * .55, h: .002 + random() * .014,
+    opacity: .025 + random() * .05
+  }));
+  const hills = Array.from({ length: 4 }, (_, layer) =>
+    Array.from({ length: 101 }, (_, i) => {
+      const x = i / 100;
+      return .87 + layer * .029 + Math.sin(x * 9 + layer * 2) * .012
+        + Math.sin(x * 23 + layer) * .006 + random() * .004;
+    })
+  );
+
+  function paintSky() {
+    bg.setTransform(ratio, 0, 0, ratio, 0, 0);
+    const gradient = bg.createLinearGradient(0, 0, width * .13, height);
+    gradient.addColorStop(0, '#241447');
+    gradient.addColorStop(.18, '#652257');
+    gradient.addColorStop(.39, '#c43e70');
+    gradient.addColorStop(.57, '#f46b68');
+    gradient.addColorStop(.75, '#ffab62');
+    gradient.addColorStop(.89, '#ffc77b');
+    gradient.addColorStop(1, '#e87a66');
+    bg.fillStyle = gradient;
+    bg.fillRect(0, 0, width, height);
+    const sunX = width * .73, sunY = height * .725;
+    const glow = bg.createRadialGradient(sunX, sunY, 0, sunX, sunY, unit * .44);
+    glow.addColorStop(0, 'rgba(255,216,127,.55)');
+    glow.addColorStop(.3, 'rgba(255,165,93,.18)');
+    glow.addColorStop(1, 'rgba(255,147,103,0)');
+    bg.fillStyle = glow;
+    bg.fillRect(0, 0, width, height);
+    bg.fillStyle = '#ffde94';
+    bg.shadowColor = '#ffce7c';
+    bg.shadowBlur = unit * .025;
+    bg.beginPath();
+    bg.arc(sunX, sunY, unit * .044, 0, TAU);
+    bg.fill();
+    bg.shadowBlur = 0;
+    for (const cloud of haze) {
+      const x = cloud.x * width, y = cloud.y * height;
+      const rx = cloud.w * width, ry = cloud.h * height;
+      const g = bg.createRadialGradient(x, y, 0, x, y, rx);
+      g.addColorStop(0, `rgba(82,27,82,${cloud.opacity})`);
+      g.addColorStop(1, 'rgba(82,27,82,0)');
+      bg.save();
+      bg.translate(x, y);
+      bg.scale(1, ry / rx);
+      bg.translate(-x, -y);
+      bg.fillStyle = g;
+      bg.fillRect(x - rx, y - rx, rx * 2, rx * 2);
+      bg.restore();
+    }
+    // A still estuary catches the last narrow bands of light.
+    const water = bg.createLinearGradient(0, height * .88, 0, height);
+    water.addColorStop(0, '#a65670');
+    water.addColorStop(1, '#342444');
+    bg.fillStyle = water;
+    bg.fillRect(0, height * .88, width, height * .12);
+    const colors = ['#75405e', '#4b2d4c', '#30243f', '#1e1c32'];
+    hills.forEach((points, layer) => {
+      bg.fillStyle = colors[layer];
+      bg.beginPath();
+      bg.moveTo(0, height);
+      points.forEach((y, i) => bg.lineTo(i / 100 * width, y * height));
+      bg.lineTo(width, height);
+      bg.closePath();
+      bg.fill();
+    });
+    // Fine atmospheric grain is baked once into the background.
+    const pixels = bg.getImageData(0, 0, sky.width, sky.height);
+    const data = pixels.data;
+    for (let i = 0; i < data.length; i += 4) {
+      const grain = (random() - .5) * 3.6;
+      data[i] += grain; data[i + 1] += grain; data[i + 2] += grain;
+    }
+    bg.putImageData(pixels, 0, 0);
+  }
+
+  function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    unit = Math.min(width, height);
+    ratio = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = sky.width = Math.round(width * ratio);
+    canvas.height = sky.height = Math.round(height * ratio);
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    ctx.lineCap = 'round';
+    paintSky();
+    for (const bird of birds) bird.lastX = bird.lastY = null;
+  }
+  window.addEventListener('resize', resize, { passive: true });
+  resize();
+
+  const ink = ['#251b32', '#2d2038', '#38233b', '#44283f'];
+  const started = performance.now();
+  let previous = started;
+  function frame(now) {
+    const t = (now - started) * .001;
+    const dt = Math.min((now - previous) * .001, .05);
+    previous = now;
+    ctx.drawImage(sky, 0, 0, width, height);
+    const turn = Math.sin(t * .14) * .57;
+    const cosTurn = Math.cos(turn), sinTurn = Math.sin(turn);
+    const breath = t * .29;
+    const scale = Math.min(width * .49, height * .47);
+    const centerX = width * .5 + Math.sin(t * .11) * scale * .07;
+    const centerY = height * .405 + Math.sin(t * .16) * scale * .09;
+
+    for (const bird of birds) {
+      const u = bird.u;
+      // A continuous three-dimensional spine folds slowly, while each bird
+      // keeps its place inside a breathing, twisting cross-section.
+      const wave = u * 3.7 + breath;
+      const fold = u * 5.1 - t * .22;
+      const taper = Math.pow(Math.max(0, 1 - u * u), .62);
+      const thickness = (.10 + .13 * (.5 + .5 * Math.sin(u * 4.8 - t * .36))) * taper;
+      const twist = u * 4 + t * .24;
+      const ca = Math.cos(twist), sa = Math.sin(twist);
+      const crossY = bird.a * ca - bird.b * sa;
+      const crossZ = bird.a * sa + bird.b * ca;
+      const drift = Math.sin(t * bird.speed + bird.phase) * .008;
+      const x = u * .91 + Math.sin(wave) * .21 + crossZ * thickness * .27;
+      const y = Math.sin(wave) * .29 + Math.sin(fold) * .12
+        + crossY * thickness + drift;
+      const z = Math.cos(wave) * .30 + crossZ * thickness * 1.5;
+      const rx = x * cosTurn + z * sinTurn;
+      const rz = z * cosTurn - x * sinTurn;
+      const perspective = 1 / (1 + rz * .29);
+      bird.x = centerX + rx * scale * perspective;
+      bird.y = centerY + y * scale * perspective;
+      bird.depth = perspective;
+      if (bird.lastX !== null && dt > 0) {
+        const vx = bird.x - bird.lastX, vy = bird.y - bird.lastY;
+        const length = Math.hypot(vx, vy);
+        if (length > .001) {
+          const blend = 1 - Math.exp(-dt * 4);
+          bird.dx += (vx / length - bird.dx) * blend;
+          bird.dy += (vy / length - bird.dy) * blend;
+        }
+      }
+      bird.lastX = bird.x; bird.lastY = bird.y;
+    }
+    for (let group = 0; group < 4; group++) {
+      ctx.strokeStyle = ink[group];
+      ctx.lineWidth = Math.max(.55, unit / 1080 * .82);
+      ctx.beginPath();
+      for (const bird of birds) {
+        if (bird.group !== group) continue;
+        const flap = Math.sin(t * (12 + bird.speed * 4) + bird.phase);
+        const size = Math.max(.45, unit / 1080) * bird.size * bird.depth;
+        const norm = Math.hypot(bird.dx, bird.dy) || 1;
+        const dx = bird.dx / norm, dy = bird.dy / norm;
+        const wing = size * (1.2 + Math.abs(flap) * 1.15);
+        const sweep = size * (.25 + flap * .65);
+        const x = bird.x, y = bird.y;
+        ctx.moveTo(x - dy * wing - dx * sweep, y + dx * wing - dy * sweep);
+        ctx.lineTo(x + dx * size * .55, y + dy * size * .55);
+        ctx.lineTo(x + dy * wing - dx * sweep, y - dx * wing - dy * sweep);
+        if (size > 1.05) {
+          ctx.moveTo(x - dx * size, y - dy * size);
+          ctx.lineTo(x + dx * size, y + dy * size);
+        }
+      }
+      ctx.stroke();
+    }
+    // Small loose birds give the dense main flock a sense of scale.
+    ctx.strokeStyle = 'rgba(49,29,48,.6)';
+    ctx.lineWidth = Math.max(.5, unit / 1500);
+    ctx.beginPath();
+    for (const bird of strays) {
+      const x = ((bird.x + t * .009) % 1.2 - .1) * width;
+      const y = height * (.60 + bird.y * .21) + Math.sin(t * .5 + bird.phase) * unit * .008;
+      const s = bird.size * Math.max(.6, unit / 1080);
+      const f = Math.sin(t * 13 + bird.phase) * s;
+      ctx.moveTo(x - s * 1.7, y - f);
+      ctx.lineTo(x, y);
+      ctx.lineTo(x + s * 1.7, y - f);
+    }
+    ctx.stroke();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

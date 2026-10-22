@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#050b23">
+<title>Aurora Lake</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #050b23; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas aria-label="Animated northern lights above snow-covered mountains, reflected in a quiet alpine lake" role="img"></canvas>
+<script>
+(() => {
+  'use strict';
+  const canvas = document.querySelector('canvas');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const size = 1080, horizon = 628;
+  const makeCanvas = () => {
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    return c;
+  };
+  const sky = makeCanvas(), terrain = makeCanvas(), scene = makeCanvas();
+  const s = sky.getContext('2d'), m = terrain.getContext('2d'), a = scene.getContext('2d');
+  let width, height, scale, offsetX, offsetY;
+  let seed = 742019;
+  const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
+  const stars = Array.from({ length: 510 }, () => ({ x: random()*1080, y: random()*600, r: .35+random()*1.15, p: random()*6.28 }));
+  const ripples = Array.from({ length: 125 }, () => ({ x: random()*1080, y: 636+random()*420, w: 5+random()*62, p: random()*6.28 }));
+
+  function path(g, points, fill) {
+    g.beginPath();
+    points.forEach((p, i) => i ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1]));
+    g.closePath(); g.fillStyle = fill; g.fill();
+  }
+  function paintSky() {
+    const bg = s.createLinearGradient(0, 0, 0, horizon);
+    bg.addColorStop(0, '#030719'); bg.addColorStop(.45, '#10143c'); bg.addColorStop(1, '#163a50');
+    s.fillStyle = bg; s.fillRect(0, 0, size, size);
+    const haze = s.createRadialGradient(570, 420, 0, 570, 420, 590);
+    haze.addColorStop(0, '#293b7044'); haze.addColorStop(.6, '#44206722'); haze.addColorStop(1, '#00000000');
+    s.fillStyle = haze; s.fillRect(0, 0, size, horizon);
+    for (const star of stars) {
+      s.fillStyle = `rgba(200,225,255,${.28 + star.r*.34})`;
+      s.beginPath(); s.arc(star.x, star.y, star.r, 0, Math.PI*2); s.fill();
+    }
+    for (let i = 0; i < 5; i++) {
+      const star = stars[i*63];
+      const g = s.createRadialGradient(star.x, star.y, 0, star.x, star.y, 9);
+      g.addColorStop(0, '#d2eaffaa'); g.addColorStop(.2, '#8fbaff44'); g.addColorStop(1, '#8fbaff00');
+      s.fillStyle = g; s.fillRect(star.x-9, star.y-9, 18, 18);
+    }
+  }
+
+  function mountain(points, base, snow, shadow) {
+    path(m, [...points, [1080,horizon+10], [0,horizon+10]], base);
+    for (let i = 1; i < points.length-1; i++) {
+      const left = points[i-1], peak = points[i], right = points[i+1];
+      if (peak[1] >= left[1] || peak[1] >= right[1]) continue;
+      const foot = Math.min(horizon+5, peak[1]+130+random()*90);
+      const split = peak[0]+(random()-.5)*85;
+      path(m, [peak, [peak[0]+(right[0]-peak[0])*.76, peak[1]+(right[1]-peak[1])*.76],
+        [split+49, foot-24], [split+16, foot-46], [split,foot], [peak[0]-31,peak[1]+83],
+        [peak[0]-(peak[0]-left[0])*.7,peak[1]+(left[1]-peak[1])*.7]], snow);
+      path(m, [peak, [split,foot], [split+16,foot-46], [split+49,foot-24],
+        [peak[0]+(right[0]-peak[0])*.76, peak[1]+(right[1]-peak[1])*.76]], shadow);
+      for (let k=0; k<6; k++) {
+        const y = peak[1]+37+k*21;
+        const x = peak[0]+(split-peak[0])*(y-peak[1])/(foot-peak[1]);
+        path(m, [[x-4,y], [x-34-k*8,y+24], [x-12,y+14]], '#182d5144');
+      }
+    }
+  }
+  function paintTerrain() {
+    m.clearRect(0,0,size,size);
+    mountain([[0,477],[79,422],[133,451],[232,359],[318,438],[405,385],[492,468],[579,410],[676,464],[767,372],[846,431],[947,398],[1080,466]], '#23334f', '#7babc6', '#41668c');
+    mountain([[0,540],[80,490],[151,522],[298,343],[358,405],[399,393],[518,540],[606,485],[678,521],[822,389],[872,452],[917,438],[1030,530],[1080,513]], '#13233e', '#a2c5db', '#41648a');
+    mountain([[0,496],[60,460],[119,506],[186,565],[260,594],[377,610],[487,614],[626,610],[742,591],[858,561],[955,477],[1001,453],[1080,490]], '#0b1a30', '#648ca9', '#2b486a');
+    // Tiny firs stitch the dark shoreline to the water.
+    for (let i=0;i<205;i++) {
+      const x=i*5.4, edge=Math.pow(Math.abs(x-540)/540, 2);
+      const y=625-edge*41, h=5+random()*15+edge*17;
+      path(m, [[x,y-h],[x-h*.29,y-4],[x-h*.16,y-5],[x-h*.39,y+2],[x+h*.39,y+2],[x+h*.16,y-5],[x+h*.29,y-4]], '#071a29');
+    }
+    m.fillStyle='#081d2c'; m.fillRect(0,625,1080,5);
+  }
+
+  function ribbon(t, index) {
+    const base = [213, 275, 342][index];
+    const colors = [[45,255,184],[76,255,153],[32,224,235]][index];
+    const bottom = x => base + 67*Math.sin(x*.0057+t*.18+index*1.7)
+      + 29*Math.sin(x*.012-t*.24+index) + (x-540)*[-.14,.12,-.08][index];
+    a.save(); a.globalCompositeOperation='lighter';
+    const step = 6;
+    for (let x=-10; x<1090; x+=step) {
+      const y=bottom(x), y2=bottom(x+step);
+      const wave = .5+.5*Math.sin(x*.029+Math.sin(x*.007+t*.27)*3-t*.52);
+      const fine = .5+.5*Math.sin(x*.114+t*.72+index*3);
+      const strength = (.25+.48*wave+.22*fine) * [ .63,.66,.48 ][index];
+      const length=135+92*Math.sin(x*.003+index+t*.12)+wave*83;
+      const g = a.createLinearGradient(0,y-length,0,y+9);
+      g.addColorStop(0, 'rgba(108,43,235,0)');
+      g.addColorStop(.22, `rgba(137,56,245,${strength*.18})`);
+      g.addColorStop(.53, `rgba(35,176,203,${strength*.25})`);
+      g.addColorStop(.84, `rgba(${colors},${strength*.65})`);
+      g.addColorStop(.97, `rgba(${colors},${strength})`);
+      g.addColorStop(1, `rgba(${colors},0)`);
+      path(a, [[x,y-length],[x+step+.6,y2-length],[x+step+.6,y2+9],[x,y+9]], g);
+    }
+    a.beginPath();
+    for(let x=-10;x<1095;x+=5) x===-10?a.moveTo(x,bottom(x)):a.lineTo(x,bottom(x));
+    a.strokeStyle=`rgba(${colors},.35)`; a.lineWidth=2;
+    a.shadowColor=`rgb(${colors})`; a.shadowBlur=15; a.stroke();
+    a.restore();
+  }
+
+  function pine(g,x,y,h) {
+    g.fillStyle='#030e1c'; g.fillRect(x-h*.022,y-h,h*.044,h);
+    for (let j=0;j<7;j++) {
+      const yy=y-h+j*h*.115, half=h*(.065+j*.028);
+      path(g, [[x,yy-h*.11],[x-half,yy+h*.19],[x+half,yy+h*.19]], '#04121f');
+      if(j<5) path(g, [[x,yy-h*.11],[x-half*.88,yy+h*.14],[x-half*.25,yy+h*.08]], '#54839a88');
+    }
+  }
+  function foreground() {
+    path(ctx, [[0,865],[78,894],[131,929],[221,956],[313,990],[361,1018],[421,1038],[443,1080],[0,1080]], '#122b42');
+    path(ctx, [[0,865],[78,894],[131,929],[221,956],[313,990],[361,1018],[260,995],[205,978],[123,960],[52,925],[0,928]], '#9cc8df');
+    path(ctx, [[1080,882],[1019,900],[962,949],[874,974],[811,1022],[713,1053],[689,1080],[1080,1080]], '#10293e');
+    path(ctx, [[1080,882],[1019,900],[962,949],[874,974],[811,1022],[713,1053],[835,1034],[882,1007],[971,980],[1041,932],[1080,926]], '#add5e8');
+    path(ctx, [[0,992],[85,1010],[142,1049],[240,1080],[0,1080]], '#c0ddea');
+    pine(ctx,48,945,204); pine(ctx,105,972,130); pine(ctx,13,941,271);
+    pine(ctx,1026,957,203); pine(ctx,1080,954,268); pine(ctx,978,979,109);
+  }
+
+  function resize() {
+    const dpr=Math.min(window.devicePixelRatio || 1,2);
+    width=window.innerWidth; height=window.innerHeight;
+    canvas.width=Math.round(width*dpr); canvas.height=Math.round(height*dpr);
+    scale=Math.max(width/size,height/size);
+    offsetX=(width-size*scale)/2; offsetY=(height-size*scale)/2;
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+  }
+  function frame(ms) {
+    const t=ms*.001;
+    a.globalCompositeOperation='source-over';
+    a.drawImage(sky,0,0);
+    ribbon(t,0); ribbon(t,1); ribbon(t,2);
+    a.drawImage(terrain,0,0);
+    ctx.save(); ctx.translate(offsetX,offsetY); ctx.scale(scale,scale);
+    ctx.drawImage(scene,0,0);
+    // Each reflected scan line samples a different height and moving horizontal offset.
+    // The distortion grows toward the viewer, like long ripples on still water.
+    for(let y=horizon;y<1080;y+=2) {
+      const depth=(y-horizon)/(1080-horizon);
+      const sourceY=horizon-(y-horizon)*.91;
+      const distortion=(.6+depth*7)*(Math.sin(y*.055-t*1.25)+.42*Math.sin(y*.143+t*.8));
+      ctx.drawImage(scene,0,sourceY,1080,2,distortion-12,y,1104,2.25);
+    }
+    const water=ctx.createLinearGradient(0,horizon,0,1080);
+    water.addColorStop(0,'rgba(3,21,39,.25)'); water.addColorStop(.5,'rgba(3,20,40,.32)'); water.addColorStop(1,'rgba(2,13,32,.62)');
+    ctx.fillStyle=water; ctx.fillRect(0,horizon,1080,1080-horizon);
+    ctx.save(); ctx.globalCompositeOperation='screen';
+    for(const r of ripples) {
+      const depth=(r.y-horizon)/452;
+      const alpha=(.025+.045*depth)*(.55+.45*Math.sin(t*.7+r.p));
+      ctx.strokeStyle=`rgba(104,231,227,${alpha})`; ctx.lineWidth=.6+depth*.7;
+      const x=r.x+Math.sin(t*.4+r.p)*5;
+      ctx.beginPath();ctx.moveTo(x,r.y);ctx.lineTo(x+r.w*(.3+depth),r.y);ctx.stroke();
+    }
+    ctx.restore();
+    foreground();
+    const vignette=ctx.createRadialGradient(540,470,270,540,520,770);
+    vignette.addColorStop(0,'#02091600'); vignette.addColorStop(1,'#02091688');
+    ctx.fillStyle=vignette;ctx.fillRect(0,0,1080,1080);
+    ctx.restore();
+    requestAnimationFrame(frame);
+  }
+  paintSky(); paintTerrain(); resize();
+  window.addEventListener('resize',resize,{passive:true});
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

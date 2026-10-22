@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spiral Domino Chain Reaction</title>
+<style>
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #0b0719;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('scene');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  let width = 1080;
+  let height = 1080;
+  let dpr = 1;
+  let scaleFactor = 1;
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    scaleFactor = Math.min(width, height) / 1080;
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Vivid, high-saturation palette optimized for mobile/OLED screens
+  const PALETTE = [
+    { h: 345, s: 96, l: 58 }, // Electric Crimson / Hot Pink
+    { h: 14,  s: 98, l: 56 }, // Vivid Tangerine
+    { h: 42,  s: 98, l: 55 }, // Cyber Gold
+    { h: 88,  s: 90, l: 52 }, // Acid Lime
+    { h: 162, s: 94, l: 48 }, // Neon Mint / Emerald
+    { h: 192, s: 98, l: 54 }, // Hyper Cyan
+    { h: 225, s: 94, l: 62 }, // Cobalt Electric
+    { h: 272, s: 95, l: 62 }, // Ultra Violet
+    { h: 312, s: 95, l: 58 }  // Magenta Flash
+  ];
+
+  function lerpColorHSL(t) {
+    const scaled = ((t % 1) + 1) % 1 * PALETTE.length;
+    const i0 = Math.floor(scaled) % PALETTE.length;
+    const i1 = (i0 + 1) % PALETTE.length;
+    const f = scaled - Math.floor(scaled);
+    const c0 = PALETTE[i0];
+    const c1 = PALETTE[i1];
+    let dh = c1.h - c0.h;
+    if (dh > 180) dh -= 360;
+    if (dh < -180) dh += 360;
+    const h = (c0.h + dh * f + 360) % 360;
+    const s = c0.s + (c1.s - c0.s) * f;
+    const l = c0.l + (c1.l - c0.l) * f;
+    return { h, s, l };
+  }
+
+  function hsl(h, s, l, a = 1) {
+    return a === 1
+      ? `hsl(${h.toFixed(1)}, ${s.toFixed(1)}%, ${l.toFixed(1)}%)`
+      : `hsla(${h.toFixed(1)}, ${s.toFixed(1)}%, ${l.toFixed(1)}%, ${a.toFixed(3)})`;
+  }
+
+  // Generate a winding spiral path in world coordinates (units around -440..440)
+  // Using an Archimedean spiral modulated by gentle harmonic waves for a winding organic feel
+  const NUM_DOMINOES = 420;
+  const dominoes = [];
+  const trackPoints = [];
+
+  function sampleWindingSpiral(u) {
+    // u goes from 0 (outer start) to 1 (inner end)
+    // Theta sweeps 5.5 full turns inward
+    const maxTurns = 5.4 * Math.PI * 2;
+    const theta = u * maxTurns;
+    // Radius goes from 435 at u=0 down to 36 at u=1
+    const baseR = 435 * Math.pow(1 - u * 0.88, 0.92);
+    // Winding sinusoidal perturbation that tapers near the center
+    const waveEnv = Math.sin(u * Math.PI) * (1 - u * 0.65);
+    const wobble =
+      18 * Math.sin(theta * 3.0 + 0.6) * waveEnv +
+      10 * Math.cos(theta * 5.0 - 0.8) * waveEnv;
+    const r = baseR + wobble;
+    const x = Math.cos(theta) * r;
+    const z = Math.sin(theta) * r;
+    return { x, z, u, r, theta };
+  }
+
+  // Build high-resolution arc-length table for uniform domino spacing
+  const SAMPLES = 12000;
+  const arcTable = [];
+  let totalLen = 0;
+  let prevPt = sampleWindingSpiral(0);
+  arcTable.push({ u: 0, len: 0, x: prevPt.x, z: prevPt.z });
+
+  for (let i = 1; i <= SAMPLES; i++) {
+    const u = i / SAMPLES;
+    const pt = sampleWindingSpiral(u);
+    const dx = pt.x - prevPt.x;
+    const dz = pt.z - prevPt.z;
+    totalLen += Math.hypot(dx, dz);
+    arcTable.push({ u, len: totalLen, x: pt.x, z: pt.z });
+    prevPt = pt;
+  }
+
+  function pointAtArcLength(targetLen) {
+    let low = 0;
+    let high = arcTable.length - 1;
+    while (low < high) {
+      const mid = (low + high) >> 1;
+      if (arcTable[mid].len < targetLen) low = mid + 1;
+      else high = mid;
+    }
+    const i1 = Math.max(1, low);
+    const i0 = i1 - 1;
+    const a0 = arcTable[i0];
+    const a1 = arcTable[i1];
+    const seg = a1.len - a0.len || 1;
+    const t = (targetLen - a0.len) / seg;
+    const u = a0.u + (a1.u - a0.u) * t;
+    return sampleWindingSpiral(u);
+  }
+
+  // Sample track polyline for subtle glowing path ribbon on the floor
+  const TRACK_SEGMENTS = 700;
+  for (let i = 0; i <= TRACK_SEGMENTS; i++) {
+    const s = (i / TRACK_SEGMENTS) * totalLen;
+    trackPoints.push(pointAtArcLength(s));
+  }
+
+  // Domino dimensions in world coordinates
+  const DOM_HEIGHT = 42;
+  const DOM_WIDTH = 20;
+  const DOM_THICK = 5.4;
+
+  function initDominoes() {
+    dominoes.length = 0;
+    for (let i = 0; i < NUM_DOMINOES; i++) {
+      const frac = i / (NUM_DOMINOES - 1);
+      const s = frac * totalLen;
+      const pt = pointAtArcLength(s);
+      const ptNext = pointAtArcLength(Math.min(totalLen, s + 2.5));
+      const ptPrev = pointAtArcLength(Math.max(0, s - 2.5));
+      const tx = ptNext.x - ptPrev.x;
+      const tz = ptNext.z - ptPrev.z;
+      const tLen = Math.hypot(tx, tz) || 1;
+      // Forward tangent vector along the fall direction
+      const fx = tx / tLen;
+      const fz = tz / tLen;
+      // Right vector perpendicular to forward in XZ plane
+      const rx = -fz;
+      const rz = fx;
+
+      // Vivid color cycling 2.5 times along the spiral
+      const color = lerpColorHSL(frac * 2.6);
+
+      dominoes.push({
+        index: i,
+        frac,
+        x: pt.x,
+        y: 0, // ground level
+        z: pt.z,
+        fx,
+        fz,
+        rx,
+        rz,
+        color,
+        angle: 0,        // 0 = upright, positive = tipping forward (radians)
+        angVel: 0,       // angular velocity
+        state: 'standing', // 'standing' | 'falling' | 'resting' | 'resetting'
+        glow: 0,         // impact flash intensity 0..1
+        hitNext: false,
+        pipStyle: i % 3
+      });
+    }
+  }
+
+  initDominoes();
+
+  // Impact sparks & celebratory wave particles
+  const particles = [];
+  const shockwaves = [];
+
+  function spawnImpactSparks(dom) {
+    // Tip position of the domino when striking next
+    const sinA = Math.sin(dom.angle);
+    const cosA = Math.cos(dom.angle);
+    const wx = dom.x + dom.fx * (DOM_HEIGHT * sinA * 0.85);
+    const wy = DOM_HEIGHT * cosA * 0.85;
+    const wz = dom.z + dom.fz * (DOM_HEIGHT * sinA * 0.85);
+
+    const count = 3;
+    for (let i = 0; i < count; i++) {
+      const spread = (Math.random() - 0.5) * 1.8;
+      const speed = 45 + Math.random() * 85;
+      particles.push({
+        x: wx + dom.rx * (Math.random() - 0.5) * DOM_WIDTH * 0.6,
+        y: wy,
+        z: wz + dom.rz * (Math.random() - 0.5) * DOM_WIDTH * 0.6,
+        vx: (dom.fx * 0.7 + dom.rx * spread) * speed,
+        vy: 55 + Math.random() * 90,
+        vz: (dom.fz * 0.7 + dom.rz * spread) * speed,
+        h: dom.color.h,
+        s: dom.color.s,
+        l: Math.min(95, dom.color.l + 22),
+        life: 1,
+        decay: 1.7 + Math.random() * 1.2,
+        size: 2.2 + Math.random() * 2.2
+      });
+    }
+  }
+
+  // Camera and 3D projection parameters
+  let camYaw = 0.35;
+  const camPitch = 0.84; // ~48 degrees elevated view so every spiral ring is clear
+  const camDist = 1180;
+  const focalLength = 1120;
+
+  function project3D(wx, wy, wz, cosY, sinY, cosP, sinP) {
+    // Rotate around Y axis (yaw)
+    const x1 = wx * cosY - wz * sinY;
+    const z1 = wx * sinY + wz * cosY;
+    // Rotate around X axis (pitch, y is up)
+    const y2 = wy * cosP - z1 * sinP;
+    const z2 = wy * sinP + z1 * cosP + camDist;
+
+    const invZ = focalLength / Math.max(100, z2);
+    return {
+      sx: x1 * invZ,
+      sy: -y2 * invZ,
+      depth: z2,
+      scale: invZ
+    };
+  }
+
+  // Trigger the very first domino immediately upon load
+  function triggerFirstDomino() {
+    const first = dominoes[0];
+    first.state = 'falling';
+    first.angVel = 5.4;
+    first.glow = 1.0;
+    spawnImpactSparks(first);
+  }
+
+  triggerFirstDomino();
+
+  // Simulation state for continuous seamless cycle
+  let cyclePhase = 'toppling'; // 'toppling' | 'finale' | 'resetWave'
+  let phaseTimer = 0;
+  let resetCursor = NUM_DOMINOES - 1;
+
+  // Physics constants
+  const CONTACT_ANGLE = 0.31;      // ~18 deg when domino strikes neighbor
+  const MAX_LEAN_ANGLE = 1.25;     // ~71.6 deg resting on fallen neighbor
+  const LAST_MAX_ANGLE = 1.50;     // ~86 deg for the final center domino
+  const GRAVITY_TORQUE = 28.0;
+
+  function updatePhysics(dt) {
+    // Slow majestic camera rotation so 3D faces shimmer
+    camYaw += dt * 0.085;
+
+    if (cyclePhase === 'toppling') {
+      for (let i = 0; i < NUM_DOMINOES; i++) {
+        const d = dominoes[i];
+        if (d.glow > 0) {
+          d.glow = Math.max(0, d.glow - dt * 2.2);
+        }
+
+        if (d.state === 'falling') {
+          // Angular acceleration grows as domino leans
+          const accel = GRAVITY_TORQUE * Math.sin(Math.max(0.18, d.angle));
+          d.angVel += accel * dt;
+          d.angle += d.angVel * dt;
+
+          // Trigger the next domino when passing contact threshold
+          if (!d.hitNext && d.angle >= CONTACT_ANGLE) {
+            d.hitNext = true;
+            if (i + 1 < NUM_DOMINOES) {
+              const next = dominoes[i + 1];
+              if (next.state === 'standing') {
+                next.state = 'falling';
+                // Transfer momentum so the wave stays brisk and steady (~42 dominoes/sec)
+                next.angVel = Math.max(6.2, d.angVel * 0.88);
+                next.glow = 1.0;
+                // Dampen current domino slightly on impact
+                d.angVel *= 0.65;
+                spawnImpactSparks(d);
+              }
+            } else {
+              // Final domino at the center!
+              spawnImpactSparks(d);
+              shockwaves.push({
+                x: d.x,
+                z: d.z,
+                r: 5,
+                maxR: 520,
+                alpha: 1,
+                h: d.color.h
+              });
+            }
+          }
+
+          // Limit lean angle based on next domino's angle (stacking effect)
+          const limitAngle = (i === NUM_DOMINOES - 1)
+            ? LAST_MAX_ANGLE
+            : Math.min(MAX_LEAN_ANGLE, CONTACT_ANGLE + dominoes[i + 1].angle * 0.82);
+
+          if (d.angle >= limitAngle) {
+            d.angle = limitAngle;
+            if (d.angle >= MAX_LEAN_ANGLE - 0.02 || (i === NUM_DOMINOES - 1 && d.angle >= LAST_MAX_ANGLE - 0.02)) {
+              d.angle = (i === NUM_DOMINOES - 1) ? LAST_MAX_ANGLE : MAX_LEAN_ANGLE;
+              d.angVel = 0;
+              d.state = 'resting';
+              if (i === NUM_DOMINOES - 1) {
+                cyclePhase = 'finale';
+                phaseTimer = 0;
+              }
+            }
+          }
+        }
+      }
+    } else if (cyclePhase === 'finale') {
+      phaseTimer += dt;
+      // Shimmering pulse ripples outward while resting briefly
+      for (let i = 0; i < NUM_DOMINOES; i++) {
+        const d = dominoes[i];
+        const wave = Math.sin(phaseTimer * 10 - (1 - d.frac) * 18);
+        d.glow = Math.max(0, wave * 0.65);
+      }
+      if (phaseTimer > 1.15) {
+        cyclePhase = 'resetWave';
+        resetCursor = NUM_DOMINOES - 1;
+        shockwaves.push({
+          x: 0,
+          z: 0,
+          r: 10,
+          maxR: 560,
+          alpha: 0.9,
+          h: 190
+        });
+      }
+    } else if (cyclePhase === 'resetWave') {
+      // Rapidly stand dominoes back up from center outward in a whip-like reverse wave
+      const standSpeed = 240 * dt;
+      const targetIndex = Math.max(0, resetCursor - standSpeed);
+      for (let i = Math.floor(resetCursor); i >= Math.floor(targetIndex); i--) {
+        const d = dominoes[i];
+        if (d && d.state !== 'resetting' && d.state !== 'standing') {
+          d.state = 'resetting';
+          d.glow = 0.95;
+        }
+      }
+      resetCursor = targetIndex;
+
+      let allStanding = true;
+      for (let i = 0; i < NUM_DOMINOES; i++) {
+        const d = dominoes[i];
+        if (d.glow > 0) d.glow = Math.max(0, d.glow - dt * 2.5);
+        if (d.state === 'resetting') {
+          d.angle -= 5.8 * dt;
+          if (d.angle <= 0) {
+            d.angle = 0;
+            d.angVel = 0;
+            d.hitNext = false;
+            d.state = 'standing';
+          } else {
+            allStanding = false;
+          }
+        } else if (d.state !== 'standing') {
+          allStanding = false;
+        }
+      }
+
+      if (resetCursor <= 0 && allStanding) {
+        cyclePhase = 'toppling';
+        triggerFirstDomino();
+      }
+    }
+
+    // Update particles
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.z += p.vz * dt;
+      p.vy -= 260 * dt; // gravity
+      if (p.y < 0) {
+        p.y = 0;
+        p.vy *= -0.45;
+      }
+      p.life -= p.decay * dt;
+      if (p.life <= 0) {
+        particles.splice(i, 1);
+      }
+    }
+
+    // Update ground shockwaves
+    for (let i = shockwaves.length - 1; i >= 0; i--) {
+      const sw = shockwaves[i];
+      sw.r += 340 * dt;
+      sw.alpha = Math.max(0, 1 - sw.r / sw.maxR);
+      if (sw.r >= sw.maxR) {
+        shockwaves.splice(i, 1);
+      }
+    }
+  }
+
+  // Helper to compute and draw a 3D domino box with proper face culling and lighting
+  const facePoly = [
+    { sx: 0, sy: 0 },
+    { sx: 0, sy: 0 },
+    { sx: 0, sy: 0 },
+    { sx: 0, sy: 0 }
+  ];
+
+  function drawQuad(v0, v1, v2, v3, fillStyle, strokeStyle) {
+    // 2D cross product for backface culling (screen Y is down, so CCW in 3D is CW/CCW on screen)
+    const cross = (v1.sx - v0.sx) * (v2.sy - v0.sy) - (v1.sy - v0.sy) * (v2.sx - v0.sx);
+    if (cross <= 0) return false;
+
+    ctx.beginPath();
+    ctx.moveTo(v0.sx, v0.sy);
+    ctx.lineTo(v1.sx, v1.sy);
+    ctx.lineTo(v2.sx, v2.sy);
+    ctx.lineTo(v3.sx, v3.sy);
+    ctx.closePath();
+    ctx.fillStyle = fillStyle;
+    ctx.fill();
+    if (strokeStyle) {
+      ctx.strokeStyle = strokeStyle;
+      ctx.lineWidth = 0.85;
+      ctx.stroke();
+    }
+    return true;
+  }
+
+  function renderDomino(d, cosY, sinY, cosP, sinP) {
+    // Pivot around bottom-front edge so domino tips forward naturally on the floor
+    const sinA = Math.sin(d.angle);
+    const cosA = Math.cos(d.angle);
+
+    // Local basis vectors of the tilted domino:
+    // Width axis (right): (rx, 0, rz)
+    // Up axis (along domino height): (fx * sinA, cosA, fz * sinA)
+    // Forward thickness axis: (fx * cosA, -sinA, fz * cosA)
+    const ux = d.fx * sinA;
+    const uy = cosA;
+    const uz = d.fz * sinA;
+
+    const tx = d.fx * cosA;
+    const ty = -sinA;
+    const tz = d.fz * cosA;
+
+    const hw = DOM_WIDTH * 0.5;
+    const ht = DOM_THICK * 0.5;
+    const h = DOM_HEIGHT;
+
+    // Pivot at bottom-front edge (shifted by +ht along forward axis from base center)
+    const px = d.x + d.fx * ht;
+    const py = 0;
+    const pz = d.z + d.fz * ht;
+
+    // 8 vertices of the domino box
+    // Front face has local thickness offset 0; back face has offset -DOM_THICK along t-axis
+    const verts = new Array(8);
+    for (let i = 0; i < 8; i++) {
+      const side = (i & 1) ? hw : -hw;           // -hw or +hw along r
+      const up = (i & 2) ? h : 0;                // 0 or h along u
+      const back = (i & 4) ? -DOM_THICK : 0;     // 0 (front) or -DOM_THICK (back) along t
+
+      const wx = px + d.rx * side + ux * up + tx * back;
+      const wy = py + uy * up + ty * back;
+      const wz = pz + d.rz * side + uz * up + tz * back;
+
+      verts[i] = project3D(wx, wy, wz, cosY, sinY, cosP, sinP);
+    }
+
+    // Soft contact shadow on the floor directly beneath domino
+    const shLength = DOM_THICK + sinA * DOM_HEIGHT * 0.95;
+    const sh0 = project3D(px - d.rx * hw * 1.12, 0, pz - d.rz * hw * 1.12, cosY, sinY, cosP, sinP);
+    const sh1 = project3D(px + d.rx * hw * 1.12, 0, pz + d.rz * hw * 1.12, cosY, sinY, cosP, sinP);
+    const sh2 = project3D(px + d.rx * hw * 1.12 + d.fx * shLength, 0, pz + d.rz * hw * 1.12 + d.fz * shLength, cosY, sinY, cosP, sinP);
+    const sh3 = project3D(px - d.rx * hw * 1.12 + d.fx * shLength, 0, pz - d.rz * hw * 1.12 + d.fz * shLength, cosY, sinY, cosP, sinP);
+
+    ctx.beginPath();
+    ctx.moveTo(sh0.sx, sh0.sy);
+    ctx.lineTo(sh1.sx, sh1.sy);
+    ctx.lineTo(sh2.sx, sh2.sy);
+    ctx.lineTo(sh3.sx, sh3.sy);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(3, 2, 10, 0.48)';
+    ctx.fill();
+
+    // Directional light from top-left-front
+    const { h: colH, s: colS, l: colL } = d.color;
+    const glowBoost = d.glow * 20;
+
+    // Compute directional shading for faces
+    const frontLight = 0.5 + 0.5 * (tx * 0.4 + ty * 0.7 + tz * 0.55);
+    const backLight  = 0.5 + 0.5 * (-tx * 0.4 - ty * 0.7 - tz * 0.55);
+    const topLight   = 0.5 + 0.5 * (ux * 0.35 + uy * 0.8 + uz * 0.45);
+    const rightLight = 0.5 + 0.5 * (d.rx * 0.5 + d.rz * 0.5);
+
+    const edgeColor = hsl(colH, colS, Math.min(92, colL + 22 + glowBoost), 0.75);
+
+    // Vertex index mapping:
+    // 0: (-hw, 0, 0)  front-bottom-left
+    // 1: (+hw, 0, 0)  front-bottom-right
+    // 2: (-hw, h, 0)  front-top-left
+    // 3: (+hw, h, 0)  front-top-right
+    // 4: (-hw, 0, -T) back-bottom-left
+    // 5: (+hw, 0, -T) back-bottom-right
+    // 6: (-hw, h, -T) back-top-left
+    // 7: (+hw, h, -T) back-top-right
+
+    // Front face (0, 1, 3, 2)
+    const frontL = Math.min(88, Math.max(24, colL * (0.72 + frontLight * 0.48) + glowBoost));
+    const drewFront = drawQuad(verts[0], verts[1], verts[3], verts[2], hsl(colH, colS, frontL), edgeColor);
+
+    // Back face (5, 4, 6, 7) - exposed brightly when domino leans forward!
+    const backL = Math.min(90, Math.max(28, colL * (0.78 + backLight * 0.52) + glowBoost));
+    const drewBack = drawQuad(verts[5], verts[4], verts[6], verts[7], hsl(colH, colS, backL), edgeColor);
+
+    // Left face (4, 0, 2, 6)
+    const leftL = Math.min(84, Math.max(20, colL * (1.0 - rightLight * 0.38) + glowBoost));
+    drawQuad(verts[4], verts[0], verts[2], verts[6], hsl(colH, colS, leftL), edgeColor);
+
+    // Right face (1, 5, 7, 3)
+    const rightL = Math.min(84, Math.max(20, colL * (0.62 + rightLight * 0.38) + glowBoost));
+    drawQuad(verts[1], verts[5], verts[7], verts[3], hsl(colH, colS, rightL), edgeColor);
+
+    // Top face (2, 3, 7, 6) - crown highlight
+    const topL = Math.min(95, Math.max(45, colL + 18 + topLight * 12 + glowBoost));
+    drawQuad(verts[2], verts[3], verts[7], verts[6], hsl(colH, Math.max(70, colS - 10), topL), edgeColor);
+
+    // Crisp domino division bar & bright pip dots on whichever main face is visible
+    const mainFaceVerts = drewBack ? [verts[5], verts[4], verts[6], verts[7]] : (drewFront ? [verts[0], verts[1], verts[3], verts[2]] : null);
+    if (mainFaceVerts) {
+      const [b0, b1, t1, t0] = mainFaceVerts;
+      // Midline divider across center of the domino face
+      const m0x = (b0.sx + t0.sx) * 0.5;
+      const m0y = (b0.sy + t0.sy) * 0.5;
+      const m1x = (b1.sx + t1.sx) * 0.5;
+      const m1y = (b1.sy + t1.sy) * 0.5;
+
+      ctx.beginPath();
+      ctx.moveTo(
+        m0x * 0.82 + m1x * 0.18,
+        m0y * 0.82 + m1y * 0.18
+      );
+      ctx.lineTo(
+        m1x * 0.82 + m0x * 0.18,
+        m1y * 0.82 + m0y * 0.18
+      );
+      ctx.strokeStyle = hsl(colH, 100, 94, 0.72);
+      ctx.lineWidth = 1.3;
+      ctx.stroke();
+
+      // Upper and lower luminous pips
+      const pipColor = hsl(colH, 100, 96, 0.85);
+      ctx.fillStyle = pipColor;
+      const pipR = Math.max(1.1, 2.0 * verts[2].scale);
+
+      // Upper center pip
+      const upCx = (m0x + m1x + t0.sx + t1.sx) * 0.25;
+      const upCy = (m0y + m1y + t0.sy + t1.sy) * 0.25;
+      ctx.beginPath();
+      ctx.arc(upCx, upCy, pipR, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Lower pips
+      if (d.pipStyle === 0) {
+        const dnCx = (b0.sx + b1.sx + m0x + m1x) * 0.25;
+        const dnCy = (b0.sy + b1.sy + m0y + m1y) * 0.25;
+        ctx.beginPath();
+        ctx.arc(dnCx, dnCy, pipR, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        const pAx = b0.sx * 0.35 + t1.sx * 0.15 + m0x * 0.35 + m1x * 0.15;
+        const pAy = b0.sy * 0.35 + t1.sy * 0.15 + m0y * 0.35 + m1y * 0.15;
+        const pBx = b1.sx * 0.35 + t0.sx * 0.15 + m1x * 0.35 + m0x * 0.15;
+        const pBy = b1.sy * 0.35 + t0.sy * 0.15 + m1y * 0.35 + m0y * 0.15;
+        ctx.beginPath();
+        ctx.arc(pAx, pAy, pipR * 0.85, 0, Math.PI * 2);
+        ctx.arc(pBx, pBy, pipR * 0.85, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  function renderScene() {
+    ctx.save();
+    ctx.scale(dpr, dpr);
+
+    // Rich dark radial background so neon dominoes pop vividly
+    const bgGrad = ctx.createRadialGradient(
+      width * 0.5, height * 0.48, 20 * scaleFactor,
+      width * 0.5, height * 0.5, 680 * scaleFactor
+    );
+    bgGrad.addColorStop(0, '#1b1138');
+    bgGrad.addColorStop(0.55, '#0e0822');
+    bgGrad.addColorStop(1, '#060311');
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, width, height);
+
+    // Center origin and apply responsive 1080x1080 scaling
+    ctx.translate(width * 0.5, height * 0.515);
+    ctx.scale(scaleFactor, scaleFactor);
+
+    const cosY = Math.cos(camYaw);
+    const sinY = Math.sin(camYaw);
+    const cosP = Math.cos(camPitch);
+    const sinP = Math.sin(camPitch);
+
+    // Subtle concentric floor rings in 3D perspective
+    ctx.lineWidth = 1.2;
+    const rings = [110, 220, 330, 445];
+    for (let rIdx = 0; rIdx < rings.length; rIdx++) {
+      const rad = rings[rIdx];
+      ctx.beginPath();
+      const segs = 90;
+      for (let i = 0; i <= segs; i++) {
+        const a = (i / segs) * Math.PI * 2;
+        const p = project3D(Math.cos(a) * rad, -1, Math.sin(a) * rad, cosY, sinY, cosP, sinP);
+        if (i === 0) ctx.moveTo(p.sx, p.sy);
+        else ctx.lineTo(p.sx, p.sy);
+      }
+      ctx.strokeStyle = 'rgba(130, 105, 255, 0.09)';
+      ctx.stroke();
+    }
+
+    // Winding spiral floor track glow
+    ctx.beginPath();
+    for (let i = 0; i < trackPoints.length; i++) {
+      const tp = trackPoints[i];
+      const p = project3D(tp.x, -0.5, tp.z, cosY, sinY, cosP, sinP);
+      if (i === 0) ctx.moveTo(p.sx, p.sy);
+      else ctx.lineTo(p.sx, p.sy);
+    }
+    ctx.strokeStyle = 'rgba(160, 130, 255, 0.16)';
+    ctx.lineWidth = 10;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(220, 200, 255, 0.25)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Render expanding ground shockwaves
+    for (let i = 0; i < shockwaves.length; i++) {
+      const sw = shockwaves[i];
+      ctx.beginPath();
+      const segs = 72;
+      for (let j = 0; j <= segs; j++) {
+        const a = (j / segs) * Math.PI * 2;
+        const p = project3D(
+          sw.x + Math.cos(a) * sw.r,
+          0,
+          sw.z + Math.sin(a) * sw.r,
+          cosY, sinY, cosP, sinP
+        );
+        if (j === 0) ctx.moveTo(p.sx, p.sy);
+        else ctx.lineTo(p.sx, p.sy);
+      }
+      ctx.strokeStyle = hsl(sw.h, 95, 65, sw.alpha * 0.65);
+      ctx.lineWidth = 4.5 * sw.alpha;
+      ctx.stroke();
+    }
+
+    // Depth-sort all dominoes back-to-front by their 3D center
+    const sortedDominoes = dominoes.slice();
+    for (let i = 0; i < sortedDominoes.length; i++) {
+      const d = sortedDominoes[i];
+      const sinA = Math.sin(d.angle);
+      const cosA = Math.cos(d.angle);
+      const cx = d.x + d.fx * sinA * (DOM_HEIGHT * 0.5);
+      const cy = cosA * (DOM_HEIGHT * 0.5);
+      const cz = d.z + d.fz * sinA * (DOM_HEIGHT * 0.5);
+      const z1 = cx * sinY + cz * cosY;
+      d._sortDepth = cy * sinP + z1 * cosP;
+    }
+    sortedDominoes.sort((a, b) => b._sortDepth - a._sortDepth);
+
+    for (let i = 0; i < sortedDominoes.length; i++) {
+      renderDomino(sortedDominoes[i], cosY, sinY, cosP, sinP);
+    }
+
+    // Render vivid impact sparks on top
+    for (let i = 0; i < particles.length; i++) {
+      const p = particles[i];
+      const proj = project3D(p.x, p.y, p.z, cosY, sinY, cosP, sinP);
+      const r = Math.max(1, p.size * proj.scale * p.life);
+      ctx.beginPath();
+      ctx.arc(proj.sx, proj.sy, r, 0, Math.PI * 2);
+      ctx.fillStyle = hsl(p.h, p.s, p.l, Math.min(1, p.life * 1.2));
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  let lastTime = performance.now();
+  function animate(now) {
+    const dt = Math.min(0.04, Math.max(0.001, (now - lastTime) * 0.001));
+    lastTime = now;
+
+    // Sub-step physics for crisp, rock-solid collision propagation
+    const subSteps = 3;
+    const subDt = dt / subSteps;
+    for (let s = 0; s < subSteps; s++) {
+      updatePhysics(subDt);
+    }
+
+    renderScene();
+    requestAnimationFrame(animate);
+  }
+
+  requestAnimationFrame(animate);
+})();
+</script>
+</body>
+</html>

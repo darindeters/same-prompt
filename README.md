@@ -127,3 +127,58 @@ Note: Claude, Codex and Grok ran this one under the earlier 15-minute cap. All f
 | Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 1:49 | [open](https://darindeters.github.io/same-prompt/rubiks/codex/) |
 | Gemini (4 Argon) | Antigravity CLI 1.4.5 | 3:00 | [open](https://darindeters.github.io/same-prompt/rubiks/gemini/) |
 | Grok (4.7) | Grok Build 1.0.62 | 24:01 | [open](https://darindeters.github.io/same-prompt/rubiks/grok/) |
+
+## Starling Murmuration
+
+> Build a murmuration of thousands of starlings swirling and folding across a sunset sky, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 3:29 | [open](https://darindeters.github.io/same-prompt/murmuration/claude/) |
+| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:02 | [open](https://darindeters.github.io/same-prompt/murmuration/codex/) |
+| Gemini (4 Argon) | Antigravity CLI 1.4.5 | 3:02 | [open](https://darindeters.github.io/same-prompt/murmuration/gemini/) |
+| Grok (4.7) | Grok Build 1.0.62 | 18:47 | [open](https://darindeters.github.io/same-prompt/murmuration/grok/) |
+
+## Synthwave Drive
+
+> Build a neon synthwave drive down an endless road toward a setting sun, with a glowing grid and mountains, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 2:19 | [open](https://darindeters.github.io/same-prompt/synthwave/claude/) |
+| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 1:51 | [open](https://darindeters.github.io/same-prompt/synthwave/codex/) |
+| Gemini (4 Argon) | Antigravity CLI 1.4.5 | 3:08 | [open](https://darindeters.github.io/same-prompt/synthwave/gemini/) |
+| Grok (4.7) | Grok Build 1.0.62 | 10:41 | [open](https://darindeters.github.io/same-prompt/synthwave/grok/) |
+
+## Lava Lamp
+
+> Build a lava lamp with glowing blobs that rise, stretch, merge and split, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 2:11 | [open](https://darindeters.github.io/same-prompt/lava-lamp/claude/) |
+| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 1:39 | [open](https://darindeters.github.io/same-prompt/lava-lamp/codex/) |
+| Gemini (4 Argon) | Antigravity CLI 1.4.5 | 3:18 | [open](https://darindeters.github.io/same-prompt/lava-lamp/gemini/) |
+| Grok (4.7) | Grok Build 1.0.62 | 21:34 | [open](https://darindeters.github.io/same-prompt/lava-lamp/grok/) |
+
+## Domino Chain Reaction
+
+> Build a chain reaction of hundreds of colorful dominoes falling along a winding spiral path, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 4:00 | [open](https://darindeters.github.io/same-prompt/dominoes/claude/) |
+| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:03 | [open](https://darindeters.github.io/same-prompt/dominoes/codex/) |
+| Gemini (4 Argon) | Antigravity CLI 1.4.5 | 2:25 | [open](https://darindeters.github.io/same-prompt/dominoes/gemini/) |
+| Grok (4.7) | Grok Build 1.0.62 | 26:04 | [open](https://darindeters.github.io/same-prompt/dominoes/grok/) |
+
+## Northern Lights
+
+> Build the northern lights rippling over a snowy mountain lake, reflected in the water, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 3:47 | [open](https://darindeters.github.io/same-prompt/aurora/claude/) |
+| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:27 | [open](https://darindeters.github.io/same-prompt/aurora/codex/) |
+| Gemini (4 Argon) | Antigravity CLI 1.4.5 | 2:27 | [open](https://darindeters.github.io/same-prompt/aurora/gemini/) |
+| Grok (4.7) | Grok Build 1.0.62 | 12:21 | [open](https://darindeters.github.io/same-prompt/aurora/grok/) |

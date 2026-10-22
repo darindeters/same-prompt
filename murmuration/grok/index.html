@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#3d12c4">
+<title>Murmuration</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #3d12c4;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+  canvas {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    touch-action: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function () {
+  var N = 5200;
+  var GROUPS = 3;
+  var ALIGN_R = 34;
+  var SEP_R = 11;
+  var MAX_PER = 16;
+  var TURN = 2.65;
+
+  var canvas = document.getElementById('c');
+  var ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+
+  var W = 1, H = 1, dpr = 1, cellSize = 40, cols = 3, rows = 3;
+  var time = 0, ready = false;
+
+  var px = new Float32Array(N);
+  var py = new Float32Array(N);
+  var vx = new Float32Array(N);
+  var vy = new Float32Array(N);
+  var jitter = new Float32Array(N);
+  var homeR = new Float32Array(N);
+  var group = new Uint8Array(N);
+  var layer = new Uint8Array(N);
+  var bucket = [[], [], []];
+
+  var gridCount = new Int32Array(0);
+  var gridIndex = new Int32Array(0);
+
+  var gvx = [0, 0, 0];
+  var gvy = [0, 0, 0];
+  var sunX = 0, sunY = 0;
+
+  function hash3(ix, iy, iz) {
+    var n = Math.imul(ix, 374761393) ^ Math.imul(iy, 668265263) ^ Math.imul(iz, 1440670889);
+    n = Math.imul(n ^ (n >>> 13), 1274126177);
+    return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
+  }
+
+  function fade(t) { return t * t * (3 - 2 * t); }
+
+  function noise3(x, y, z) {
+    var ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z);
+    var fx = x - ix, fy = y - iy, fz = z - iz;
+    var ux = fade(fx), uy = fade(fy), uz = fade(fz);
+    var a = hash3(ix, iy, iz), b = hash3(ix + 1, iy, iz);
+    var c = hash3(ix, iy + 1, iz), d = hash3(ix + 1, iy + 1, iz);
+    var e = hash3(ix, iy, iz + 1), f = hash3(ix + 1, iy, iz + 1);
+    var g = hash3(ix, iy + 1, iz + 1), h = hash3(ix + 1, iy + 1, iz + 1);
+    var x00 = a + (b - a) * ux;
+    var x10 = c + (d - c) * ux;
+    var x01 = e + (f - e) * ux;
+    var x11 = g + (h - g) * ux;
+    var y0 = x00 + (x10 - x00) * uy;
+    var y1 = x01 + (x11 - x01) * uy;
+    return y0 + (y1 - y0) * uz;
+  }
+
+  function hash1(i) {
+    var n = Math.imul(i ^ 0x9e3779b9, 0x85ebca6b);
+    n = Math.imul(n ^ (n >>> 13), 0xc2b2ae35);
+    return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
+  }
+
+  function scale() {
+    return Math.min(W, H) / 1080;
+  }
+
+  function layout(t, S) {
+    var cx = W * 0.5 + Math.sin(t * 0.19) * W * 0.15;
+    var cy = H * 0.48 + Math.sin(t * 0.27) * H * 0.1;
+    var open = 0.5 + 0.5 * Math.sin(t * 0.33);
+    var envelope = 228 * S;
+    var minC = 56 * S;
+    var centers = new Array(GROUPS);
+    for (var g = 0; g < GROUPS; g++) {
+      var wobble = 0.8 + 0.2 * Math.sin(t * 0.23 + g * 1.7);
+      var spread = (34 + 188 * open) * S * wobble;
+      var cap = envelope - minC;
+      if (spread > cap) spread = cap;
+      var ang = t * 0.27 + g * (Math.PI * 2 / 3) + Math.sin(t * 0.16 + g * 1.2) * 0.42;
+      var squash = 0.42 + 0.58 * (0.5 + 0.5 * Math.sin(t * 0.41 + g * 1.35));
+      var axis = 0.5 + 0.5 * Math.sin(t * 0.15 + g * 0.9);
+      centers[g] = {
+        x: cx + Math.cos(ang) * spread,
+        y: cy + Math.sin(ang) * spread * 0.86,
+        contain: envelope - spread,
+        spin: Math.sin(t * 0.24 + g * 0.85) * 235 * S,
+        squash: squash,
+        axis: axis
+      };
+    }
+    return { cx: cx, cy: cy, centers: centers };
+  }
+
+  function curl(x, y, t, S) {
+    var z = t * 0.055;
+    var vx = 0, vy = 0;
+    var scales = [250, 92];
+    var amps = [420, 160];
+    for (var o = 0; o < 2; o++) {
+      var f = 1 / (scales[o] * Math.max(S, 0.25));
+      var e = 0.45;
+      var nx = x * f, ny = y * f;
+      var zz = z * (1 + o * 0.35);
+      var dndx = noise3(nx + e, ny, zz) - noise3(nx - e, ny, zz);
+      var dndy = noise3(nx, ny + e, zz) - noise3(nx, ny - e, zz);
+      vx += dndy * amps[o] * S;
+      vy -= dndx * amps[o] * S;
+    }
+    return { x: vx, y: vy };
+  }
+
+  function allocGrid() {
+    var S = scale();
+    cellSize = Math.max(16, 40 * S);
+    cols = Math.max(3, Math.ceil(W / cellSize));
+    rows = Math.max(3, Math.ceil(H / cellSize));
+    var need = cols * rows;
+    if (gridCount.length < need) {
+      gridCount = new Int32Array(need);
+      gridIndex = new Int32Array(need * MAX_PER);
+    }
+  }
+
+  function buildGrid() {
+    var cells = cols * rows;
+    gridCount.fill(0, 0, cells);
+    var inv = 1 / cellSize;
+    for (var i = 0; i < N; i++) {
+      var gx = (px[i] * inv) | 0;
+      var gy = (py[i] * inv) | 0;
+      if (gx < 0) gx = 0; else if (gx >= cols) gx = cols - 1;
+      if (gy < 0) gy = 0; else if (gy >= rows) gy = rows - 1;
+      var cell = gy * cols + gx;
+      var c = gridCount[cell];
+      if (c < MAX_PER) {
+        gridIndex[cell * MAX_PER + c] = i;
+        gridCount[cell] = c + 1;
+      }
+    }
+  }
+
+  function initBirds() {
+    var S = scale();
+    var form = layout(0, S);
+    bucket[0].length = 0;
+    bucket[1].length = 0;
+    bucket[2].length = 0;
+    for (var i = 0; i < N; i++) {
+      var g = i % GROUPS;
+      var c = form.centers[g];
+      var u = hash1(i + 17);
+      var v = hash1(i + 91);
+      group[i] = g;
+      homeR[i] = Math.sqrt(0.04 + 0.9 * u);
+      jitter[i] = 0.86 + v * 0.28;
+      var Lr = hash1(i * 3 + 5);
+      var L = Lr < 0.26 ? 0 : Lr < 0.62 ? 1 : 2;
+      layer[i] = L;
+      bucket[L].push(i);
+      var theta = v * Math.PI * 2 + u;
+      var rad = c.contain * homeR[i];
+      var squash = c.squash;
+      var sx = 1 - (1 - squash) * c.axis;
+      var sy = 1 - (1 - squash) * (1 - c.axis);
+      px[i] = c.x + Math.cos(theta) * rad * sx;
+      py[i] = c.y + Math.sin(theta) * rad * sy;
+      var spd = 150 * S * jitter[i];
+      vx[i] = -Math.sin(theta) * spd;
+      vy[i] = Math.cos(theta) * spd * (0.65 + 0.35 * sy);
+    }
+  }
+
+  function update(dt) {
+    var prevT = time;
+    time += dt;
+    var S = scale();
+    var prev = layout(prevT, S);
+    var curr = layout(time, S);
+    var aliR = ALIGN_R * S;
+    var aliR2 = aliR * aliR;
+    var sepR = SEP_R * S;
+    var sepR2 = sepR * sepR;
+    var maxAng = TURN * dt;
+    var windX = Math.cos(time * 0.31) * 26 * S;
+    var windY = Math.sin(time * 0.29) * 26 * S;
+    var shear = Math.sin(time * 0.18) * 58 * S;
+    var period = 10.2;
+    var sweep = (time % period) / period;
+    var pulseRaw = Math.abs(sweep - 0.38);
+    var pulse = pulseRaw > 0.07 ? 0 : 1 - pulseRaw / 0.07;
+    pulse *= pulse;
+    var hx = curr.cx + (sweep * 2 - 1) * 300 * S;
+    var hy = curr.cy + Math.sin(sweep * Math.PI) * 36 * S;
+    var fearR = 158 * S;
+
+    for (var g = 0; g < GROUPS; g++) {
+      gvx[g] = (curr.centers[g].x - prev.centers[g].x) / dt;
+      gvy[g] = (curr.centers[g].y - prev.centers[g].y) / dt;
+    }
+
+    buildGrid();
+    var inv = 1 / cellSize;
+
+    for (var i = 0; i < N; i++) {
+      var g = group[i];
+      var c = curr.centers[g];
+      var x = px[i], y = py[i];
+      var dx = x - c.x, dy = y - c.y;
+      var dist = Math.hypot(dx, dy);
+      var fx = windX + shear * ((y - curr.cy) / (200 * S));
+      var fy = windY;
+
+      if (dist > 1.5) {
+        var invD = 1 / dist;
+        var ax = dx * invD, ay = dy * invD;
+        var theta = Math.atan2(dy, dx);
+        var shell = c.contain * homeR[i];
+        var sx = 1 - (1 - c.squash) * c.axis;
+        var sy = 1 - (1 - c.squash) * (1 - c.axis);
+        var tx = Math.cos(theta) * shell * sx;
+        var ty = Math.sin(theta) * shell * sy;
+        fx += (tx - dx) * 6.2;
+        fy += (ty - dy) * 6.2;
+        var fall = dist < 28 * S ? dist / (28 * S) : 1;
+        fx += -ay * c.spin * fall;
+        fy += ax * c.spin * fall;
+        if (dist > 12 * S) {
+          var wave = Math.sin(time * 1.55 + theta * 3 + g * 1.4);
+          fx += -ay * wave * 42 * S;
+          fy += ax * wave * 42 * S;
+        }
+        if (dist > c.contain) {
+          var push = (dist - c.contain) * 9;
+          fx -= ax * push;
+          fy -= ay * push;
+        }
+      } else {
+        fx += 50 * S;
+        fy += 12 * S;
+      }
+
+      var cr = curl(x, y, time, S);
+      fx += cr.x;
+      fy += cr.y;
+
+      if (pulse > 0.002) {
+        var pdx = x - hx, pdy = y - hy;
+        var pd = Math.hypot(pdx, pdy);
+        if (pd < fearR && pd > 0.001) {
+          var fear = (1 - pd / fearR) * pulse * 560 * S;
+          fx += (pdx / pd) * fear;
+          fy += (pdy / pd) * fear;
+        }
+      }
+
+      var gx0 = (x * inv) | 0;
+      var gy0 = (y * inv) | 0;
+      var avx = 0, avy = 0, aw = 0, sxF = 0, syF = 0, seen = 0;
+      if (gx0 >= 1 && gy0 >= 1 && gx0 < cols - 1 && gy0 < rows - 1) {
+        for (var oy = -1; oy <= 1 && seen < 10; oy++) {
+          for (var ox = -1; ox <= 1 && seen < 10; ox++) {
+            var cell = (gy0 + oy) * cols + (gx0 + ox);
+            var cnt = gridCount[cell];
+            var base = cell * MAX_PER;
+            for (var k = 0; k < cnt && seen < 10; k++) {
+              var j = gridIndex[base + k];
+              if (j === i) continue;
+              var ddx = x - px[j];
+              var ddy = y - py[j];
+              var d2 = ddx * ddx + ddy * ddy;
+              if (d2 < aliR2 && d2 > 0.16) {
+                var d = Math.sqrt(d2);
+                var w = 1 - d / aliR;
+                avx += vx[j] * w;
+                avy += vy[j] * w;
+                aw += w;
+                seen++;
+                if (d2 < sepR2) {
+                  var sepW = (1 - d / sepR) / d;
+                  sxF += ddx * sepW;
+                  syF += ddy * sepW;
+                }
+              }
+            }
+          }
+        }
+      }
+      if (aw > 0) {
+        fx += (avx / aw - vx[i]) * 3.1;
+        fy += (avy / aw - vy[i]) * 3.1;
+      }
+      fx += sxF * 280 * S;
+      fy += syF * 280 * S;
+
+      var fm = Math.hypot(fx, fy) + 0.001;
+      var spd = 188 * S * jitter[i];
+      var desX = fx / fm * spd;
+      var desY = fy / fm * spd;
+      var cur = Math.atan2(vy[i], vx[i]);
+      var des = Math.atan2(desY, desX);
+      var dAng = Math.atan2(Math.sin(des - cur), Math.cos(des - cur));
+      if (dAng > maxAng) dAng = maxAng;
+      else if (dAng < -maxAng) dAng = -maxAng;
+      var nang = cur + dAng;
+      vx[i] = Math.cos(nang) * spd;
+      vy[i] = Math.sin(nang) * spd;
+
+      var nx = x + vx[i] * dt + (c.x - prev.centers[g].x);
+      var ny = y + vy[i] * dt + (c.y - prev.centers[g].y);
+      var pad = 6;
+      if (nx < pad) { nx = pad; vx[i] = Math.abs(vx[i]); }
+      else if (nx > W - pad) { nx = W - pad; vx[i] = -Math.abs(vx[i]); }
+      if (ny < pad) { ny = pad; vy[i] = Math.abs(vy[i]); }
+      else if (ny > H - pad) { ny = H - pad; vy[i] = -Math.abs(vy[i]); }
+      px[i] = nx;
+      py[i] = ny;
+    }
+  }
+
+  function addStop(g, t, color) { g.addColorStop(t, color); }
+
+  function blob(x, y, r, inner, outer) {
+    var g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    addStop(g, 0, inner);
+    addStop(g, 1, outer);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function cirrus(y0, amp, width, alpha, phase, hue) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = hue;
+    ctx.lineWidth = width;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    var started = false;
+    for (var x = -30; x <= W + 30; x += 18) {
+      var y = y0
+        + Math.sin(x * 0.0065 + phase) * amp
+        + Math.sin(x * 0.017 + phase * 1.7) * amp * 0.35;
+      if (!started) { ctx.moveTo(x, y); started = true; }
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawSky(S) {
+    var g = ctx.createLinearGradient(0, 0, 0, H);
+    addStop(g, 0, '#3d12c4');
+    addStop(g, 0.16, '#6e14dc');
+    addStop(g, 0.34, '#d41490');
+    addStop(g, 0.5, '#ff2a62');
+    addStop(g, 0.66, '#ff4e00');
+    addStop(g, 0.82, '#ff9800');
+    addStop(g, 1, '#ffd000');
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    var wash = ctx.createLinearGradient(0, 0, W, H * 0.2);
+    addStop(wash, 0, 'rgba(255, 30, 110, 0.28)');
+    addStop(wash, 0.45, 'rgba(255, 40, 90, 0)');
+    addStop(wash, 1, 'rgba(70, 40, 255, 0.22)');
+    ctx.fillStyle = wash;
+    ctx.fillRect(0, 0, W, H);
+
+    blob(W * 0.18 + Math.sin(time * 0.07) * 20 * S, H * 0.2, Math.min(W, H) * 0.42,
+      'rgba(255, 0, 140, 0.30)', 'rgba(255, 0, 140, 0)');
+    blob(W * 0.78, H * 0.3, Math.min(W, H) * 0.36,
+      'rgba(120, 20, 255, 0.28)', 'rgba(120, 20, 255, 0)');
+    blob(W * 0.5, H * 0.46, Math.min(W, H) * 0.34,
+      'rgba(255, 20, 70, 0.22)', 'rgba(255, 20, 70, 0)');
+
+    cirrus(H * 0.16, 18 * S, 26 * S, 0.22, time * 0.08, '#ffd0f0');
+    cirrus(H * 0.26, 22 * S, 18 * S, 0.16, time * 0.05 + 2, '#ffb070');
+    cirrus(H * 0.36, 14 * S, 34 * S, 0.12, time * 0.06 + 4, '#ffe0a0');
+
+    sunX = W * 0.5 + Math.sin(time * 0.05) * 14 * S;
+    sunY = H * 0.675 + Math.cos(time * 0.04) * 8 * S;
+    var sunR = 76 * S;
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    blob(sunX, sunY, sunR * 5.2, 'rgba(255, 170, 40, 0.42)', 'rgba(255, 90, 0, 0)');
+    blob(sunX, sunY - sunR * 0.2, sunR * 2.3, 'rgba(255, 230, 150, 0.55)', 'rgba(255, 140, 20, 0)');
+
+    ctx.translate(sunX, sunY);
+    ctx.rotate(time * 0.035);
+    for (var i = 0; i < 14; i++) {
+      ctx.rotate(Math.PI / 7);
+      var len = (170 + 80 * Math.sin(time * 0.4 + i * 0.7)) * S;
+      var ray = ctx.createLinearGradient(sunR * 0.3, 0, len, 0);
+      addStop(ray, 0, 'rgba(255, 236, 180, 0.20)');
+      addStop(ray, 1, 'rgba(255, 140, 30, 0)');
+      ctx.fillStyle = ray;
+      ctx.beginPath();
+      ctx.moveTo(sunR * 0.45, 0);
+      ctx.lineTo(len, 6.5 * S);
+      ctx.lineTo(len, -6.5 * S);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    var flare = ctx.createLinearGradient(sunX - W * 0.46, 0, sunX + W * 0.46, 0);
+    addStop(flare, 0, 'rgba(255, 190, 60, 0)');
+    addStop(flare, 0.5, 'rgba(255, 226, 150, 0.42)');
+    addStop(flare, 1, 'rgba(255, 190, 60, 0)');
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = flare;
+    ctx.fillRect(0, sunY - 3 * S, W, 6 * S);
+
+    ctx.globalCompositeOperation = 'source-over';
+    var disk = ctx.createRadialGradient(sunX - sunR * 0.18, sunY - sunR * 0.22, sunR * 0.08, sunX, sunY, sunR);
+    addStop(disk, 0, '#fffef8');
+    addStop(disk, 0.35, '#ffe566');
+    addStop(disk, 0.72, '#ffb000');
+    addStop(disk, 1, '#ff6a00');
+    ctx.fillStyle = disk;
+    ctx.beginPath();
+    ctx.arc(sunX, sunY, sunR, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = 'rgba(255, 244, 210, 0.9)';
+    ctx.lineWidth = Math.max(1.5, 3 * S);
+    ctx.beginPath();
+    ctx.arc(sunX, sunY, sunR * 1.03, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.globalAlpha = 0.9;
+    blob(W * 0.12 + Math.sin(time * 0.05) * 24 * S, H * 0.8, 150 * S, 'rgba(200, 30, 70, 0.35)', 'rgba(255, 120, 40, 0)');
+    blob(W * 0.36 + Math.cos(time * 0.04) * 28 * S, H * 0.86, 190 * S, 'rgba(255, 80, 20, 0.28)', 'rgba(255, 160, 40, 0)');
+    blob(W * 0.64 + Math.sin(time * 0.045 + 1) * 26 * S, H * 0.82, 210 * S, 'rgba(255, 40, 80, 0.22)', 'rgba(255, 140, 20, 0)');
+    blob(W * 0.9 + Math.cos(time * 0.06 + 2) * 20 * S, H * 0.78, 160 * S, 'rgba(180, 20, 90, 0.30)', 'rgba(255, 100, 30, 0)');
+
+    var vg = ctx.createRadialGradient(W * 0.5, H * 0.46, Math.min(W, H) * 0.22, W * 0.5, H * 0.5, Math.min(W, H) * 0.74);
+    addStop(vg, 0, 'rgba(0, 0, 0, 0)');
+    addStop(vg, 1, 'rgba(36, 0, 64, 0.38)');
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  function drawFlock(S) {
+    var lenK = [0.78, 1, 1.28];
+    var alphas = [0.7, 0.86, 0.96];
+    var widths = [1.35, 1.7, 2.15];
+    var bodies = ['#1a0a24', '#0c0412', '#050208'];
+    var heads = ['#ffe94a', '#ff3ae0', '#2dffe0'];
+    var sunMask = 168 * S;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.globalCompositeOperation = 'source-over';
+
+    for (var L = 0; L < 3; L++) {
+      var list = bucket[L];
+      var lw = Math.max(0.9, widths[L] * S);
+      ctx.lineWidth = lw;
+      ctx.globalAlpha = alphas[L];
+      ctx.strokeStyle = bodies[L];
+      ctx.beginPath();
+      for (var a = 0; a < list.length; a++) {
+        var i = list[a];
+        var g = group[i];
+        var tvx = vx[i] + gvx[g];
+        var tvy = vy[i] + gvy[g];
+        var sp = Math.hypot(tvx, tvy) + 0.001;
+        var tx = tvx / sp, ty = tvy / sp;
+        var len = Math.min(22, 6.5 + sp * 0.032 * lenK[L]) * S;
+        ctx.moveTo(px[i] - tx * len, py[i] - ty * len);
+        ctx.lineTo(px[i] + tx * len * 0.12, py[i] + ty * len * 0.12);
+      }
+      ctx.stroke();
+
+      for (var c = 0; c < 3; c++) {
+        ctx.beginPath();
+        ctx.strokeStyle = heads[c];
+        ctx.globalAlpha = Math.min(1, alphas[L] + 0.12);
+        ctx.lineWidth = Math.max(1, lw * 0.82);
+        var any = false;
+        for (var b = 0; b < list.length; b++) {
+          var j = list[b];
+          var gj = group[j];
+          var uvx = vx[j] + gvx[gj];
+          var uvy = vy[j] + gvy[gj];
+          var us = Math.hypot(uvx, uvy) + 0.001;
+          var ux = uvx / us, uy = uvy / us;
+          var sdx = sunX - px[j], sdy = sunY - py[j];
+          var sl = Math.hypot(sdx, sdy) + 0.001;
+          if (sl < sunMask) continue;
+          var dot = ux * sdx / sl + uy * sdy / sl;
+          var cross = ux * sdy / sl - uy * sdx / sl;
+          var upper = py[j] < H * 0.5;
+          var hc = dot > 0.28 && upper ? 0 : (cross > 0 ? 1 : 2);
+          if (hc !== c) continue;
+          any = true;
+          var hlen = Math.min(22, 6.5 + us * 0.032 * lenK[L]) * S;
+          ctx.moveTo(px[j] + ux * hlen * 0.02, py[j] + uy * hlen * 0.02);
+          ctx.lineTo(px[j] + ux * hlen * 0.38, py[j] + uy * hlen * 0.38);
+        }
+        if (any) ctx.stroke();
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function draw() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    var S = scale();
+    drawSky(S);
+    drawFlock(S);
+  }
+
+  function resize() {
+    var w = Math.max(1, window.innerWidth);
+    var h = Math.max(1, window.innerHeight);
+    var prevW = ready ? W : 0;
+    var prevH = ready ? H : 0;
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    W = w;
+    H = h;
+    allocGrid();
+    if (!ready) {
+      initBirds();
+      ready = true;
+    } else {
+      var sx = w / prevW, sy = h / prevH;
+      for (var i = 0; i < N; i++) {
+        px[i] *= sx;
+        py[i] *= sy;
+        vx[i] *= sx;
+        vy[i] *= sy;
+      }
+    }
+  }
+
+  var last = 0;
+  var acc = 0;
+  var STEP = 1 / 60;
+
+  function frame(now) {
+    if (!last) last = now;
+    var dt = (now - last) / 1000;
+    last = now;
+    if (dt < 0) dt = 0;
+    acc += dt;
+    if (acc > 0.075) acc = 0.075;
+    while (acc >= STEP) {
+      update(STEP);
+      acc -= STEP;
+    }
+    draw();
+    requestAnimationFrame(frame);
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+  draw();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

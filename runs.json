@@ -338,5 +338,175 @@
     "elapsed_s": 1440.9
    }
   }
+ },
+ "murmuration": {
+  "title": "Starling Murmuration",
+  "prompt": "Build a murmuration of thousands of starlings swirling and folding across a sunset sky, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "claude": {
+    "model": "claude-fable-5-1",
+    "effort": "medium",
+    "cli": "2.1.303 (Claude Code)",
+    "start_utc": "2026-10-22T12:01:55Z",
+    "elapsed_s": 208.7
+   },
+   "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-22T12:02:00Z",
+    "elapsed_s": 121.8
+   },
+   "gemini": {
+    "model": "gemini-4-argon-medium",
+    "effort": "medium",
+    "cli": "1.4.5",
+    "start_utc": "2026-10-22T12:05:32Z",
+    "elapsed_s": 181.8
+   },
+   "grok": {
+    "model": "grok-4.7",
+    "effort": "medium",
+    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
+    "start_utc": "2026-10-22T12:02:06Z",
+    "elapsed_s": 1127.4
+   }
+  }
+ },
+ "synthwave": {
+  "title": "Synthwave Drive",
+  "prompt": "Build a neon synthwave drive down an endless road toward a setting sun, with a glowing grid and mountains, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "claude": {
+    "model": "claude-fable-5-1",
+    "effort": "medium",
+    "cli": "2.1.303 (Claude Code)",
+    "start_utc": "2026-10-22T12:20:53Z",
+    "elapsed_s": 139.4
+   },
+   "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-22T12:20:58Z",
+    "elapsed_s": 110.7
+   },
+   "gemini": {
+    "model": "gemini-4-argon-medium",
+    "effort": "medium",
+    "cli": "1.4.5",
+    "start_utc": "2026-10-22T12:08:34Z",
+    "elapsed_s": 187.6
+   },
+   "grok": {
+    "model": "grok-4.7",
+    "effort": "medium",
+    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
+    "start_utc": "2026-10-22T12:21:03Z",
+    "elapsed_s": 640.9
+   }
+  }
+ },
+ "lava-lamp": {
+  "title": "Lava Lamp",
+  "prompt": "Build a lava lamp with glowing blobs that rise, stretch, merge and split, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "claude": {
+    "model": "claude-fable-5-1",
+    "effort": "medium",
+    "cli": "2.1.303 (Claude Code)",
+    "start_utc": "2026-10-22T12:31:44Z",
+    "elapsed_s": 131.3
+   },
+   "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-22T12:31:49Z",
+    "elapsed_s": 98.8
+   },
+   "gemini": {
+    "model": "gemini-4-argon-medium",
+    "effort": "medium",
+    "cli": "1.4.5",
+    "start_utc": "2026-10-22T12:11:42Z",
+    "elapsed_s": 198.3
+   },
+   "grok": {
+    "model": "grok-4.7",
+    "effort": "medium",
+    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
+    "start_utc": "2026-10-22T12:31:54Z",
+    "elapsed_s": 1294.0
+   }
+  }
+ },
+ "dominoes": {
+  "title": "Domino Chain Reaction",
+  "prompt": "Build a chain reaction of hundreds of colorful dominoes falling along a winding spiral path, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "claude": {
+    "model": "claude-fable-5-1",
+    "effort": "medium",
+    "cli": "2.1.303 (Claude Code)",
+    "start_utc": "2026-10-22T12:53:28Z",
+    "elapsed_s": 239.8
+   },
+   "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-22T12:53:33Z",
+    "elapsed_s": 123.0
+   },
+   "gemini": {
+    "model": "gemini-4-argon-medium",
+    "effort": "medium",
+    "cli": "1.4.5",
+    "start_utc": "2026-10-22T12:15:00Z",
+    "elapsed_s": 144.7
+   },
+   "grok": {
+    "model": "grok-4.7",
+    "effort": "medium",
+    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
+    "start_utc": "2026-10-22T12:53:38Z",
+    "elapsed_s": 1564.5
+   }
+  }
+ },
+ "aurora": {
+  "title": "Northern Lights",
+  "prompt": "Build the northern lights rippling over a snowy mountain lake, reflected in the water, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "claude": {
+    "model": "claude-fable-5-1",
+    "effort": "medium",
+    "cli": "2.1.303 (Claude Code)",
+    "start_utc": "2026-10-22T13:19:43Z",
+    "elapsed_s": 227.3
+   },
+   "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-22T13:19:48Z",
+    "elapsed_s": 147.1
+   },
+   "gemini": {
+    "model": "gemini-4-argon-medium",
+    "effort": "medium",
+    "cli": "1.4.5",
+    "start_utc": "2026-10-22T12:17:25Z",
+    "elapsed_s": 146.7
+   },
+   "grok": {
+    "model": "grok-4.7",
+    "effort": "medium",
+    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
+    "start_utc": "2026-10-22T13:19:53Z",
+    "elapsed_s": 741.3
+   }
+  }
  }
 }

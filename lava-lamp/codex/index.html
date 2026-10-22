@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#10051e">
+  <title>Lava</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #10051e; }
+    canvas { display: block; width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+<canvas aria-label="An animated lava lamp with glowing orange and pink wax"></canvas>
+<script>
+(() => {
+  'use strict';
+  const canvas = document.querySelector('canvas');
+  const gl = canvas.getContext('webgl', { alpha: false, antialias: false, depth: false, powerPreference: 'low-power' });
+  const vertex = `
+    attribute vec2 position;
+    void main() { gl_Position = vec4(position, 0.0, 1.0); }
+  `;
+  const fragment = `
+    precision highp float;
+    uniform vec2 resolution;
+    uniform float time;
+    uniform vec4 blobs[18];
+
+    float roundedBox(vec2 p, vec2 size, float r) {
+      vec2 q = abs(p) - size + r;
+      return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+    }
+    float glassShape(vec2 p) {
+      float w = mix(0.343, 0.198, clamp((p.y + 0.61) / 1.28, 0.0, 1.0));
+      vec2 q = vec2(abs(p.x) - w + 0.035, abs(p.y - 0.025) - 0.645 + 0.035);
+      return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - 0.035;
+    }
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    void main() {
+      vec2 p = (2.0 * gl_FragCoord.xy - resolution) / min(resolution.x, resolution.y);
+      // Keep the complete lamp in view on both portrait and landscape screens.
+      p *= 1.04;
+      float aa = 2.5 / min(resolution.x, resolution.y);
+      vec3 col = vec3(0.027, 0.009, 0.061);
+      col += vec3(0.105, 0.009, 0.13) * exp(-2.5 * dot(p - vec2(-0.32, 0.10), p - vec2(-0.32, 0.10)));
+      col += vec3(0.13, 0.012, 0.045) * exp(-5.0 * dot(p - vec2(0.18, -0.65), p - vec2(0.18, -0.65)));
+      col *= 0.70 + 0.30 * exp(-0.45 * dot(p, p));
+      // The soft pool of light beneath the lamp anchors it in the darkness.
+      col += vec3(0.32, 0.016, 0.15) * exp(-p.x*p.x*9.0 - pow((p.y+0.90)*28.0, 2.0));
+      float glass = glassShape(p);
+      float inside = 1.0 - smoothstep(-aa, aa, glass);
+      col += vec3(0.26, 0.012, 0.14) * exp(-max(glass, 0.0)*13.0) * 0.23;
+
+      vec2 q = p;
+      q.x += 0.004 * sin(p.y * 15.0 + time * 0.28);
+      float field = 0.0;
+      vec2 gradient = vec2(0.0);
+      for (int i = 0; i < 18; i++) {
+        vec4 b = blobs[i];
+        vec2 d = (q - b.xy) / b.zw;
+        float v = 1.0 / (dot(d, d) + 0.025);
+        field += v;
+        gradient += -2.0 * d / b.zw * v * v;
+      }
+      // Broad reservoirs let ascending and descending wax join a continuous pool.
+      vec2 bottom = (q - vec2(0.0, -0.700 + 0.012*sin(time*0.45))) / vec2(0.29, 0.095);
+      vec2 top = (q - vec2(0.025*sin(time*0.22), 0.743)) / vec2(0.18, 0.075);
+      field += 1.0 / (dot(bottom,bottom)+0.04) + 1.0 / (dot(top,top)+0.04);
+      float wax = smoothstep(1.13, 1.17, field);
+      float height = smoothstep(-0.65, 0.65, p.y);
+      vec3 liquid = mix(vec3(0.16, 0.008, 0.13), vec3(0.065, 0.008, 0.19), height);
+      float halo = exp(-abs(field - 1.15)*3.0);
+      liquid += mix(vec3(0.65,0.045,0.005), vec3(0.52,0.008,0.24), height) * halo * 0.56;
+      liquid += vec3(0.3,0.017,0.045) * exp(-pow((p.y+0.58)*5.0,2.0));
+      vec2 normal = -normalize(gradient + vec2(0.0001));
+      float light = clamp(dot(normal, normalize(vec2(-0.7,0.7)))*0.5+0.5,0.0,1.0);
+      float core = smoothstep(1.15, 3.5, field);
+      vec3 hot = mix(vec3(1.0,0.19,0.008), vec3(1.0,0.018,0.29), height);
+      hot = mix(hot * 0.67, hot, 0.55 + 0.45*light);
+      hot += vec3(0.30,0.19,0.012) * core * (1.0-height*0.65);
+      hot += vec3(0.27,0.10,0.045) * pow(light,7.0) * (1.0-core)*0.65;
+      liquid = mix(liquid, hot, wax);
+      float w = mix(0.343,0.198,clamp((p.y+0.61)/1.28,0.0,1.0));
+      float edge = abs(p.x) / w;
+      liquid *= 1.0 - 0.36*pow(edge,8.0);
+      // Long, soft reflections follow the tapered glass instead of the wax.
+      float reflection = exp(-pow((p.x + w*0.83)/0.010,2.0));
+      reflection *= smoothstep(-0.58,-0.38,p.y)*(1.0-smoothstep(0.43,0.65,p.y));
+      liquid += vec3(0.45,0.27,0.58)*reflection*0.42;
+      liquid += vec3(0.25,0.06,0.22)*exp(-pow((p.x-w*0.91)/0.005,2.0))*0.36;
+      col = mix(col, liquid, inside);
+      col += vec3(0.35,0.09,0.32)*exp(-abs(glass)*260.0)*0.45;
+
+      // Brushed, violet-black metal cap and flared foot.
+      float cap = roundedBox(p-vec2(0.0,0.724),vec2(0.204,0.072),0.022);
+      float footWidth = mix(0.345,0.245,clamp((p.y+0.872)/0.235,0.0,1.0));
+      float foot = roundedBox(vec2(p.x,p.y+0.754),vec2(footWidth,0.118),0.018);
+      float metal = min(cap,foot);
+      float metallic = exp(-pow((p.x+0.10)/0.065,2.0));
+      vec3 metalColor = vec3(0.044,0.025,0.075) + metallic*vec3(0.16,0.085,0.20);
+      metalColor += vec3(0.085,0.025,0.10)*exp(-pow((p.x-0.20)/0.032,2.0));
+      metalColor += vec3(0.19,0.035,0.12)*exp(-pow((p.y+0.642)/0.017,2.0));
+      metalColor += vec3(0.15,0.09,0.19)*exp(-pow((p.y-0.779)/0.006,2.0));
+      metalColor += (hash(gl_FragCoord.xy)-0.5)*0.009;
+      col = mix(col,metalColor,1.0-smoothstep(-aa,aa,metal));
+      col += vec3(0.20,0.03,0.12)*exp(-abs(foot)*230.0)*0.25;
+      col += (hash(gl_FragCoord.xy)-0.5)/255.0;
+      gl_FragColor = vec4(col,1.0);
+    }
+  `;
+
+  function resize() {
+    const scale = Math.min(window.devicePixelRatio || 1, 1.5);
+    canvas.width = Math.round(innerWidth * scale);
+    canvas.height = Math.round(innerHeight * scale);
+    if (gl) gl.viewport(0, 0, canvas.width, canvas.height);
+  }
+  window.addEventListener('resize', resize, { passive: true });
+  resize();
+
+  if (!gl) {
+    // A self-contained canvas fallback for devices with WebGL disabled.
+    const replacement = document.createElement('canvas');
+    canvas.replaceWith(replacement);
+    const ctx = replacement.getContext('2d');
+    function drawFallback(now) {
+      replacement.width = innerWidth;
+      replacement.height = innerHeight;
+      const s = Math.min(innerWidth,innerHeight);
+      ctx.fillStyle = '#10051e';
+      ctx.fillRect(0,0,innerWidth,innerHeight);
+      ctx.save();
+      ctx.translate(innerWidth/2,innerHeight/2);
+      ctx.scale(s/2,s/2);
+      ctx.beginPath();
+      ctx.moveTo(-.2,-.67); ctx.lineTo(.2,-.67); ctx.lineTo(.34,.62); ctx.lineTo(-.34,.62); ctx.closePath();
+      ctx.fillStyle = '#29082d'; ctx.fill(); ctx.clip();
+      ctx.shadowBlur = 25; ctx.shadowColor = '#ff1760';
+      for (let i=0;i<13;i++) {
+        const t=now*.00003*(1+i*.035)+i*.137;
+        const y=.77-(t%1)*1.54;
+        const x=Math.sin(t*5+i*2)*.16;
+        ctx.beginPath();
+        ctx.ellipse(x,y,.065+Math.sin(i*3)*.018,.10+Math.sin(t*8)*.025,Math.sin(t*4)*.3,0,Math.PI*2);
+        ctx.fillStyle=i%2?'#ff3062':'#ff7419'; ctx.fill();
+      }
+      ctx.restore();
+      requestAnimationFrame(drawFallback);
+    }
+    requestAnimationFrame(drawFallback);
+    return;
+  }
+  function compile(type, source) {
+    const shader = gl.createShader(type);
+    gl.shaderSource(shader,source);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+    return shader;
+  }
+  const program = gl.createProgram();
+  gl.attachShader(program,compile(gl.VERTEX_SHADER,vertex));
+  gl.attachShader(program,compile(gl.FRAGMENT_SHADER,fragment));
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+  gl.useProgram(program);
+  const buffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);
+  const position = gl.getAttribLocation(program,'position');
+  gl.enableVertexAttribArray(position);
+  gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);
+  const uResolution = gl.getUniformLocation(program,'resolution');
+  const uTime = gl.getUniformLocation(program,'time');
+  const uBlobs = gl.getUniformLocation(program,'blobs[0]');
+  const data = new Float32Array(18*4);
+  const start = performance.now();
+  function animate(now) {
+    const t = (now-start)/1000;
+    for (let i=0;i<12;i++) {
+      const phase = i*2.399963;
+      const speed = .032 + (i%4)*.004;
+      const cycle = t*speed + phase;
+      // Closed convection paths: wax slows at the ends before turning around.
+      const y = Math.sin(cycle)*.64;
+      const x = Math.cos(cycle)*(.12+(i%3)*.025) + Math.sin(t*.19+phase)*.037;
+      const stretch = 1 + .33*Math.cos(cycle*2) + .12*Math.sin(t*.7+phase);
+      const radius = .052 + (i%4)*.010;
+      data.set([x,y,radius/Math.sqrt(stretch),radius*stretch],i*4);
+      if (i<6) {
+        // A neck grows and pinches as each smaller lobe separates and rejoins.
+        const separation = .025 + .095*(.5+.5*Math.sin(t*.32+phase));
+        const angle = t*.20+phase;
+        data.set([x+Math.cos(angle)*separation,y+Math.sin(angle)*separation,radius*.55,radius*.67],(i+12)*4);
+      }
+    }
+    gl.uniform2f(uResolution,canvas.width,canvas.height);
+    gl.uniform1f(uTime,t);
+    gl.uniform4fv(uBlobs,data);
+    gl.drawArrays(gl.TRIANGLES,0,6);
+    requestAnimationFrame(animate);
+  }
+  requestAnimationFrame(animate);
+})();
+</script>
+</body>
+</html>

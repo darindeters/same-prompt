@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#100b25">
+<title>Domino Spiral</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #100b25; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas aria-label="Hundreds of rainbow dominoes falling in a continuous spiral chain reaction"></canvas>
+<script>
+(() => {
+  'use strict';
+  const canvas = document.querySelector('canvas');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const TAU = Math.PI * 2;
+  const tiles = [];
+  const W = 16, D = 6.5, H = 37;
+  const delay = 0.031, fallTime = 0.34;
+  let width, height, scale, pixelRatio;
+
+  // Sample by distance so that the reaction keeps a steady physical pace.
+  let previous = null, carried = 0;
+  for (let a = 0; a < TAU * 4.35; a += 0.0015) {
+    const r = 44 + a * 15.05;
+    const p = { x: Math.cos(a + 0.55) * r, y: Math.sin(a + 0.55) * r };
+    if (previous) carried += Math.hypot(p.x - previous.x, p.y - previous.y);
+    if (!previous || carried >= 17) {
+      tiles.push(p);
+      carried = 0;
+    }
+    previous = p;
+  }
+  tiles.reverse();
+  tiles.forEach((tile, i) => {
+    const next = tiles[Math.min(i + 1, tiles.length - 1)];
+    const prev = tiles[Math.max(0, i - 1)];
+    const length = Math.hypot(next.x - prev.x, next.y - prev.y);
+    tile.tx = (next.x - prev.x) / length;
+    tile.ty = (next.y - prev.y) / length;
+    tile.nx = -tile.ty;
+    tile.ny = tile.tx;
+    const hue = (i / tiles.length * 660 + 325) % 360;
+    tile.colors = [
+      `hsl(${hue}, 94%, 59%)`,
+      `hsl(${hue}, 85%, 43%)`,
+      `hsl(${hue}, 100%, 74%)`,
+      `hsl(${hue}, 94%, 53%)`
+    ];
+    tile.pips = i % 6 + 1;
+  });
+
+  const finish = (tiles.length - 1) * delay + fallTime;
+  const resetStart = finish + 1.7;
+  const duration = resetStart + tiles.length * 0.007 + 1.25;
+  const pipLayouts = [
+    [[0, 0]],
+    [[-1, -1], [1, 1]],
+    [[-1, -1], [0, 0], [1, 1]],
+    [[-1, -1], [1, -1], [-1, 1], [1, 1]],
+    [[-1, -1], [1, -1], [0, 0], [-1, 1], [1, 1]],
+    [[-1, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [1, 1]]
+  ];
+  function resize() {
+    width = innerWidth;
+    height = innerHeight;
+    pixelRatio = Math.min(devicePixelRatio || 1, 2);
+    canvas.width = Math.round(width * pixelRatio);
+    canvas.height = Math.round(height * pixelRatio);
+    scale = Math.min(width / 1080, height / 1000);
+  }
+  addEventListener('resize', resize, { passive: true });
+  resize();
+
+  function project(p) { return [p[0], p[1] * 0.82 - p[2]]; }
+  function polygon(points) {
+    ctx.beginPath();
+    for (let i = 0; i < points.length; i++) {
+      const p = project(points[i]);
+      if (i === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]);
+    }
+    ctx.closePath();
+  }
+  function clamp(x) { return Math.max(0, Math.min(1, x)); }
+
+  function draw(now) {
+    const time = ((now - start) / 1000 + 0.11) % duration;
+    ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+    const background = ctx.createRadialGradient(width * 0.48, height * 0.43, 0,
+      width / 2, height / 2, Math.max(width, height) * 0.7);
+    background.addColorStop(0, '#302047');
+    background.addColorStop(0.55, '#19112e');
+    background.addColorStop(1, '#090819');
+    ctx.fillStyle = background;
+    ctx.fillRect(0, 0, width, height);
+    ctx.translate(width / 2, height / 2 + 28 * scale);
+    ctx.scale(scale, scale);
+
+    // A softly lit, floating circular stage gives the tiny pieces a shared ground.
+    ctx.save();
+    ctx.shadowColor = '#05030e';
+    ctx.shadowBlur = 45;
+    ctx.shadowOffsetY = 22;
+    ctx.beginPath();
+    ctx.ellipse(0, 7, 509, 419, 0, 0, TAU);
+    ctx.fillStyle = '#100c20';
+    ctx.fill();
+    ctx.restore();
+    const floor = ctx.createRadialGradient(-120, -150, 0, 0, 0, 550);
+    floor.addColorStop(0, '#352748');
+    floor.addColorStop(0.65, '#241b36');
+    floor.addColorStop(1, '#191327');
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 509, 417, 0, 0, TAU);
+    ctx.fillStyle = floor;
+    ctx.fill();
+    ctx.strokeStyle = '#8f69bc25';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    const faces = [];
+    for (let i = 0; i < tiles.length; i++) {
+      const tile = tiles[i];
+      let progress = clamp((time - i * delay) / fallTime);
+      // Acceleration followed by a small impact rebound.
+      let angle = 1.435 * Math.pow(progress, 1.65);
+      if (progress === 1) {
+        const impactAge = time - i * delay - fallTime;
+        angle -= Math.sin(Math.min(1, impactAge / 0.19) * Math.PI) * 0.065;
+      }
+      if (time >= resetStart) {
+        const reset = clamp((time - resetStart - i * 0.007) / 0.7);
+        angle *= 1 - reset * reset * (3 - 2 * reset);
+      }
+      const s = Math.sin(angle), c = Math.cos(angle);
+      function point(u, v, z) {
+        const forward = v * c + z * s;
+        return [tile.x + tile.nx * u + tile.tx * forward,
+          tile.y + tile.ny * u + tile.ty * forward,
+          3.3 + z * c - v * s];
+      }
+
+      // Contact shadows remain on the stage as the pieces tip over.
+      const shadowLength = 12 + s * H;
+      polygon([
+        [tile.x + tile.nx * 9, tile.y + tile.ny * 9, 0],
+        [tile.x - tile.nx * 9, tile.y - tile.ny * 9, 0],
+        [tile.x - tile.nx * 9 + tile.tx * shadowLength + 7,
+          tile.y - tile.ny * 9 + tile.ty * shadowLength + 9, 0],
+        [tile.x + tile.nx * 9 + tile.tx * shadowLength + 7,
+          tile.y + tile.ny * 9 + tile.ty * shadowLength + 9, 0]
+      ]);
+      ctx.fillStyle = '#05020c50';
+      ctx.fill();
+
+      if (progress > 0 && progress < 1 && time < resetStart) {
+        const p = project([tile.x, tile.y, 0]);
+        const glow = ctx.createRadialGradient(p[0], p[1], 0, p[0], p[1], 38);
+        glow.addColorStop(0, '#ffbfed30');
+        glow.addColorStop(1, '#ffbfed00');
+        ctx.fillStyle = glow;
+        ctx.fillRect(p[0] - 38, p[1] - 38, 76, 76);
+      }
+
+      const definitions = [
+        { vertices: [[-W/2,-D/2,0],[W/2,-D/2,0],[W/2,-D/2,H],[-W/2,-D/2,H]], color: 0, side: -1 },
+        { vertices: [[W/2,D/2,0],[-W/2,D/2,0],[-W/2,D/2,H],[W/2,D/2,H]], color: 3, side: 1 },
+        { vertices: [[-W/2,D/2,0],[-W/2,-D/2,0],[-W/2,-D/2,H],[-W/2,D/2,H]], color: 1 },
+        { vertices: [[W/2,-D/2,0],[W/2,D/2,0],[W/2,D/2,H],[W/2,-D/2,H]], color: 1 },
+        { vertices: [[-W/2,-D/2,H],[W/2,-D/2,H],[W/2,D/2,H],[-W/2,D/2,H]], color: 2 }
+      ];
+      for (const def of definitions) {
+        const points = def.vertices.map(v => point(...v));
+        const depth = points.reduce((sum, p) => sum + p[1] + p[2] * 0.82, 0) / 4;
+        faces.push({ points, depth, color: tile.colors[def.color], side: def.side, point, pips: tile.pips });
+      }
+    }
+
+    faces.sort((a, b) => a.depth - b.depth);
+    ctx.lineJoin = 'round';
+    for (const face of faces) {
+      polygon(face.points);
+      ctx.fillStyle = face.color;
+      ctx.fill();
+      ctx.lineWidth = 0.65;
+      ctx.strokeStyle = '#110b293b';
+      ctx.stroke();
+      if (face.side) {
+        const v = face.side * (D / 2 + 0.03);
+        const a = project(face.point(-W/2 + 1.5, v, H / 2));
+        const b = project(face.point(W/2 - 1.5, v, H / 2));
+        ctx.beginPath();
+        ctx.moveTo(...a);
+        ctx.lineTo(...b);
+        ctx.strokeStyle = '#17092d45';
+        ctx.lineWidth = 0.8;
+        ctx.stroke();
+        ctx.fillStyle = '#fff8efec';
+        for (let half = 0; half < 2; half++) {
+          const layout = pipLayouts[(face.pips + half * 2 - 1) % 6];
+          for (const [px, py] of layout) {
+            const u = px * 3.5, z = H * (half ? 0.75 : 0.25) + py * 4.3;
+            const dots = [];
+            for (let k = 0; k < 9; k++) {
+              const a = k / 9 * TAU;
+              dots.push(face.point(u + Math.cos(a) * 1.15, v, z + Math.sin(a) * 1.15));
+            }
+            polygon(dots);
+            ctx.fill();
+          }
+        }
+      }
+    }
+    requestAnimationFrame(draw);
+  }
+  const start = performance.now();
+  requestAnimationFrame(draw);
+})();
+</script>
+</body>
+</html>

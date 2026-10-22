@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Lava Lamp</title>
+<style>
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #070210;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('canvas');
+  const gl = canvas.getContext('webgl', {
+    alpha: false,
+    antialias: false,
+    depth: false,
+    stencil: false,
+    preserveDrawingBuffer: false
+  });
+
+  if (!gl) return;
+
+  const vsSource = `
+    attribute vec2 a_pos;
+    varying vec2 v_uv;
+    void main() {
+      v_uv = a_pos * 0.5 + 0.5;
+      gl_Position = vec4(a_pos, 0.0, 1.0);
+    }
+  `;
+
+  const fsSource = `
+    precision highp float;
+    varying vec2 v_uv;
+    uniform vec2 u_res;
+    uniform float u_time;
+    uniform vec4 u_blobs[18];      // xyz = pos, w = radius
+    uniform vec4 u_blobMeta[18];   // x = stretchY, y = temperature, z = wobblePhase, w = wobbleAmp
+
+    #define NUM_BLOBS 18
+
+    // Smooth minimum (polynomial smin) for organic liquid merging & stretching necks
+    vec2 sminWax(float a, float tA, float b, float tB, float k) {
+      float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+      float d = mix(b, a, h) - k * h * (1.0 - h);
+      float temp = mix(tB, tA, h);
+      return vec2(d, temp);
+    }
+
+    // Lava lamp glass inner profile radius as a function of y
+    // Lamp inner cavity runs from y = -0.86 to y = +0.86
+    float vesselRadius(float y) {
+      // Classic mid-century Astro lava lamp silhouette:
+      // Wide lower belly around y = -0.52, gentle taper upward to y = +0.86,
+      // and slight inward curve at the very bottom (-0.86 to -0.52).
+      float yn = clamp((y + 0.86) / 1.72, 0.0, 1.0);
+      float belly = sin(pow(yn, 0.62) * 3.14159265);
+      float baseCurve = mix(0.35, 0.21, smoothstep(0.18, 0.98, yn));
+      return baseCurve + 0.14 * belly * (1.0 - 0.55 * yn);
+    }
+
+    // Signed distance to the inner glass cavity
+    float sdVesselInner(vec3 p) {
+      float r = vesselRadius(p.y);
+      float cyl = length(p.xz) - r;
+      float topCap = p.y - 0.86;
+      float botCap = -0.86 - p.y;
+      return max(cyl, max(topCap, botCap));
+    }
+
+    // Evaluate the 3D metaball wax field: returns vec2(signedDistance, temperature)
+    vec2 mapWax(vec3 p) {
+      // Bottom molten pool resting on heating coil
+      float wave = 0.018 * sin(p.x * 9.0 + u_time * 1.9) * cos(p.z * 9.0 - u_time * 1.5);
+      vec3 bp = p - vec3(0.0, -0.84 + wave, 0.0);
+      bp.y *= 2.4;
+      float dPool = length(bp) - 0.36;
+      float tPool = 0.96;
+
+      // Top cooling wax meniscus ring/droplet at the very top under the cap
+      vec3 tp = p - vec3(0.0, 0.85, 0.0);
+      tp.y *= 2.8;
+      float dTop = length(tp) - 0.19;
+      float tTop = 0.18;
+
+      vec2 res = sminWax(dPool, tPool, dTop, tTop, 0.14);
+
+      for (int i = 0; i < NUM_BLOBS; i++) {
+        vec4 b = u_blobs[i];
+        vec4 m = u_blobMeta[i];
+        vec3 q = p - b.xyz;
+
+        // Vertical stretch & subtle organic necking
+        float sy = m.x;
+        q.y /= sy;
+
+        // Subtle organic surface undulation
+        float wob = sin(q.y * 10.0 + m.z) * cos(q.x * 9.0 - m.z * 0.7) * m.w;
+        float d = (length(q) - b.w) * min(1.0, sy * 0.88) + wob;
+
+        res = sminWax(res.x, res.y, d, m.y, 0.155);
+      }
+
+      // Constrain wax smoothly inside the glass wall so blobs press flat against glass
+      float wallDist = (length(p.xz) - (vesselRadius(p.y) - 0.018));
+      res.x = -sminWax(-res.x, res.y, -wallDist, res.y, 0.045).x;
+
+      return res;
+    }
+
+    vec3 calcWaxNormal(vec3 p) {
+      vec2 e = vec2(0.0025, 0.0);
+      return normalize(vec3(
+        mapWax(p + e.xyy).x - mapWax(p - e.xyy).x,
+        mapWax(p + e.yxy).x - mapWax(p - e.yxy).x,
+        mapWax(p + e.yyx).x - mapWax(p - e.yyx).x
+      ));
+    }
+
+    // Rich vivid color palette mapping temperature & subsurface thickness
+    vec3 waxColor(float temp, float thickness, float fresnel, float yPos) {
+      // Deep saturated magenta/crimson for cooler wax, neon coral-orange for warm,
+      // incandescent golden-yellow core for hottest wax near the bottom coil
+      vec3 coolCol = vec3(0.95, 0.05, 0.52);   // Vivid electric magenta-pink
+      vec3 midCol  = vec3(1.00, 0.22, 0.08);   // Saturated neon coral-red
+      vec3 hotCol  = vec3(1.00, 0.76, 0.05);   // Glowing golden-amber
+      vec3 coreCol = vec3(1.00, 0.96, 0.62);   // Incandescent white-gold core
+
+      vec3 base = mix(coolCol, midCol, smoothstep(0.1, 0.58, temp));
+      base = mix(base, hotCol, smoothstep(0.52, 0.92, temp));
+
+      // Subsurface glow: thinner areas & hot bottom transmit intense light
+      float bottomHeat = smoothstep(0.3, -0.88, yPos);
+      float sss = clamp(exp(-thickness * 3.2) * 0.85 + 0.25, 0.0, 1.0);
+      vec3 col = mix(base * 0.78, mix(hotCol, coreCol, temp * 0.65 + bottomHeat * 0.35), sss * (0.45 + 0.45 * temp));
+
+      // Vivid magenta-violet iridescent rim on blob edges
+      vec3 rimCol = mix(vec3(1.0, 0.15, 0.75), vec3(1.0, 0.85, 0.3), temp);
+      col += rimCol * pow(fresnel, 2.4) * 0.75;
+
+      // Boost bottom incandescent illumination from the lamp's internal heat bulb
+      col += vec3(1.0, 0.45, 0.08) * bottomHeat * 0.45;
+      return col;
+    }
+
+    // Ray-cone / revolution intersection approximation for the full lamp silhouette
+    void main() {
+      // Normalized square coordinates centered at (0,0), height [-1.32, 1.32]
+      float minDim = min(u_res.x, u_res.y);
+      vec2 p = (gl_FragCoord.xy - 0.5 * u_res) / minDim * 2.48;
+
+      // Subtle camera breathing
+      vec3 ro = vec3(0.0, -0.04, 2.85);
+      vec3 rd = normalize(vec3(p.x, p.y, -2.15));
+
+      // Background: rich nocturnal violet-indigo space with dynamic radial aura from the lamp
+      float rBg = length(p * vec2(0.85, 0.65));
+      vec3 bgDeep = vec3(0.035, 0.008, 0.09);
+      vec3 bgMid  = vec3(0.16, 0.015, 0.28);
+      vec3 col = mix(bgMid, bgDeep, smoothstep(0.0, 1.45, rBg));
+
+      // Dynamic ambient glow cast by the blobs onto the background
+      vec3 blobGlow = vec3(0.0);
+      for (int i = 0; i < 10; i++) {
+        vec4 b = u_blobs[i];
+        float t = u_blobMeta[i].y;
+        vec2 bProj = b.xy * 0.86;
+        float d2 = dot(p - bProj, p - bProj);
+        vec3 gCol = mix(vec3(0.95, 0.06, 0.58), vec3(1.0, 0.48, 0.05), t);
+        blobGlow += gCol * (b.w * b.w * 0.42) / (d2 + 0.14);
+      }
+      // Base bulb glow on background
+      float dBulb = length(p - vec2(0.0, -0.68));
+      blobGlow += vec3(1.0, 0.35, 0.08) * 0.12 / (dBulb * dBulb + 0.18);
+      col += blobGlow * 0.42;
+
+      // Lamp vertical regions in world space along the z=0 plane approximation
+      // Ray intersection with plane z = 0 for 2D/3D hybrid silhouette of metal cap & base,
+      // plus full 3D raymarching inside the glass bottle
+      float tPlane = -ro.z / rd.z;
+      vec3 hit0 = ro + rd * tPlane;
+      float y0 = hit0.y;
+      float x0 = hit0.x;
+
+      // 1. Check if we hit the Glass Bottle region: y in [-0.86, 0.86]
+      // Raymarch the 3D cylinder/frustum bounding volume
+      float rBound = 0.49;
+      float a = dot(rd.xz, rd.xz);
+      float b = 2.0 * dot(ro.xz, rd.xz);
+      float c = dot(ro.xz, ro.xz) - rBound * rBound;
+      float disc = b * b - 4.0 * a * c;
+
+      bool hitGlass = false;
+      vec3 glassColor = vec3(0.0);
+      float glassAlpha = 0.0;
+
+      if (disc > 0.0) {
+        float sDisc = sqrt(disc);
+        float tNear = max(0.0, (-b - sDisc) / (2.0 * a));
+        float tFar  = (-b + sDisc) / (2.0 * a);
+
+        // Find exact entry & exit of the tapered glass outer wall (outer radius = vesselRadius + 0.016)
+        float tEnter = -1.0;
+        float tExit = -1.0;
+        float tStep = (tFar - tNear) / 28.0;
+        float tCur = tNear;
+        for (int i = 0; i < 29; i++) {
+          vec3 pos = ro + rd * tCur;
+          float rOuter = vesselRadius(pos.y) + 0.016;
+          if (pos.y >= -0.865 && pos.y <= 0.865 && length(pos.xz) <= rOuter) {
+            if (tEnter < 0.0) tEnter = tCur - tStep;
+            tExit = tCur;
+          }
+          tCur += tStep;
+        }
+
+        if (tEnter > 0.0) {
+          // Refine tEnter with 5 bisection steps
+          float lo = tEnter, hi = tEnter + tStep;
+          for (int i = 0; i < 5; i++) {
+            float mid = 0.5 * (lo + hi);
+            vec3 pos = ro + rd * mid;
+            float rOuter = vesselRadius(pos.y) + 0.016;
+            if (pos.y >= -0.865 && pos.y <= 0.865 && length(pos.xz) <= rOuter) hi = mid;
+            else lo = mid;
+          }
+          tEnter = hi;
+          vec3 pEnter = ro + rd * tEnter;
+
+          if (pEnter.y >= -0.862 && pEnter.y <= 0.862) {
+            hitGlass = true;
+
+            // Compute outer glass normal
+            float eps = 0.005;
+            float drdy = (vesselRadius(pEnter.y + eps) - vesselRadius(pEnter.y - eps)) / (2.0 * eps);
+            vec3 gNorm = normalize(vec3(pEnter.x, -drdy * length(pEnter.xz), pEnter.z));
+            float gFresnel = pow(1.0 - clamp(dot(-rd, gNorm), 0.0, 1.0), 3.0);
+
+            // Subtle refraction of ray entering liquid
+            vec3 rdIn = normalize(rd - gNorm * 0.085);
+
+            // Liquid background gradient inside bottle: rich electric violet at top -> glowing magenta-amber at bottom
+            float yn = clamp((pEnter.y + 0.86) / 1.72, 0.0, 1.0);
+            vec3 liqBot = vec3(0.95, 0.14, 0.36);
+            vec3 liqMid = vec3(0.38, 0.02, 0.52);
+            vec3 liqTop = vec3(0.14, 0.01, 0.34);
+            vec3 liqCol = mix(liqBot, liqMid, smoothstep(0.0, 0.55, yn));
+            liqCol = mix(liqCol, liqTop, smoothstep(0.45, 1.0, yn));
+
+            // Intense upward thermal light cone from bottom heating coil
+            float radialCenter = length(pEnter.xz) / max(0.001, vesselRadius(pEnter.y));
+            float coilGlow = exp(-yn * 2.4) * (1.0 - 0.45 * radialCenter * radialCenter);
+            liqCol += vec3(1.0, 0.52, 0.12) * coilGlow * 0.85;
+
+            // Raymarch wax metaballs inside the liquid
+            float t = tEnter;
+            float tMax = tExit + 0.08;
+            bool hitWax = false;
+            vec3 pWax = vec3(0.0);
+            float waxTemp = 0.5;
+            float minWaxDist = 10.0;
+            float glowAccum = 0.0;
+
+            for (int i = 0; i < 64; i++) {
+              vec3 pos = ro + rdIn * t;
+              if (t > tMax || pos.y < -0.88 || pos.y > 0.88) break;
+              vec2 res = mapWax(pos);
+              float d = res.x;
+              minWaxDist = min(minWaxDist, d);
+
+              // Accumulate volumetric halo around glowing wax blobs
+              glowAccum += exp(-max(0.0, d) * 14.0) * 0.018 * (0.6 + 0.6 * res.y);
+
+              if (d < 0.0022) {
+                hitWax = true;
+                pWax = pos;
+                waxTemp = res.y;
+                break;
+              }
+              t += max(0.009, d * 0.68);
+            }
+
+            // Add volumetric internal liquid glow from nearby wax
+            vec3 haloCol = mix(vec3(1.0, 0.08, 0.58), vec3(1.0, 0.58, 0.08), clamp(1.0 - yn * 0.7, 0.0, 1.0));
+            liqCol += haloCol * glowAccum * 1.15;
+
+            if (hitWax) {
+              vec3 n = calcWaxNormal(pWax);
+              float wFresnel = clamp(1.0 - dot(-rdIn, n), 0.0, 1.0);
+
+              // Estimate subsurface thickness by sampling deeper along the ray & upward toward light
+              float dDeep1 = mapWax(pWax + rdIn * 0.09).x;
+              float dDeep2 = mapWax(pWax + rdIn * 0.19).x;
+              float dLight = mapWax(pWax + vec3(0.0, -0.12, 0.0)).x;
+              float thickness = clamp((-dDeep1 - dDeep2 - dLight * 0.7) * 3.8, 0.0, 1.4);
+
+              vec3 wCol = waxColor(waxTemp, thickness, wFresnel, pWax.y);
+
+              // Specular highlights on the molten wax blobs:
+              // 1) Warm bottom-up light from heating coil
+              vec3 lBot = normalize(vec3(0.0, -0.95, 0.25) - pWax);
+              float diffBot = max(0.0, dot(n, lBot));
+              wCol += vec3(1.0, 0.65, 0.2) * diffBot * 0.38;
+
+              // 2) Glossy studio rim / key light
+              vec3 lKey = normalize(vec3(-0.55, 0.45, 0.85));
+              vec3 hKey = normalize(lKey - rdIn);
+              float specKey = pow(max(0.0, dot(n, hKey)), 36.0);
+              wCol += vec3(1.0, 0.85, 0.95) * specKey * 0.55;
+
+              // 3) Secondary cool cyan-violet fill rim on the right
+              vec3 lRim = normalize(vec3(0.75, 0.2, 0.55));
+              float diffRim = pow(max(0.0, dot(n, lRim)), 3.0);
+              wCol += vec3(0.95, 0.25, 0.85) * diffRim * 0.28;
+
+              // Blend wax slightly with liquid depth fog
+              float liquidDepth = clamp((t - tEnter) * 1.35, 0.0, 0.42);
+              liqCol = mix(wCol, liqCol, liquidDepth * 0.42);
+            }
+
+            // Glass thickness rim & studio vertical specular reflections
+            vec3 glassRimCol = mix(vec3(0.95, 0.2, 0.75), vec3(1.0, 0.75, 0.35), coilGlow);
+            liqCol = mix(liqCol, glassRimCol, gFresnel * 0.52);
+
+            // Crisp curved vertical studio window highlights on the glass surface
+            float reflAngle = atan(gNorm.x, gNorm.z);
+            float stripe1 = smoothstep(0.09, 0.0, abs(reflAngle + 0.58)) * smoothstep(0.85, 0.72, abs(pEnter.y));
+            float stripe2 = smoothstep(0.045, 0.0, abs(reflAngle - 0.72)) * smoothstep(0.85, 0.72, abs(pEnter.y));
+            liqCol += vec3(1.0, 0.92, 0.98) * (stripe1 * 0.48 + stripe2 * 0.26);
+
+            // Inner wall meniscus shadow/glow at edges
+            float edgeDark = smoothstep(1.0, 0.86, radialCenter);
+            liqCol *= mix(0.65, 1.0, edgeDark);
+
+            glassColor = liqCol;
+            glassAlpha = 1.0;
+          }
+        }
+      }
+
+      if (hitGlass) {
+        col = glassColor;
+      }
+
+      // 2. Render Brushed Anodized Metal Cap (top) and Conical Base (bottom) in 3D cylinder/cone space
+      // Top Cap: y in [0.835, 1.15]
+      // Bottom Base: y in [-1.22, -0.835]
+      {
+        // Intersect ray with metal cap & base surfaces of revolution
+        float tMetal = -1.0;
+        vec3 pMetal = vec3(0.0);
+        int metalPart = 0; // 1 = cap, 2 = upper base cone, 3 = lower base cone
+
+        float tStart = max(0.0, (-b - sqrt(max(0.0, disc))) / (2.0 * a));
+        float tEnd   = (-b + sqrt(max(0.0, disc))) / (2.0 * a);
+        if (disc > 0.0) {
+          float dt = (tEnd - tStart) / 36.0;
+          float tc = tStart;
+          for (int i = 0; i < 37; i++) {
+            vec3 pos = ro + rd * tc;
+            float rCap = -1.0;
+            int part = 0;
+            if (pos.y >= 0.835 && pos.y <= 1.14) {
+              // Tapered top cap with rounded crown
+              float yn = (pos.y - 0.835) / (1.14 - 0.835);
+              rCap = mix(0.228, 0.145, yn) * smoothstep(1.0, 0.92, yn * 0.93);
+              part = 1;
+            } else if (pos.y <= -0.835 && pos.y >= -1.22) {
+              // Classic hourglass metal base: narrows to a waist at y = -1.03, flares to foot at y = -1.22
+              float yn = (-0.835 - pos.y) / (1.22 - 0.835); // 0 at glass joint, 1 at bottom foot
+              if (yn < 0.52) {
+                float u = yn / 0.52;
+                rCap = mix(0.366, 0.21, smoothstep(0.0, 1.0, u));
+                part = 2;
+              } else {
+                float u = (yn - 0.52) / 0.48;
+                rCap = mix(0.21, 0.41, pow(u, 0.85));
+                part = 3;
+              }
+            }
+            if (rCap > 0.0 && length(pos.xz) <= rCap) {
+              // Refine with 5 bisection steps
+              float lo = tc - dt, hi = tc;
+              for (int j = 0; j < 5; j++) {
+                float mid = 0.5 * (lo + hi);
+                vec3 mp = ro + rd * mid;
+                float mr = -1.0;
+                if (mp.y >= 0.835 && mp.y <= 1.14) {
+                  float yn = (mp.y - 0.835) / (1.14 - 0.835);
+                  mr = mix(0.228, 0.145, yn) * smoothstep(1.0, 0.92, yn * 0.93);
+                } else if (mp.y <= -0.835 && mp.y >= -1.22) {
+                  float yn = (-0.835 - mp.y) / (1.22 - 0.835);
+                  if (yn < 0.52) mr = mix(0.366, 0.21, smoothstep(0.0, 1.0, yn / 0.52));
+                  else mr = mix(0.21, 0.41, pow((yn - 0.52) / 0.48, 0.85));
+                }
+                if (mr > 0.0 && length(mp.xz) <= mr) hi = mid;
+                else lo = mid;
+              }
+              tMetal = hi;
+              pMetal = ro + rd * tMetal;
+              metalPart = part;
+              break;
+            }
+            tc += dt;
+          }
+        }
+
+        if (tMetal > 0.0) {
+          float angle = atan(pMetal.x, pMetal.z);
+          vec3 mNorm = normalize(vec3(pMetal.x, 0.18 * (metalPart == 1 ? 1.0 : (metalPart == 2 ? -1.4 : 1.2)), pMetal.z));
+
+          // Anodized dark gunmetal-violet base with warm copper/magenta reflections from the lamp
+          vec3 metalBase = vec3(0.09, 0.05, 0.16);
+          float specBand1 = exp(-pow((angle + 0.52) * 3.2, 2.0));
+          float specBand2 = exp(-pow((angle - 0.68) * 4.5, 2.0));
+          float brushed = 0.92 + 0.08 * sin(pMetal.y * 280.0);
+
+          vec3 mCol = metalBase;
+          mCol += vec3(0.75, 0.35, 0.85) * specBand1 * 0.55 * brushed;
+          mCol += vec3(1.0, 0.55, 0.32) * specBand2 * 0.42 * brushed;
+
+          // Warm incandescent spill near the glass seam
+          if (metalPart == 1) {
+            float seamDist = pMetal.y - 0.835;
+            mCol += vec3(1.0, 0.18, 0.65) * exp(-seamDist * 18.0) * 0.55;
+            // Subtle top crown rim fade
+            mCol *= smoothstep(1.142, 1.11, pMetal.y);
+          } else {
+            float seamDist = -0.835 - pMetal.y;
+            mCol += vec3(1.0, 0.45, 0.12) * exp(-seamDist * 14.0) * 0.85;
+            // Waist ring accent
+            float waist = exp(-pow((pMetal.y + 1.035) * 65.0, 2.0));
+            mCol += vec3(1.0, 0.4, 0.7) * waist * 0.35;
+            // Bottom table shadow
+            mCol *= smoothstep(-1.222, -1.19, pMetal.y);
+          }
+
+          float fres = pow(1.0 - clamp(dot(-rd, mNorm), 0.0, 1.0), 3.0);
+          mCol += vec3(0.6, 0.15, 0.8) * fres * 0.35;
+
+          col = mCol;
+        }
+      }
+
+      // Subtle floor reflection pool under the base
+      if (p.y < -1.15) {
+        float floorDist = length(vec2(p.x * 0.85, (p.y + 1.22) * 4.2));
+        col += vec3(0.95, 0.2, 0.55) * exp(-floorDist * 3.5) * 0.25;
+      }
+
+      // Rich ACES-inspired filmic tonemapping for vivid, punchy, saturated colors on phone screens
+      col = max(col, vec3(0.0));
+      col = (col * (2.51 * col + 0.03)) / (col * (2.43 * col + 0.59) + 0.14);
+      col = pow(col, vec3(0.92));
+
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `;
+
+  function compileShader(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    return s;
+  }
+
+  const prog = gl.createProgram();
+  gl.attachShader(prog, compileShader(gl.VERTEX_SHADER, vsSource));
+  gl.attachShader(prog, compileShader(gl.FRAGMENT_SHADER, fsSource));
+  gl.linkProgram(prog);
+  gl.useProgram(prog);
+
+  const quad = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+  gl.bufferData(
+    gl.ARRAY_BUFFER,
+    new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]),
+    gl.STATIC_DRAW
+  );
+
+  const aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  const uRes = gl.getUniformLocation(prog, 'u_res');
+  const uTime = gl.getUniformLocation(prog, 'u_time');
+  const uBlobs = [];
+  const uBlobMeta = [];
+  for (let i = 0; i < 18; i++) {
+    uBlobs.push(gl.getUniformLocation(prog, `u_blobs[${i}]`));
+    uBlobMeta.push(gl.getUniformLocation(prog, `u_blobMeta[${i}]`));
+  }
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.floor(window.innerWidth * dpr);
+    const h = Math.floor(window.innerHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Inner glass radius helper matching the shader
+  function vesselRadius(y) {
+    const yn = Math.max(0, Math.min(1, (y + 0.86) / 1.72));
+    const belly = Math.sin(Math.pow(yn, 0.62) * Math.PI);
+    const s = Math.max(0, Math.min(1, (yn - 0.18) / (0.98 - 0.18)));
+    const smooth = s * s * (3 - 2 * s);
+    const baseCurve = 0.35 + (0.21 - 0.35) * smooth;
+    return baseCurve + 0.14 * belly * (1.0 - 0.55 * yn);
+  }
+
+  // 18 metaballs organized to produce continuous, dramatic rising, stretching, merging, and splitting:
+  // - 12 primary thermal buoyancy blobs
+  // - 6 companion/pinch-off sub-blobs coupled to primary blobs so rising/sinking blobs visibly
+  //   stretch into elongated hourglass columns, pinch at the neck, split into two droplets,
+  //   and later coalesce/merge with neighboring blobs.
+  const primaryBlobs = [
+    { x: -0.04, y: -0.62, z:  0.03, vx: 0, vy:  0.19, vz: 0, r: 0.135, temp: 0.92, phase: 0.2, splitCycle: 0.35, splitSpeed: 0.48 },
+    { x:  0.08, y: -0.28, z: -0.04, vx: 0, vy:  0.22, vz: 0, r: 0.145, temp: 0.84, phase: 1.4, splitCycle: 1.65, splitSpeed: 0.52 },
+    { x: -0.07, y:  0.14, z:  0.02, vx: 0, vy:  0.18, vz: 0, r: 0.138, temp: 0.72, phase: 2.7, splitCycle: 2.95, splitSpeed: 0.44 },
+    { x:  0.05, y:  0.48, z:  0.04, vx: 0, vy: -0.15, vz: 0, r: 0.125, temp: 0.32, phase: 3.8, splitCycle: 4.10, splitSpeed: 0.50 },
+    { x: -0.09, y: -0.06, z: -0.05, vx: 0, vy: -0.18, vz: 0, r: 0.118, temp: 0.28, phase: 4.9, splitCycle: 5.20, splitSpeed: 0.46 },
+    { x:  0.02, y: -0.74, z:  0.01, vx: 0, vy:  0.15, vz: 0, r: 0.142, temp: 0.96, phase: 5.5, splitCycle: 0.90, splitSpeed: 0.42 },
+
+    // Independent free-roaming blobs that merge & overtake across the column
+    { x:  0.11, y: -0.44, z:  0.05, vx: 0, vy:  0.24, vz: 0, r: 0.105, temp: 0.88, phase: 0.8 },
+    { x: -0.11, y:  0.34, z: -0.03, vx: 0, vy:  0.14, vz: 0, r: 0.112, temp: 0.62, phase: 2.1 },
+    { x:  0.00, y:  0.68, z: -0.02, vx: 0, vy: -0.12, vz: 0, r: 0.122, temp: 0.22, phase: 3.3 },
+    { x: -0.05, y: -0.52, z: -0.06, vx: 0, vy: -0.17, vz: 0, r: 0.102, temp: 0.35, phase: 4.4 },
+    { x:  0.07, y:  0.02, z:  0.06, vx: 0, vy:  0.21, vz: 0, r: 0.115, temp: 0.78, phase: 1.9 },
+    { x: -0.02, y:  0.56, z:  0.03, vx: 0, vy:  0.11, vz: 0, r: 0.108, temp: 0.54, phase: 5.9 }
+  ];
+
+  const renderBlobs = new Array(18).fill(0).map(() => ({
+    x: 0, y: 0, z: 0, r: 0.1, stretch: 1.0, temp: 0.5, phase: 0, wob: 0.004
+  }));
+
+  function stepPhysics(dt, time) {
+    const n = primaryBlobs.length;
+
+    for (let i = 0; i < n; i++) {
+      const b = primaryBlobs[i];
+
+      // Thermal exchange: heat up near bottom (-0.82), cool down near top (+0.78)
+      if (b.y < -0.48) {
+        const bottomIntensity = (-0.48 - b.y) / 0.38;
+        b.temp += (1.0 - b.temp) * (0.85 + 0.9 * bottomIntensity) * dt;
+      } else if (b.y > 0.42) {
+        const topIntensity = (b.y - 0.42) / 0.42;
+        b.temp += (0.05 - b.temp) * (0.75 + 0.85 * topIntensity) * dt;
+      } else {
+        // Gradual cooling on outer walls, slight warming in center plume
+        const centerFactor = 1.0 - Math.min(1.0, Math.hypot(b.x, b.z) / 0.22);
+        const targetT = 0.38 + 0.32 * centerFactor;
+        b.temp += (targetT - b.temp) * 0.16 * dt;
+      }
+      b.temp = Math.max(0.05, Math.min(0.99, b.temp));
+
+      // Buoyancy force driven by temperature relative to neutral 0.50
+      const buoyancy = (b.temp - 0.50) * 0.52;
+      b.vy += buoyancy * dt;
+
+      // Gentle convective swirl: warm blobs drift slightly toward the central thermal plume,
+      // cooler sinking blobs drift slightly toward the outer glass walls
+      const swirlAngle = time * 0.45 + b.phase;
+      const desiredRadius = b.temp > 0.52 ? 0.045 : 0.115;
+      const targetX = Math.cos(swirlAngle) * desiredRadius;
+      const targetZ = Math.sin(swirlAngle) * desiredRadius * 0.65;
+
+      b.vx += (targetX - b.x) * 0.65 * dt;
+      b.vz += (targetZ - b.z) * 0.65 * dt;
+
+      // Viscous fluid drag
+      b.vx *= Math.pow(0.42, dt);
+      b.vy *= Math.pow(0.54, dt);
+      b.vz *= Math.pow(0.42, dt);
+
+      // Speed cap so motion stays hypnotic and lava-like
+      const maxVy = 0.27;
+      if (b.vy > maxVy) b.vy = maxVy;
+      if (b.vy < -maxVy) b.vy = -maxVy;
+
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      b.z += b.vz * dt;
+
+      // Soft vertical boundaries inside the wax pools
+      if (b.y < -0.75) {
+        b.y = -0.75;
+        if (b.vy < 0) b.vy *= -0.25;
+      } else if (b.y > 0.74) {
+        b.y = 0.74;
+        if (b.vy > 0) b.vy *= -0.25;
+      }
+
+      // Keep inside tapered glass wall
+      const maxR = Math.max(0.04, vesselRadius(b.y) - b.r * 0.85 - 0.025);
+      const rad = Math.hypot(b.x, b.z);
+      if (rad > maxR) {
+        const s = maxR / rad;
+        b.x *= s;
+        b.z *= s;
+        b.vx *= 0.5;
+        b.vz *= 0.5;
+      }
+      // Keep z close to center plane so blobs stay well-focused and dramatic
+      b.z = Math.max(-0.08, Math.min(0.08, b.z));
+    }
+
+    // Soft pairwise interaction: blobs of similar temperature attract slightly (encouraging merging),
+    // then gently slide past each other rather than overlapping forever
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const a = primaryBlobs[i];
+        const b = primaryBlobs[j];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const dz = b.z - a.z;
+        const dist = Math.hypot(dx, dy, dz) + 0.0001;
+        const sumR = a.r + b.r;
+
+        if (dist < sumR * 1.45 && dist > sumR * 0.65) {
+          // Coalescence pull when passing close
+          const pull = 0.06 * dt;
+          a.vx += (dx / dist) * pull;
+          b.vx -= (dx / dist) * pull;
+        } else if (dist < sumR * 0.55) {
+          // Gentle core separation so blobs don't collapse onto the exact same point
+          const push = (sumR * 0.55 - dist) * 0.85 * dt;
+          a.x -= (dx / dist) * push;
+          b.x += (dx / dist) * push;
+          a.y -= (dy / dist) * push * 0.5;
+          b.y += (dy / dist) * push * 0.5;
+        }
+      }
+    }
+
+    // Populate the 18 shader metaballs:
+    // First 6 primary blobs have paired daughter blobs (indices 12..17) that continuously cycle through:
+    // 1. Coalesced single blob
+    // 2. Vertical stretching neck (hourglass elongation)
+    // 3. Pinch-off & splitting into two rising/sinking droplets
+    // 4. Re-merging into the surrounding flow
+    for (let i = 0; i < n; i++) {
+      const b = primaryBlobs[i];
+      const speedStretch = 1.0 + Math.abs(b.vy) * 1.45;
+      // Extra stretch when pulling out of the bottom pool
+      const poolPull = b.y < -0.46 && b.vy > 0 ? Math.exp(-Math.pow((b.y + 0.62) * 5.0, 2)) * 0.42 : 0.0;
+
+      if (i < 6) {
+        b.splitCycle += dt * b.splitSpeed;
+        // Cycle wave from 0 (merged) -> 1 (stretching & splitting apart) -> 0 (re-merged)
+        const sWave = 0.5 - 0.5 * Math.cos(b.splitCycle);
+        const sep = Math.pow(sWave, 1.35) * 0.25; // Separation distance up to 0.25 world units
+        const neckStretch = 1.0 + Math.sin(sWave * Math.PI) * 0.45;
+
+        // Conservation of volume between parent and pinching daughter blob
+        const rMain = b.r * (0.92 - 0.14 * sWave);
+        const rSub  = b.r * (0.62 + 0.16 * sWave);
+
+        const dirY = b.vy >= 0 ? 1.0 : -1.0;
+        const latX = Math.sin(b.splitCycle * 0.7 + b.phase) * 0.032 * sWave;
+
+        renderBlobs[i].x = b.x - latX * 0.4;
+        renderBlobs[i].y = b.y - dirY * sep * 0.38;
+        renderBlobs[i].z = b.z;
+        renderBlobs[i].r = rMain;
+        renderBlobs[i].stretch = (speedStretch + poolPull) * neckStretch;
+        renderBlobs[i].temp = b.temp;
+        renderBlobs[i].phase = time * 2.2 + b.phase;
+        renderBlobs[i].wob = 0.0035;
+
+        const subIdx = 12 + i;
+        renderBlobs[subIdx].x = b.x + latX;
+        renderBlobs[subIdx].y = b.y + dirY * sep * 0.68;
+        renderBlobs[subIdx].z = b.z * 0.9;
+        renderBlobs[subIdx].r = rSub;
+        renderBlobs[subIdx].stretch = speedStretch * neckStretch * 1.08;
+        renderBlobs[subIdx].temp = Math.max(0.05, Math.min(0.99, b.temp + dirY * 0.05));
+        renderBlobs[subIdx].phase = time * 2.6 + b.phase + 1.5;
+        renderBlobs[subIdx].wob = 0.004;
+      } else {
+        renderBlobs[i].x = b.x;
+        renderBlobs[i].y = b.y;
+        renderBlobs[i].z = b.z;
+        renderBlobs[i].r = b.r;
+        renderBlobs[i].stretch = speedStretch + poolPull;
+        renderBlobs[i].temp = b.temp;
+        renderBlobs[i].phase = time * 2.0 + b.phase;
+        renderBlobs[i].wob = 0.0035;
+      }
+    }
+  }
+
+  // Pre-warm simulation slightly so blobs are in natural equilibrium right at frame 0
+  let simTime = 12.0;
+  for (let i = 0; i < 60; i++) {
+    stepPhysics(1 / 60, simTime);
+    simTime += 1 / 60;
+  }
+
+  let lastTime = performance.now();
+
+  function render(now) {
+    const dt = Math.min(0.05, Math.max(0.001, (now - lastTime) * 0.001));
+    lastTime = now;
+    simTime += dt;
+
+    resize();
+    stepPhysics(dt, simTime);
+
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uTime, simTime);
+
+    for (let i = 0; i < 18; i++) {
+      const rb = renderBlobs[i];
+      gl.uniform4f(uBlobs[i], rb.x, rb.y, rb.z, rb.r);
+      gl.uniform4f(uBlobMeta[i], rb.stretch, rb.temp, rb.phase, rb.wob);
+    }
+
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>

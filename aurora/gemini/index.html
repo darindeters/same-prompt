@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Aurora Borealis</title>
+<style>
+  *, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #020512;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('canvas');
+  const gl = canvas.getContext('webgl2', { antialias: false, depth: false, stencil: false, powerPreference: 'high-performance' })
+          || canvas.getContext('webgl', { antialias: false, depth: false, stencil: false, powerPreference: 'high-performance' });
+
+  if (!gl) return;
+
+  const isWebGL2 = (typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext);
+
+  const vertSrc = isWebGL2 ? `#version 300 es
+    in vec2 a_pos;
+    void main() {
+      gl_Position = vec4(a_pos, 0.0, 1.0);
+    }
+  ` : `
+    attribute vec2 a_pos;
+    void main() {
+      gl_Position = vec4(a_pos, 0.0, 1.0);
+    }
+  `;
+
+  const fragBody = `
+    uniform vec2 u_res;
+    uniform float u_time;
+
+    #define PI 3.14159265359
+    #define HORIZON 0.37
+
+    // Fast high-quality hashes
+    float hash12(vec2 p) {
+      vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+      p3 += dot(p3, p3.yzx + 33.33);
+      return fract((p3.x + p3.y) * p3.z);
+    }
+
+    vec2 hash22(vec2 p) {
+      vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+      p3 += dot(p3, p3.yzx + 33.33);
+      return fract((p3.xx + p3.yz) * p3.zy);
+    }
+
+    // Value noise with analytical derivatives
+    vec3 noised(vec2 x) {
+      vec2 i = floor(x);
+      vec2 f = fract(x);
+      vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+      vec2 du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
+
+      float a = hash12(i + vec2(0.0, 0.0));
+      float b = hash12(i + vec2(1.0, 0.0));
+      float c = hash12(i + vec2(0.0, 1.0));
+      float d = hash12(i + vec2(1.0, 1.0));
+
+      float k0 = a;
+      float k1 = b - a;
+      float k2 = c - a;
+      float k3 = a - b - c + d;
+
+      return vec3(
+        k0 + k1 * u.x + k2 * u.y + k3 * u.x * u.y,
+        du * (vec2(k1, k2) + k3 * u.yx)
+      );
+    }
+
+    float noise(vec2 x) {
+      vec2 i = floor(x);
+      vec2 f = fract(x);
+      vec2 u = f * f * (3.0 - 2.0 * f);
+      return mix(
+        mix(hash12(i + vec2(0.0, 0.0)), hash12(i + vec2(1.0, 0.0)), u.x),
+        mix(hash12(i + vec2(0.0, 1.0)), hash12(i + vec2(1.0, 1.0)), u.x),
+        u.y
+      );
+    }
+
+    mat2 rot2(float a) {
+      float c = cos(a), s = sin(a);
+      return mat2(c, -s, s, c);
+    }
+
+    // Ridged multifractal for crisp alpine peaks
+    float mountainRange(float x, float seed, float scale, float sharpness) {
+      float h = 0.0;
+      float amp = 0.5;
+      float freq = scale;
+      for (int i = 0; i < 6; i++) {
+        float n = noise(vec2(x * freq + seed * 17.3, seed * 3.7 + float(i) * 5.1));
+        float ridge = 1.0 - abs(n * 2.0 - 1.0);
+        ridge = pow(ridge, sharpness);
+        h += ridge * amp;
+        freq *= 2.12;
+        amp *= 0.47;
+      }
+      return h;
+    }
+
+    // Profile of the main hero mountains
+    float mainMountainHeight(float x) {
+      // Dramatic twin-peak / amphitheater framing the center-Aurora vista
+      float envLeft  = exp(-pow((x + 0.52) * 2.1, 2.0)) * 0.25;
+      float envRight = exp(-pow((x - 0.50) * 1.9, 2.0)) * 0.27;
+      float envCenter = exp(-pow((x - 0.04) * 2.8, 2.0)) * 0.19;
+      float baseEnv = max(max(envLeft, envRight), envCenter) + 0.055;
+
+      float r1 = mountainRange(x, 1.2, 2.4, 1.65);
+      float r2 = mountainRange(x + 0.3, 4.7, 5.2, 1.35) * 0.25;
+      return HORIZON + baseEnv * (0.45 + 0.85 * r1 + r2);
+    }
+
+    // Distant secondary mountain ridge
+    float farMountainHeight(float x) {
+      float env = 0.14 + 0.11 * sin(x * 2.3 + 0.8) + 0.08 * cos(x * 4.1 - 0.5);
+      float r = mountainRange(x - 0.4, 8.9, 3.1, 1.5);
+      return HORIZON + env * (0.4 + 0.75 * r);
+    }
+
+    // Low snowy foothills along the water's edge
+    float foothillHeight(float x) {
+      float env = 0.035 + 0.045 * smoothstep(0.15, 0.85, abs(x));
+      float r = mountainRange(x + 1.1, 13.4, 4.5, 1.2);
+      return HORIZON + env * r;
+    }
+
+    // Starfield with twinkling and color temperature
+    vec3 renderStars(vec2 uv, float t) {
+      vec3 col = vec3(0.0);
+      for (int layer = 0; layer < 2; layer++) {
+        float sc = (layer == 0) ? 95.0 : 170.0;
+        vec2 p = uv * sc + float(layer) * 41.7;
+        vec2 id = floor(p);
+        vec2 gv = fract(p) - 0.5;
+        vec2 rnd = hash22(id);
+        float density = (layer == 0) ? 0.86 : 0.92;
+        if (rnd.x > density) {
+          vec2 offset = (rnd - 0.5) * 0.65;
+          float d = length(gv - offset);
+          float twinkle = 0.62 + 0.38 * sin(t * (2.5 + rnd.y * 5.0) + rnd.x * 60.0);
+          float spark = smoothstep(0.085, 0.0, d) * twinkle;
+          spark += smoothstep(0.24, 0.0, d) * 0.22 * twinkle;
+          vec3 starTint = mix(vec3(0.65, 0.85, 1.0), vec3(1.0, 0.88, 0.72), fract(rnd.y * 7.3));
+          float bright = (layer == 0) ? 1.15 : 0.65;
+          col += starTint * spark * bright;
+        }
+      }
+      return col;
+    }
+
+    // Volumetric 3D ray-marched / ribbon-curtain Aurora Borealis
+    // Returns rgb = emission, a = optical density
+    vec4 renderAurora(vec2 uv, float t, float qualityScale) {
+      float skyY = uv.y - HORIZON;
+      if (skyY <= -0.02) return vec4(0.0);
+
+      // Ray direction in sky hemisphere
+      vec3 ro = vec3(0.0, 0.0, -3.2);
+      vec3 rd = normalize(vec3(uv.x * 1.35, max(skyY + 0.06, 0.015) * 1.45, 1.0));
+
+      vec3 totalCol = vec3(0.0);
+      float totalAlpha = 0.0;
+
+      // 34 steps for sky, fewer yet smooth for water reflection
+      int steps = int(34.0 * qualityScale);
+      float invSteps = 1.0 / float(steps);
+
+      // Jitter start slightly to avoid any banding
+      float dither = hash12(uv * 512.0 + fract(t)) * 0.015;
+
+      for (int i = 0; i < 34; i++) {
+        if (i >= steps) break;
+        float fi = (float(i) + dither) * invSteps;
+        // Altitude parameter along the curtain (0 = bottom bright edge, 1 = high magenta tips)
+        float h = pow(fi, 1.25);
+
+        // Intersect sloped aurora sheet in the sky
+        float zDepth = 1.1 + fi * 3.4;
+        vec2 p = ro.xy + rd.xy * zDepth / max(rd.z, 0.15);
+
+        // Sweeping macro S-curves across the sky
+        float sweep1 = sin(p.x * 1.65 - t * 0.38 + sin(p.x * 2.8 + t * 0.24) * 0.65);
+        float sweep2 = cos(p.x * 2.4 + t * 0.31 - sin(p.x * 1.5 - t * 0.45) * 0.8);
+
+        // Fine rippling folds travelling along the curtains
+        float ripple1 = noise(vec2(p.x * 4.8 + t * 0.75, p.y * 1.4 - t * 0.25)) * 2.0 - 1.0;
+        float ripple2 = noise(vec2(p.x * 9.5 - t * 1.15, p.y * 2.5 + t * 0.35)) * 2.0 - 1.0;
+
+        // Curtain #1: Main vibrant emerald-to-magenta sweeping ribbon
+        float path1 = 0.42 + 0.22 * sweep1 + 0.09 * ripple1 + 0.035 * ripple2 + p.x * 0.08;
+        float dist1 = abs(p.y - path1);
+
+        // Curtain #2: Secondary high dancing arc
+        float path2 = 0.78 + 0.20 * sweep2 - 0.08 * ripple1 + 0.04 * ripple2 - p.x * 0.12;
+        float dist2 = abs(p.y - path2);
+
+        // Curtain #3: Low horizon-hugging electric cyan/emerald arc
+        float path3 = 0.22 + 0.14 * sin(p.x * 2.1 + t * 0.52) + 0.06 * ripple1;
+        float dist3 = abs(p.y - path3);
+
+        // Vertical magnetic field ray striations
+        float rayCoord1 = p.x * 22.0 + sweep1 * 4.5 + ripple1 * 1.8;
+        float striations1 = 0.45 + 0.55 * pow(0.5 + 0.5 * sin(rayCoord1 + t * 1.6), 2.2);
+        striations1 *= 0.6 + 0.4 * noise(vec2(p.x * 38.0 - t * 0.9, fi * 2.5));
+
+        float rayCoord2 = p.x * 18.0 - sweep2 * 4.0 + ripple2 * 1.5;
+        float striations2 = 0.45 + 0.55 * pow(0.5 + 0.5 * cos(rayCoord2 - t * 1.3), 2.0);
+
+        // Curtain thickness profile
+        float w1 = exp(-dist1 * (13.0 - fi * 5.0)) * striations1;
+        float w2 = exp(-dist2 * (11.0 - fi * 4.0)) * striations2 * 0.85;
+        float w3 = exp(-dist3 * (16.0 - fi * 6.0)) * striations1 * 0.7;
+
+        float curtainWeight = w1 + w2 + w3;
+
+        // Vertical altitude envelope: crisp luminous lower edge, soft fading top
+        float altEnv = smoothstep(0.0, 0.14, fi) * exp(-fi * 2.35);
+
+        // Vivid, saturated Aurora Borealis palette optimized for phone OLED/LCD screens
+        // Bottom edge: intense neon-emerald & spring green
+        vec3 colBottom = vec3(0.04, 1.00, 0.52);
+        // Lower-mid: electric turquoise / cyan
+        vec3 colMid    = vec3(0.00, 0.92, 0.88);
+        // Upper-mid: vivid violet-purple
+        vec3 colUpper  = vec3(0.72, 0.16, 1.00);
+        // High tips: saturated hot magenta / crimson-rose
+        vec3 colTop    = vec3(1.00, 0.14, 0.58);
+
+        // Shift color slightly per curtain & wave crest
+        float colorShift = clamp(h + (w2 * 0.28 - w3 * 0.18) + 0.08 * ripple1, 0.0, 1.0);
+        vec3 sampleCol = mix(colBottom, colMid, smoothstep(0.02, 0.32, colorShift));
+        sampleCol = mix(sampleCol, colUpper, smoothstep(0.28, 0.68, colorShift));
+        sampleCol = mix(sampleCol, colTop, smoothstep(0.60, 0.96, colorShift));
+
+        // Extra bright neon-emerald core at the very bottom edge of intense folds
+        float coreBoost = smoothstep(0.25, 0.02, fi) * smoothstep(0.08, 0.0, min(dist1, dist3));
+        sampleCol += vec3(0.35, 1.0, 0.68) * coreBoost * 1.1;
+
+        float density = curtainWeight * altEnv * invSteps * 4.6;
+        totalCol += sampleCol * density;
+        totalAlpha = clamp(totalAlpha + density * 0.55, 0.0, 1.0);
+      }
+
+      // Soft atmospheric aurora glow across the sky
+      float skyFade = smoothstep(-0.02, 0.06, skyY) * smoothstep(0.75, 0.12, skyY);
+      float waveGlow = 0.5 + 0.5 * sin(uv.x * 2.5 - t * 0.35);
+      vec3 ambientGlow = mix(vec3(0.0, 0.55, 0.42), vec3(0.45, 0.10, 0.58), clamp(skyY * 1.8, 0.0, 1.0));
+      totalCol += ambientGlow * skyFade * (0.14 + 0.10 * waveGlow);
+
+      // Fade gracefully right at the horizon
+      float horizonMask = smoothstep(-0.01, 0.035, skyY);
+      return vec4(totalCol * horizonMask, totalAlpha * horizonMask);
+    }
+
+    // Dynamic aurora ambient light color at horizontal position x (for lighting mountains & water)
+    vec3 getAuroraAmbient(float x, float t) {
+      float waveG = 0.55 + 0.45 * sin(x * 2.2 - t * 0.42 + sin(x * 3.5 + t * 0.3) * 0.7);
+      float waveM = 0.50 + 0.50 * cos(x * 2.9 + t * 0.36 - sin(x * 1.8 - t * 0.5) * 0.6);
+      vec3 greenGlow   = vec3(0.05, 0.98, 0.58) * waveG;
+      vec3 cyanGlow    = vec3(0.00, 0.85, 0.95) * (0.5 + 0.5 * sin(x * 1.5 + t * 0.25));
+      vec3 magentaGlow = vec3(0.92, 0.18, 0.68) * waveM * 0.65;
+      return greenGlow * 0.65 + cyanGlow * 0.35 + magentaGlow * 0.45;
+    }
+
+    // Shooting star / meteor across upper sky
+    vec3 renderMeteor(vec2 uv, float t) {
+      float cycle = floor(t * 0.18);
+      float phase = fract(t * 0.18);
+      if (phase > 0.22) return vec3(0.0);
+
+      float u = phase / 0.22;
+      vec2 rnd = hash22(vec2(cycle * 13.7, cycle * 3.1));
+      vec2 startPos = vec2(-0.55 + rnd.x * 1.1, 0.68 + rnd.y * 0.22);
+      vec2 dir = normalize(vec2(0.75 - rnd.x * 0.3, -0.32 - rnd.y * 0.15));
+      vec2 head = startPos + dir * (u * 0.85);
+
+      vec2 toPix = uv - head;
+      float along = dot(toPix, -dir);
+      float perp  = length(toPix + dir * clamp(along, 0.0, 0.22));
+
+      float tail = smoothstep(0.22, 0.0, along) * smoothstep(-0.005, 0.01, along);
+      float core = smoothstep(0.0045, 0.0, perp) * tail;
+      float env  = sin(u * PI);
+      return vec3(0.65, 1.0, 0.92) * core * env * 1.6;
+    }
+
+    // Complete sky + snowy mountains composition (used for both direct view & water reflection)
+    vec3 renderSkyAndMountains(vec2 uv, float t, float qualityScale, bool isReflection) {
+      float skyY = max(uv.y - HORIZON, 0.0);
+
+      // Deep saturated arctic night sky gradient
+      vec3 zenithCol  = vec3(0.012, 0.022, 0.075);
+      vec3 midSkyCol  = vec3(0.020, 0.055, 0.145);
+      vec3 horizonCol = vec3(0.035, 0.130, 0.210);
+
+      vec3 sky = mix(horizonCol, midSkyCol, smoothstep(0.0, 0.32, skyY));
+      sky = mix(sky, zenithCol, smoothstep(0.25, 0.68, skyY));
+
+      // Evaluate mountain silhouettes early
+      float hFar  = farMountainHeight(uv.x);
+      float hMain = mainMountainHeight(uv.x);
+      float hFoot = foothillHeight(uv.x);
+      float maxMtnH = max(max(hFar, hMain), hFoot);
+
+      // Stars & meteor in the clear sky above mountains
+      if (uv.y > maxMtnH - 0.005) {
+        vec4 aur = renderAurora(uv, t, qualityScale);
+        vec3 stars = isReflection ? vec3(0.0) : renderStars(uv, t);
+        // Dim stars slightly behind dense aurora curtains
+        sky += stars * (1.0 - aur.a * 0.72);
+        if (!isReflection) {
+          sky += renderMeteor(uv, t);
+        }
+        sky += aur.rgb;
+      }
+
+      vec3 auroraLight = getAuroraAmbient(uv.x, t);
+
+      // 1. Distant mountain range
+      if (uv.y < hFar + 0.003) {
+        float edge = smoothstep(hFar + 0.0025, hFar - 0.0025, uv.y);
+        float slopeX = (farMountainHeight(uv.x + 0.003) - hFar) / 0.003;
+        vec2 pMtn = vec2(uv.x * 16.0, (uv.y - HORIZON) * 16.0);
+        vec3 nDetail = noised(pMtn * 2.2);
+        vec3 norm = normalize(vec3(-slopeX * 0.45 - nDetail.y * 0.08, 0.65, 1.0));
+
+        float snowMask = smoothstep(0.25, 0.72, norm.y + (uv.y - HORIZON) * 1.4 + nDetail.x * 0.25);
+        vec3 rockCol = vec3(0.035, 0.055, 0.105);
+        vec3 snowCol = vec3(0.22, 0.36, 0.52) + auroraLight * 0.55;
+
+        float rim = smoothstep(0.035, 0.0, hFar - uv.y);
+        vec3 mtnCol = mix(rockCol, snowCol, snowMask);
+        mtnCol += auroraLight * rim * 0.48;
+        // Atmospheric haze on distant range
+        mtnCol = mix(mtnCol, vec3(0.04, 0.18, 0.26) + auroraLight * 0.28, 0.38);
+        sky = mix(sky, mtnCol, edge);
+      }
+
+      // 2. Hero snow-capped jagged alpine peaks
+      if (uv.y < hMain + 0.003) {
+        float edge = smoothstep(hMain + 0.002, hMain - 0.002, uv.y);
+        float eps = 0.0025;
+        float slopeX = (mainMountainHeight(uv.x + eps) - mainMountainHeight(uv.x - eps)) / (2.0 * eps);
+
+        // Create central ridge spine descending from peaks for 3D faceted look
+        vec2 pMtn = vec2(uv.x * 14.0, (uv.y - HORIZON) * 14.0);
+        vec3 d1 = noised(pMtn * 1.8 + vec2(2.1, 0.7));
+        vec3 d2 = noised(pMtn * 4.5 - vec2(1.4, 3.2));
+        float ridgeFacet = d1.y * 0.28 + d2.y * 0.14;
+
+        vec3 norm = normalize(vec3(-slopeX * 0.55 - ridgeFacet, 0.58 + d1.z * 0.12, 0.85));
+
+        // Snow clings to upper elevations, gullies, and gentler slopes
+        float altFactor = clamp((uv.y - HORIZON) / max(hMain - HORIZON, 0.05), 0.0, 1.0);
+        float gully = smoothstep(-0.35, 0.35, d1.x * 0.7 + d2.x * 0.3 - 0.42);
+        float snowLine = norm.y * 0.75 + altFactor * 0.55 + gully * 0.35 - abs(slopeX) * 0.16;
+        float snowMask = smoothstep(0.42, 0.68, snowLine);
+
+        // Light directions from dynamic sky aurora
+        vec3 lightDir1 = normalize(vec3(-0.35 + 0.25 * sin(t * 0.4), 0.82, 0.45));
+        vec3 lightDir2 = normalize(vec3( 0.45 + 0.25 * cos(t * 0.3), 0.75, 0.50));
+        float diff1 = max(dot(norm, lightDir1), 0.0);
+        float diff2 = max(dot(norm, lightDir2), 0.0);
+
+        vec3 darkCrag = vec3(0.022, 0.036, 0.072) + auroraLight * 0.07 * diff1;
+        vec3 snowBase = vec3(0.14, 0.25, 0.40);
+        vec3 snowLit  = snowBase
+                      + auroraLight * (0.45 + 0.75 * diff1)
+                      + vec3(0.75, 0.22, 0.72) * diff2 * 0.32;
+
+        // Luminous ridge crest & peak rim lighting from the aurora behind/above
+        float crestRim = exp(-(hMain - uv.y) * 95.0);
+        snowLit += (auroraLight * 1.15 + vec3(0.15, 0.45, 0.40)) * crestRim;
+
+        vec3 mtnCol = mix(darkCrag, snowLit, snowMask);
+        // Subtle icy blue shadow on east-facing facets
+        mtnCol += vec3(0.02, 0.10, 0.18) * max(-norm.x, 0.0) * snowMask * 0.45;
+
+        sky = mix(sky, mtnCol, edge);
+      }
+
+      // 3. Snowy lakeside foothills & icy mist band
+      float mistBand = exp(-pow((uv.y - HORIZON - 0.012) * 38.0, 2.0));
+      sky = mix(sky, auroraLight * 0.42 + vec3(0.04, 0.14, 0.22), mistBand * 0.36);
+
+      if (uv.y < hFoot + 0.002) {
+        float edge = smoothstep(hFoot + 0.002, hFoot - 0.002, uv.y);
+        vec2 pFoot = vec2(uv.x * 24.0, (uv.y - HORIZON) * 28.0);
+        float nF = noise(pFoot);
+        float snowF = smoothstep(0.28, 0.65, nF + (hFoot - uv.y) * 8.0);
+        vec3 footRock = vec3(0.018, 0.030, 0.058);
+        vec3 footSnow = vec3(0.12, 0.22, 0.35) + auroraLight * 0.52;
+        vec3 footCol  = mix(footRock, footSnow, snowF);
+        // Icy shoreline rim
+        float shoreLine = smoothstep(0.005, 0.0, abs(uv.y - HORIZON));
+        footCol += (vec3(0.15, 0.45, 0.55) + auroraLight * 0.5) * shoreLine * 0.6;
+        sky = mix(sky, footCol, edge);
+      }
+
+      return sky;
+    }
+
+    // Pine tree silhouette helper for the lakeside shore
+    float pineTree(vec2 p, float h, float w) {
+      if (p.y < 0.0 || p.y > h || abs(p.x) > w) return 0.0;
+      float yn = p.y / h;
+      // Layered drooping evergreen boughs
+      float tiers = fract(yn * 9.0);
+      float branchProfile = (1.0 - yn) * w * (0.45 + 0.55 * (1.0 - tiers * 0.65));
+      float d = abs(p.x) - branchProfile;
+      return smoothstep(0.003, -0.002, d);
+    }
+
+    void main() {
+      vec2 fragCoord = gl_FragCoord.xy;
+      // Normalized coordinates centered horizontally, 0..1 vertically, aspect-corrected around a 1:1 square
+      float minDim = min(u_res.x, u_res.y);
+      vec2 uv;
+      uv.x = (fragCoord.x - 0.5 * u_res.x) / minDim;
+      uv.y = fragCoord.y / u_res.y;
+
+      float t = u_time;
+      vec3 col = vec3(0.0);
+
+      if (uv.y >= HORIZON) {
+        // Direct view of sky, aurora, and snowy mountains
+        col = renderSkyAndMountains(uv, t, 1.0, false);
+
+        // Distant shoreline boreal forest silhouette on the far left & right banks
+        float bankMask = smoothstep(0.22, 0.48, abs(uv.x));
+        if (bankMask > 0.0 && uv.y < HORIZON + 0.045) {
+          float treeX = floor(uv.x * 110.0);
+          float rndT = hash12(vec2(treeX, 9.1));
+          float treeH = (0.014 + 0.024 * rndT) * bankMask;
+          float localX = (fract(uv.x * 110.0) - 0.5) / 110.0;
+          float treeAlpha = pineTree(vec2(localX, uv.y - HORIZON), treeH, 0.0085);
+          vec3 treeCol = vec3(0.008, 0.016, 0.032) + getAuroraAmbient(uv.x, t) * 0.04;
+          col = mix(col, treeCol, treeAlpha);
+        }
+      } else {
+        // ============================================================
+        // SNOWY MOUNTAIN LAKE & RIPPLING AURORA REFLECTION
+        // ============================================================
+        float waterDepth = (HORIZON - uv.y) / HORIZON; // 0 at far shore, 1 at bottom foreground
+        float zPersp = 1.0 / max(waterDepth, 0.008);
+
+        // Multi-scale animated water wave field with perspective foreshortening
+        vec2 waveUV = vec2(uv.x * zPersp * 1.8, zPersp * 3.6);
+        float w1 = sin(waveUV.y * 3.2 - t * 2.4 + sin(waveUV.x * 2.1 + t * 1.1) * 1.2);
+        float w2 = cos(waveUV.y * 6.5 + t * 3.1 - cos(waveUV.x * 3.7 - t * 1.6) * 0.9);
+        float nW1 = noise(vec2(uv.x * 18.0 * (0.4 + 0.6 / (waterDepth + 0.15)) + t * 0.45, zPersp * 4.8 - t * 1.8)) * 2.0 - 1.0;
+        float nW2 = noise(vec2(uv.x * 42.0 - t * 0.7, zPersp * 10.5 + t * 2.6)) * 2.0 - 1.0;
+
+        float waveEnvelope = smoothstep(0.0, 0.06, waterDepth);
+        float dx = (w1 * 0.35 + nW1 * 0.45 + nW2 * 0.20) * (0.012 + 0.034 * waterDepth) * waveEnvelope;
+        float dy = (w2 * 0.40 + nW1 * 0.35 + nW2 * 0.25) * (0.008 + 0.042 * waterDepth) * waveEnvelope;
+
+        // Reflected lookup coordinate
+        vec2 reflUV = vec2(
+          uv.x + dx,
+          HORIZON + (HORIZON - uv.y) * (0.96 + dy * 1.35)
+        );
+        reflUV.y = max(reflUV.y, HORIZON + 0.002);
+
+        // Sample reflected sky, mountains & aurora (2 blur taps for silky water dispersion)
+        vec3 reflCol1 = renderSkyAndMountains(reflUV, t, 0.65, true);
+        vec2 reflUV2  = vec2(uv.x - dx * 0.65, HORIZON + (HORIZON - uv.y) * (0.98 - dy * 0.85));
+        reflUV2.y = max(reflUV2.y, HORIZON + 0.002);
+        vec3 reflCol2 = renderSkyAndMountains(reflUV2, t, 0.55, true);
+        vec3 reflCol  = mix(reflCol1, reflCol2, 0.42);
+
+        // Deep glacial lake water absorption & Fresnel reflection
+        vec3 deepWater = vec3(0.008, 0.032, 0.075) + getAuroraAmbient(uv.x, t) * 0.06;
+        float fresnel  = pow(1.0 - waterDepth * 0.52, 1.65);
+        col = mix(deepWater, reflCol * vec3(0.92, 0.98, 1.04), clamp(fresnel, 0.35, 0.96));
+
+        // Shimmering specular aurora glints on wave crests
+        float crest = pow(max(0.0, 0.5 + 0.5 * w1 * nW2 + 0.3 * w2), 5.0);
+        vec3 localAurora = getAuroraAmbient(uv.x + dx * 2.0, t);
+        float glintMask = smoothstep(0.01, 0.15, waterDepth) * smoothstep(1.0, 0.15, waterDepth);
+        col += localAurora * crest * glintMask * 0.75;
+
+        // Horizontal ripple light streaks across the lake surface
+        float streak = smoothstep(0.62, 0.95, sin(zPersp * 16.0 - t * 3.8 + nW1 * 3.5));
+        col += localAurora * streak * (0.14 * (1.0 - waterDepth * 0.5));
+
+        // Crisp icy reflection line right along the distant shore
+        float shoreGlow = exp(-waterDepth * 65.0);
+        col += (vec3(0.10, 0.32, 0.45) + localAurora * 0.35) * shoreGlow * 0.45;
+
+        // ============================================================
+        // FOREGROUND SNOWY SHORE, ICE SHELF & SILHOUETTED PINES
+        // ============================================================
+        // Curved snow-dusted rocky banks on lower-left and lower-right corners
+        float leftBankH  = 0.11 * smoothstep(0.18, 0.58, -uv.x) + 0.025 * noise(vec2(uv.x * 12.0, 1.3));
+        float rightBankH = 0.12 * smoothstep(0.16, 0.56,  uv.x) + 0.025 * noise(vec2(uv.x * 12.0, 4.7));
+        float fgShoreH   = max(leftBankH, rightBankH) - 0.012;
+
+        if (uv.y < fgShoreH) {
+          float shoreEdge = smoothstep(fgShoreH, fgShoreH - 0.004, uv.y);
+          float snowTex = noise(uv * 32.0) * 0.65 + noise(uv * 85.0) * 0.35;
+          float rimSnow = smoothstep(0.028, 0.0, fgShoreH - uv.y + snowTex * 0.012);
+          vec3 bankRock = vec3(0.012, 0.022, 0.045);
+          vec3 bankSnow = vec3(0.12, 0.24, 0.38) + localAurora * 0.62;
+          vec3 bankCol  = mix(bankRock, bankSnow, clamp(rimSnow * 0.85 + snowTex * 0.35, 0.0, 1.0));
+          col = mix(col, bankCol, shoreEdge);
+        }
+
+        // Foreground framing evergreens on far left and right edges
+        float fgTreeZone = smoothstep(0.32, 0.48, abs(uv.x));
+        if (fgTreeZone > 0.0) {
+          float cell = 26.0;
+          float idx  = floor(uv.x * cell);
+          float rnd  = hash12(vec2(idx, 21.4));
+          if (rnd > 0.25) {
+            float baseH = max(fgShoreH - 0.01, 0.0);
+            float tH = (0.09 + 0.13 * rnd) * fgTreeZone;
+            float tW = 0.022 + 0.012 * rnd;
+            float lx = (fract(uv.x * cell) - 0.5) / cell;
+            float pMask = pineTree(vec2(lx, uv.y - baseH), tH, tW);
+            // Subtle snow & aurora rim on upper pine branches
+            float branchSnow = smoothstep(0.4, 0.95, fract((uv.y - baseH) / max(tH, 0.01) * 9.0));
+            vec3 pineCol = vec3(0.006, 0.014, 0.028) + localAurora * branchSnow * 0.09;
+            col = mix(col, pineCol, pMask);
+          }
+        }
+      }
+
+      // Subtle floating snow crystals glinting in the aurora light
+      vec2 snowUV = uv * vec2(18.0, 14.0) + vec2(sin(t * 0.35) * 0.8 + t * 0.25, t * 0.65);
+      vec2 snowId = floor(snowUV);
+      vec2 snowGv = fract(snowUV) - 0.5;
+      vec2 snowRnd = hash22(snowId);
+      if (snowRnd.x > 0.88) {
+        vec2 snowPos = (snowRnd - 0.5) * 0.55 + vec2(sin(t * 1.5 + snowRnd.y * 6.0) * 0.08, 0.0);
+        float sd = length(snowGv - snowPos);
+        float flake = smoothstep(0.06, 0.0, sd) * (0.25 + 0.25 * sin(t * 3.0 + snowRnd.x * 20.0));
+        col += (vec3(0.5, 0.9, 0.85) + getAuroraAmbient(uv.x, t) * 0.5) * flake * 0.35;
+      }
+
+      // Filmic vibrance & ACES-inspired tone mapping for vivid mobile display saturation
+      col *= 1.18;
+      float luma = dot(col, vec3(0.2126, 0.7152, 0.0722));
+      col = mix(vec3(luma), col, 1.24); // Boost chroma saturation cleanly
+
+      // Smooth S-curve filmic tone map
+      vec3 a = col * (col + 0.0245786) - 0.000090537;
+      vec3 b = col * (0.983729 * col + 0.4329510) + 0.238081;
+      col = clamp(a / b, 0.0, 1.0);
+
+      // Gentle vignette that preserves bright center and frames corners
+      vec2 vUv = fragCoord / u_res - 0.5;
+      float vig = 1.0 - dot(vUv, vUv) * 0.38;
+      col *= clamp(vig, 0.0, 1.0);
+
+      // Gamma correction
+      col = pow(col, vec3(1.0 / 2.2));
+
+      OUT_COLOR = vec4(col, 1.0);
+    }
+  `;
+
+  const fragSrc = isWebGL2
+    ? `#version 300 es\nprecision highp float;\nout vec4 fragColor;\n` + fragBody.replace(/OUT_COLOR/g, 'fragColor')
+    : `precision highp float;\n` + fragBody.replace(/OUT_COLOR/g, 'gl_FragColor');
+
+  function compileShader(type, source) {
+    const shader = gl.createShader(type);
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(shader));
+      gl.deleteShader(shader);
+      return null;
+    }
+    return shader;
+  }
+
+  const vs = compileShader(gl.VERTEX_SHADER, vertSrc);
+  const fs = compileShader(gl.FRAGMENT_SHADER, fragSrc);
+  if (!vs || !fs) return;
+
+  const prog = gl.createProgram();
+  gl.attachShader(prog, vs);
+  gl.attachShader(prog, fs);
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error(gl.getProgramInfoLog(prog));
+    return;
+  }
+  gl.useProgram(prog);
+
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(
+    gl.ARRAY_BUFFER,
+    new Float32Array([-1, -1, 3, -1, -1, 3]),
+    gl.STATIC_DRAW
+  );
+
+  const posLoc = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(posLoc);
+  gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+
+  const uResLoc  = gl.getUniformLocation(prog, 'u_res');
+  const uTimeLoc = gl.getUniformLocation(prog, 'u_time');
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2.0);
+    const w = Math.floor(window.innerWidth * dpr);
+    const h = Math.floor(window.innerHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  window.addEventListener('resize', resize, { passive: true });
+  resize();
+
+  const startTime = performance.now();
+  function render(now) {
+    resize();
+    const elapsed = (now - startTime) * 0.001 + 14.5;
+    gl.uniform2f(uResLoc, canvas.width, canvas.height);
+    gl.uniform1f(uTimeLoc, elapsed);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>

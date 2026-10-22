@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lava Lamp</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #140033; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+  'use strict';
+
+  const cv = document.getElementById('c');
+  const ctx = cv.getContext('2d');
+  const off = document.createElement('canvas');
+  const octx = off.getContext('2d');
+
+  // Field is computed at reduced resolution and upscaled with smoothing.
+  const SCALE = 4;
+  let W = 1, H = 1, w = 1, h = 1, unit = 1, aw = 1, ah = 1, img, data;
+
+  function resize() {
+    W = cv.width = Math.max(1, innerWidth);
+    H = cv.height = Math.max(1, innerHeight);
+    w = off.width = Math.max(1, Math.round(W / SCALE));
+    h = off.height = Math.max(1, Math.round(H / SCALE));
+    unit = Math.min(W, H);
+    aw = W / unit;  // world width in units
+    ah = H / unit;  // world height in units
+    img = octx.createImageData(w, h);
+    data = img.data;
+  }
+  addEventListener('resize', resize);
+  resize();
+
+  // ---------- Blobs ----------
+  const MAXN = 11, MINN = 6;
+  const blobs = [];
+
+  function mk(x, y, r, temp) {
+    return { x, y, vx: 0, vy: 0, r, tr: r, temp, sx: 1, sy: 1, age: 0, seed: Math.random() * 1000, fixed: false };
+  }
+
+  // Hot pool at the bottom of the lamp.
+  const pool = mk(aw / 2, ah + 0.14, 0.34, 1);
+  pool.fixed = true; pool.sx = 3.2; pool.sy = 1;
+  blobs.push(pool);
+
+  for (let i = 0; i < 8; i++) {
+    const r = 0.07 + Math.random() * 0.07;
+    const b = mk(0.15 + Math.random() * (aw - 0.3), 0.15 + Math.random() * (ah - 0.3), r, Math.random());
+    b.age = 5;
+    blobs.push(b);
+  }
+
+  function spawn() {
+    const r = 0.07 + Math.random() * 0.06;
+    const b = mk(0.2 + Math.random() * (aw - 0.4), ah - 0.05, 0.02, 1);
+    b.tr = r;
+    blobs.push(b);
+  }
+
+  function step(dt, t) {
+    for (const b of blobs) {
+      if (b.fixed) { b.x = aw / 2; b.y = ah + 0.14; continue; }
+      b.age += dt;
+      b.r += (b.tr - b.r) * Math.min(1, 1.2 * dt);
+
+      // Heat: hot at the bottom, cool at the top, with lag.
+      const target = Math.min(1, Math.max(0, b.y / ah));
+      b.temp += (target - b.temp) * 0.3 * dt;
+
+      // Buoyancy (bigger blobs are a little more sluggish).
+      const buoy = (b.temp - 0.5) * 0.26 * (0.1 / (b.r + 0.02));
+      b.vy -= buoy * dt;
+
+      // Gentle wander.
+      b.vx += (Math.sin(t * 0.6 + b.seed) * 0.06 + Math.cos(t * 0.23 + b.seed * 1.7) * 0.04) * dt;
+
+      // Soft walls.
+      const m = b.r * 0.95;
+      if (b.x < m) b.vx += (m - b.x) * 5 * dt;
+      if (b.x > aw - m) b.vx -= (b.x - aw + m) * 5 * dt;
+      if (b.y < m) b.vy += (m - b.y) * 5 * dt;
+      if (b.y > ah - m * 0.6) b.vy -= (b.y - ah + m * 0.6) * 5 * dt;
+
+      // Drag.
+      const d = Math.exp(-1.0 * dt);
+      b.vx *= d; b.vy *= d;
+
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+
+      // Stretch along the direction of travel (mostly vertical).
+      const targetSy = 1 + Math.min(1.3, Math.abs(b.vy) * 5 + Math.abs(b.vx) * 1.5);
+      b.sy += (targetSy - b.sy) * 3 * dt;
+      b.sx = 1 / Math.sqrt(b.sy);
+    }
+
+    // Pairwise merge / repel.
+    for (let i = 1; i < blobs.length; i++) {
+      const a = blobs[i];
+      for (let j = i + 1; j < blobs.length; j++) {
+        const b = blobs[j];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const dist = Math.hypot(dx, dy) + 1e-6;
+        const sumr = a.r + b.r;
+        if (dist < sumr * 0.42 && a.age > 2.5 && b.age > 2.5 && blobs.length - 1 > MINN) {
+          // Merge b into a.
+          const ma = a.r * a.r, mb = b.r * b.r, mt = ma + mb;
+          a.x = (a.x * ma + b.x * mb) / mt;
+          a.y = (a.y * ma + b.y * mb) / mt;
+          a.vx = (a.vx * ma + b.vx * mb) / mt;
+          a.vy = (a.vy * ma + b.vy * mb) / mt;
+          a.temp = (a.temp * ma + b.temp * mb) / mt;
+          a.tr = Math.min(0.2, Math.sqrt(mt));
+          a.age = 0;
+          blobs.splice(j, 1); j--;
+        } else if (dist < sumr * 0.95) {
+          const push = (sumr * 0.95 - dist) / sumr * 0.45 * dt;
+          const nx = dx / dist, ny = dy / dist;
+          const ma = a.r * a.r, mb = b.r * b.r, mt = ma + mb;
+          a.vx -= nx * push * (mb / mt); a.vy -= ny * push * (mb / mt);
+          b.vx += nx * push * (ma / mt); b.vy += ny * push * (ma / mt);
+        }
+      }
+    }
+
+    // Split big, stretched blobs.
+    for (let i = 1; i < blobs.length && blobs.length < MAXN + 1; i++) {
+      const b = blobs[i];
+      if (b.r > 0.105 && b.age > 3 && Math.random() < dt * 0.1 * (b.r / 0.1) * b.sy) {
+        const r = b.r / Math.SQRT2;
+        const off = b.r * 0.55 * b.sy;
+        const top = mk(b.x + (Math.random() - 0.5) * 0.02, b.y - off, r, Math.min(1, b.temp + 0.12));
+        const bot = mk(b.x + (Math.random() - 0.5) * 0.02, b.y + off, r, Math.max(0, b.temp - 0.12));
+        top.vx = b.vx; top.vy = b.vy - 0.04; top.sy = b.sy * 0.8; top.sx = 1 / Math.sqrt(top.sy);
+        bot.vx = b.vx; bot.vy = b.vy + 0.03; bot.sy = b.sy * 0.8; bot.sx = 1 / Math.sqrt(bot.sy);
+        blobs.splice(i, 1, top, bot);
+        i++;
+      }
+    }
+
+    while (blobs.length - 1 < MINN) spawn();
+  }
+
+  // ---------- Colors ----------
+  function hsl(hh, s, l) {
+    hh = ((hh % 360) + 360) % 360 / 360;
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
+    const f = tt => {
+      tt = (tt + 1) % 1;
+      if (tt < 1 / 6) return p + (q - p) * 6 * tt;
+      if (tt < 1 / 2) return q;
+      if (tt < 2 / 3) return p + (q - p) * (2 / 3 - tt) * 6;
+      return p;
+    };
+    return [f(hh + 1 / 3) * 255, f(hh) * 255, f(hh - 1 / 3) * 255];
+  }
+
+  // ---------- Render ----------
+  const bx = new Float32Array(32), by = new Float32Array(32), br2 = new Float32Array(32),
+        bisx = new Float32Array(32), bisy = new Float32Array(32);
+
+  function render(t) {
+    const hue = t * 5;
+    const core = hsl(hue + 45, 1, 0.72);
+    const edge = hsl(hue, 1, 0.52);
+    const glow = hsl(hue - 40, 1, 0.5);
+    const bgT = hsl(hue + 230, 0.85, 0.07);
+    const bgB = hsl(hue + 265, 0.9, 0.16);
+
+    const n = blobs.length;
+    for (let k = 0; k < n; k++) {
+      const b = blobs[k];
+      bx[k] = b.x; by[k] = b.y; br2[k] = b.r * b.r;
+      bisx[k] = 1 / (b.sx * b.sx); bisy[k] = 1 / (b.sy * b.sy);
+    }
+
+    const k0 = SCALE / unit;
+    let p = 0;
+    for (let py = 0; py < h; py++) {
+      const ny = (py + 0.5) * k0;
+      const vy = ny / ah - 0.5;
+      const gy = ny / ah;
+      const bgR = bgT[0] + (bgB[0] - bgT[0]) * gy;
+      const bgG = bgT[1] + (bgB[1] - bgT[1]) * gy;
+      const bgB2 = bgT[2] + (bgB[2] - bgT[2]) * gy;
+      for (let px = 0; px < w; px++) {
+        const nx = (px + 0.5) * k0;
+        let f = 0;
+        for (let k = 0; k < n; k++) {
+          const dx = nx - bx[k], dy = ny - by[k];
+          f += br2[k] / (dx * dx * bisx[k] + dy * dy * bisy[k] + 1e-5);
+        }
+        let r, g, b;
+        if (f >= 1) {
+          const u = Math.min(1, (f - 1) * 0.55);
+          r = edge[0] + (core[0] - edge[0]) * u;
+          g = edge[1] + (core[1] - edge[1]) * u;
+          b = edge[2] + (core[2] - edge[2]) * u;
+          if (f > 3.5) {
+            const v = Math.min(0.55, (f - 3.5) * 0.12);
+            r += (255 - r) * v; g += (255 - g) * v; b += (255 - b) * v;
+          }
+        } else {
+          const q = f * f * f * 0.95;
+          r = bgR + (glow[0] - bgR) * q;
+          g = bgG + (glow[1] - bgG) * q;
+          b = bgB2 + (glow[2] - bgB2) * q;
+          if (f > 0.84) {
+            const a = (f - 0.84) / 0.16;
+            r += (edge[0] - r) * a; g += (edge[1] - g) * a; b += (edge[2] - b) * a;
+          }
+        }
+        // Vignette.
+        const vx = nx / aw - 0.5;
+        const vig = 1 - (vx * vx + vy * vy) * 0.9;
+        data[p++] = r * vig;
+        data[p++] = g * vig;
+        data[p++] = b * vig;
+        data[p++] = 255;
+      }
+    }
+    octx.putImageData(img, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(off, 0, 0, W, H);
+  }
+
+  // ---------- Loop ----------
+  let last = performance.now(), t = 0;
+  // Warm up the simulation so it looks settled on first paint.
+  for (let i = 0; i < 240; i++) { step(1 / 30, t); t += 1 / 30; }
+
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    t += dt;
+    step(dt, t);
+    render(t);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
