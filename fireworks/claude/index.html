@@ -2,594 +2,408 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Night Fireworks</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Fireworks</title>
 <style>
-  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #04060f; }
-  canvas { display: block; width: 100vw; height: 100vh; }
+  html,body{margin:0;padding:0;width:100%;height:100%;background:#03040f;overflow:hidden}
+  canvas{display:block;width:100vw;height:100vh;position:fixed;inset:0}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <script>
-(function () {
-  'use strict';
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const bg = document.createElement('canvas');   // static: sky, stars, skyline, water base
+  const bctx = bg.getContext('2d');
+  const fx = document.createElement('canvas');   // fireworks with persistent trails
+  const fctx = fx.getContext('2d');
 
-  var TAU = Math.PI * 2;
-  function rnd(a, b) { return a + Math.random() * (b - a); }
-  function ri(a, b) { return Math.floor(rnd(a, b + 1)); }
-  function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+  let W = 0, H = 0, DPR = 1, horizon = 0, unit = 1;
+  let beacons = [];
 
-  var cv = document.getElementById('c');
-  var cx = cv.getContext('2d');
-
-  var W, H, S, DPR, HZ, RH;          // size, scale, device pixel ratio, horizon y, river height
-  var bgC, skylineC, skyC, sg, refC, rg;
-  var beacons = [], twinkles = [];
-  var G;                               // gravity px/s^2
-
-  var ps = [];       // particles
-  var rockets = [];
-  var flashes = [];
-  var t = 0, last = 0, launchTimer = 0.4;
-
-  // ---------- offscreen helpers ----------
-  function mk(w, h) {
-    var c = document.createElement('canvas');
-    c.width = Math.max(1, Math.round(w * DPR));
-    c.height = Math.max(1, Math.round(h * DPR));
-    var g = c.getContext('2d');
-    g.scale(DPR, DPR);
-    return [c, g];
+  // Deterministic RNG so the city looks the same after a resize.
+  function rng(seed) {
+    return function () {
+      seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+      let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
   }
 
-  // ---------- static background: sky, stars, moon, water ----------
-  function buildBackground() {
-    var r = mk(W, H), c = r[0], g = r[1];
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth; H = window.innerHeight;
+    unit = Math.min(W, H) / 1080;
+    horizon = Math.round(H * 0.72);
+    for (const c of [canvas, bg, fx]) { c.width = Math.round(W * DPR); c.height = Math.round(H * DPR); }
+    for (const c of [ctx, bctx, fctx]) c.setTransform(DPR, 0, 0, DPR, 0, 0);
+    drawBackground();
+  }
 
-    var grad = g.createLinearGradient(0, 0, 0, HZ);
-    grad.addColorStop(0, '#02030c');
-    grad.addColorStop(0.5, '#070c26');
-    grad.addColorStop(0.85, '#141236');
-    grad.addColorStop(1, '#2b1b3f');
-    g.fillStyle = grad;
-    g.fillRect(0, 0, W, HZ);
+  function drawBackground() {
+    const g = bctx;
+    g.clearRect(0, 0, W, H);
 
-    // stars
-    var n = Math.round(W * H / 2200);
-    for (var i = 0; i < n; i++) {
-      var x = rnd(0, W), y = rnd(0, HZ * 0.92);
-      var rad = rnd(0.25, 1.1) * S;
-      var a = rnd(0.25, 0.95) * (1 - y / HZ) * 0.9;
-      g.fillStyle = 'rgba(255,255,255,' + a.toFixed(3) + ')';
-      g.beginPath(); g.arc(x, y, rad, 0, TAU); g.fill();
+    // Night sky
+    const sky = g.createLinearGradient(0, 0, 0, horizon);
+    sky.addColorStop(0, '#02041a');
+    sky.addColorStop(0.5, '#090e3a');
+    sky.addColorStop(0.82, '#1b1350');
+    sky.addColorStop(1, '#3b1c60');
+    g.fillStyle = sky;
+    g.fillRect(0, 0, W, horizon);
+
+    // Warm city glow on the horizon
+    const haze = g.createRadialGradient(W * 0.5, horizon, 0, W * 0.5, horizon, Math.max(W, H) * 0.6);
+    haze.addColorStop(0, 'rgba(255,130,70,0.28)');
+    haze.addColorStop(0.5, 'rgba(255,90,120,0.08)');
+    haze.addColorStop(1, 'rgba(255,90,120,0)');
+    g.fillStyle = haze;
+    g.fillRect(0, 0, W, horizon);
+
+    // Stars
+    const sr = rng(1234);
+    const n = Math.round(W * H / 2200);
+    for (let i = 0; i < n; i++) {
+      const x = sr() * W, y = sr() * horizon * 0.92, s = sr();
+      const sz = s > 0.94 ? 2.2 * unit + 0.6 : s > 0.72 ? 1.4 * unit + 0.4 : 0.8;
+      g.fillStyle = `rgba(${200 + sr() * 55 | 0},${215 + sr() * 40 | 0},255,${0.25 + s * 0.7})`;
+      g.fillRect(x, y, sz, sz);
     }
-    twinkles = [];
-    for (i = 0; i < 45; i++) {
-      twinkles.push({ x: rnd(0, W), y: rnd(0, HZ * 0.7), r: rnd(0.8, 1.6) * S, ph: rnd(0, TAU), sp: rnd(1.5, 4) });
-    }
 
-    // moon (gibbous)
-    var mx = W * 0.76, my = H * 0.15, mr = Math.max(12, 34 * S);
-    var mg = g.createRadialGradient(mx, my, mr * 0.5, mx, my, mr * 5);
-    mg.addColorStop(0, 'rgba(255,245,215,0.28)');
-    mg.addColorStop(0.4, 'rgba(255,240,210,0.07)');
-    mg.addColorStop(1, 'rgba(255,240,210,0)');
+    // Moon
+    const mx = W * 0.8, my = horizon * 0.2, mr = 34 * unit + 8;
+    const mg = g.createRadialGradient(mx, my, mr * 0.6, mx, my, mr * 4);
+    mg.addColorStop(0, 'rgba(255,245,210,0.35)');
+    mg.addColorStop(1, 'rgba(255,245,210,0)');
     g.fillStyle = mg;
-    g.fillRect(mx - mr * 5, my - mr * 5, mr * 10, mr * 10);
-    g.fillStyle = '#f4edd6';
-    g.beginPath(); g.arc(mx, my, mr, 0, TAU); g.fill();
-    g.save();
-    g.beginPath(); g.arc(mx, my, mr, 0, TAU); g.clip();
-    g.fillStyle = 'rgba(230,220,200,0.35)';
-    g.beginPath(); g.arc(mx - mr * 0.3, my + mr * 0.2, mr * 0.28, 0, TAU); g.fill();
-    g.beginPath(); g.arc(mx + mr * 0.25, my - mr * 0.35, mr * 0.18, 0, TAU); g.fill();
-    g.beginPath(); g.arc(mx + mr * 0.1, my + mr * 0.5, mr * 0.14, 0, TAU); g.fill();
-    g.fillStyle = 'rgba(6,9,30,0.93)';
-    g.beginPath(); g.arc(mx + mr * 0.62, my - mr * 0.12, mr * 0.98, 0, TAU); g.fill();
-    g.restore();
+    g.fillRect(mx - mr * 4, my - mr * 4, mr * 8, mr * 8);
+    g.fillStyle = '#fff6d8';
+    g.beginPath(); g.arc(mx, my, mr, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#0a0f3c';
+    g.beginPath(); g.arc(mx - mr * 0.42, my - mr * 0.18, mr * 0.86, 0, Math.PI * 2); g.fill();
 
-    // city haze at horizon
-    var hg = g.createRadialGradient(W * 0.5, HZ, 0, W * 0.5, HZ, W * 0.75);
-    hg.addColorStop(0, 'rgba(255,150,90,0.22)');
-    hg.addColorStop(0.5, 'rgba(255,130,100,0.07)');
-    hg.addColorStop(1, 'rgba(255,130,100,0)');
-    g.fillStyle = hg;
-    g.fillRect(0, 0, W, HZ);
+    // Water base
+    const wat = g.createLinearGradient(0, horizon, 0, H);
+    wat.addColorStop(0, '#0d1348');
+    wat.addColorStop(0.4, '#060a2a');
+    wat.addColorStop(1, '#02030c');
+    g.fillStyle = wat;
+    g.fillRect(0, horizon, W, H - horizon);
 
-    // water base
-    var wg = g.createLinearGradient(0, HZ, 0, H);
-    wg.addColorStop(0, '#0d1530');
-    wg.addColorStop(0.3, '#080e22');
-    wg.addColorStop(1, '#03050d');
-    g.fillStyle = wg;
-    g.fillRect(0, HZ, W, RH);
+    // Skyline: a far hazy layer, then a near dark layer with lit windows.
+    beacons = [];
+    skyline(g, rng(77), '#151d5a', 0.06, 0.2, 14, 44, false);
+    skyline(g, rng(99), '#05071a', 0.08, 0.34, 22, 78, true);
 
-    // moon glint on water
-    g.save();
-    g.translate(mx, HZ + RH * 0.45);
-    g.scale(1, RH / (mr * 2.2));
-    var gl = g.createRadialGradient(0, 0, 0, 0, 0, mr * 2.2);
-    gl.addColorStop(0, 'rgba(255,245,220,0.14)');
-    gl.addColorStop(1, 'rgba(255,245,220,0)');
-    g.fillStyle = gl;
-    g.fillRect(-mr * 2.2, -mr * 2.2, mr * 4.4, mr * 4.4);
-    g.restore();
-
-    bgC = c;
+    // Shoreline glint
+    g.fillStyle = 'rgba(255,180,110,0.55)';
+    g.fillRect(0, horizon - 1, W, 1.5);
   }
 
-  // ---------- static skyline ----------
-  function buildSkyline() {
-    var r = mk(W, HZ), c = r[0], g = r[1];
-    beacons = [];
-
-    // far layer: dim silhouettes
-    var x = -rnd(0, 40 * S);
-    while (x < W) {
-      var w = rnd(16, 55) * S;
-      var h = HZ * (0.07 + 0.22 * Math.pow(Math.random(), 1.6));
-      g.fillStyle = '#131a36';
-      g.fillRect(x, HZ - h, w, h);
-      var cols = Math.floor(w / (6 * S)), rows = Math.floor(h / (8 * S));
-      for (var cc = 0; cc < cols; cc++) for (var rr = 0; rr < rows; rr++) {
-        if (Math.random() < 0.22) {
-          g.fillStyle = 'rgba(255,215,160,' + rnd(0.15, 0.4).toFixed(2) + ')';
-          g.fillRect(x + 2 * S + cc * 6 * S, HZ - h + 3 * S + rr * 8 * S, 2 * S, 3 * S);
-        }
+  function skyline(g, r, color, hmin, hmax, wmin, wmax, near) {
+    const scale = Math.max(unit, 0.45);
+    let x = -10;
+    while (x < W + 10) {
+      const w = (wmin + r() * (wmax - wmin)) * scale;
+      let h = H * (hmin + r() * (hmax - hmin));
+      if (r() < 0.12) h *= 1.3;
+      const top = horizon - h;
+      const style = r();
+      g.fillStyle = color;
+      g.fillRect(x, top, w, h);
+      if (style < 0.28) {                 // stepped crown
+        const w2 = w * (0.4 + r() * 0.3), h2 = h * 0.1;
+        g.fillRect(x + (w - w2) / 2, top - h2, w2, h2);
+        if (r() < 0.5) { const w3 = w2 * 0.5; g.fillRect(x + (w - w3) / 2, top - h2 * 1.7, w3, h2 * 0.7); }
+      } else if (style < 0.55) {          // antenna spire
+        const sh = h * (0.15 + r() * 0.15);
+        g.fillRect(x + w / 2 - 1, top - sh, 2, sh);
+        if (near) beacons.push({ x: x + w / 2, y: top - sh, p: r() * 6.28 });
+      } else if (style < 0.7) {           // pointed roof
+        g.beginPath(); g.moveTo(x, top); g.lineTo(x + w / 2, top - h * 0.14); g.lineTo(x + w, top); g.fill();
       }
-      x += w + rnd(0, 5) * S;
-    }
-
-    // near layer: dark buildings with lit windows
-    x = -rnd(0, 30 * S);
-    var count = 0;
-    while (x < W) {
-      var bw = rnd(28, 105) * S;
-      var bh = HZ * (0.1 + 0.36 * Math.pow(Math.random(), 1.7));
-      if (count % 7 === 3) bh = HZ * rnd(0.42, 0.56);          // occasional tall tower
-      var bx = x, by = HZ - bh;
-      var shade = pick(['#080a18', '#0a0d1e', '#07091a', '#0b0e22']);
-      g.fillStyle = shade;
-
-      var roof = Math.random();
-      if (roof < 0.22) {                                          // antenna with beacon
-        var ah = rnd(18, 55) * S;
-        g.fillRect(bx + bw / 2 - 1 * S, by - ah, 2 * S, ah);
-        beacons.push({ x: bx + bw / 2, y: by - ah, ph: rnd(0, TAU) });
-      } else if (roof < 0.36) {                                   // spire
-        g.beginPath();
-        g.moveTo(bx + bw * 0.3, by); g.lineTo(bx + bw / 2, by - rnd(15, 40) * S); g.lineTo(bx + bw * 0.7, by);
-        g.closePath(); g.fill();
-      } else if (roof < 0.6) {                                    // stepped top
-        var sw = bw * rnd(0.4, 0.7), sh = rnd(10, 28) * S;
-        g.fillRect(bx + (bw - sw) / 2, by - sh, sw, sh);
-        if (Math.random() < 0.4) {
-          g.fillRect(bx + (bw - sw * 0.5) / 2, by - sh - sh * 0.6, sw * 0.5, sh * 0.6);
-        }
-      }
-      g.fillRect(bx, by, bw, bh);
-
-      // windows
-      var cw = rnd(4.5, 7.5) * S, ch = rnd(6, 10) * S, gx = rnd(2.5, 4) * S, gy = rnd(3.5, 5) * S;
-      var ncol = Math.floor((bw - gx) / (cw + gx)), nrow = Math.floor((bh - gy) / (ch + gy));
-      var litP = rnd(0.25, 0.7);
-      var warm = Math.random() < 0.72;
-      var ox = bx + (bw - (ncol * (cw + gx) - gx)) / 2;
-      for (var r2 = 0; r2 < nrow; r2++) {
-        var floorBias = Math.random() < 0.12 ? 0.08 : 1;
-        for (var c2 = 0; c2 < ncol; c2++) {
-          if (Math.random() < litP * floorBias) {
-            if (warm) g.fillStyle = 'hsla(' + rnd(32, 50).toFixed(0) + ',95%,' + rnd(62, 82).toFixed(0) + '%,' + rnd(0.55, 1).toFixed(2) + ')';
-            else g.fillStyle = 'hsla(' + rnd(185, 215).toFixed(0) + ',75%,' + rnd(70, 88).toFixed(0) + '%,' + rnd(0.5, 1).toFixed(2) + ')';
-            g.fillRect(ox + c2 * (cw + gx), by + gy + r2 * (ch + gy), cw, ch);
+      if (near) {
+        const cw = Math.max(5, 8 * scale), ch = Math.max(7, 11 * scale);
+        const ww = cw * 0.45, wh = ch * 0.5;
+        const warm = r() < 0.7;
+        const density = 0.35 + r() * 0.4;
+        const cols = Math.floor((w - cw * 0.5) / cw), rows = Math.floor((h - ch * 0.5) / ch);
+        for (let c = 0; c < cols; c++) {
+          for (let rr = 0; rr < rows; rr++) {
+            if (r() > density) continue;
+            const a = 0.35 + r() * 0.6;
+            const k = r();
+            g.fillStyle = warm
+              ? (k < 0.75 ? `rgba(255,214,120,${a})` : `rgba(255,170,80,${a})`)
+              : (k < 0.75 ? `rgba(150,225,255,${a})` : `rgba(255,255,255,${a})`);
+            g.fillRect(x + cw * 0.5 + c * cw + (cw - ww) / 2, top + ch * 0.6 + rr * ch, ww, wh);
           }
         }
       }
-      x += bw + rnd(2, 9) * S;
-      count++;
+      x += w + (r() < 0.35 ? r() * 10 * scale : 0) + 1;
     }
-
-    // embankment and waterfront lights
-    g.fillStyle = '#05070f';
-    g.fillRect(0, HZ - 5 * S, W, 5 * S);
-    var lx = rnd(6, 20) * S;
-    while (lx < W) {
-      var lg = g.createRadialGradient(lx, HZ - 6 * S, 0, lx, HZ - 6 * S, 7 * S);
-      lg.addColorStop(0, 'rgba(255,220,150,0.9)');
-      lg.addColorStop(0.3, 'rgba(255,200,120,0.35)');
-      lg.addColorStop(1, 'rgba(255,200,120,0)');
-      g.fillStyle = lg;
-      g.fillRect(lx - 7 * S, HZ - 13 * S, 14 * S, 14 * S);
-      g.fillStyle = '#fff2cc';
-      g.beginPath(); g.arc(lx, HZ - 6 * S, 1.2 * S, 0, TAU); g.fill();
-      lx += rnd(24, 40) * S;
-    }
-
-    skylineC = c;
   }
 
-  // ---------- sizing ----------
-  function resize() {
-    DPR = Math.min(window.devicePixelRatio || 1, 1.5);
-    W = Math.max(1, window.innerWidth);
-    H = Math.max(1, window.innerHeight);
-    S = Math.min(W, H) / 1080;
-    cv.width = Math.round(W * DPR);
-    cv.height = Math.round(H * DPR);
-    cx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    HZ = Math.round(H * 0.72);
-    RH = H - HZ;
-    G = 170 * S;
+  // ---------- Fireworks ----------
+  const parts = [];     // sparks
+  const rockets = [];
+  const MAX_PARTS = 7000;
+  const HUES = [0, 18, 42, 58, 118, 150, 180, 198, 225, 262, 288, 315, 338];
+  const TYPES = ['peony', 'peony', 'ring', 'heart', 'star', 'willow', 'crossette', 'chrys', 'palm', 'glitter', 'twotone'];
 
-    buildBackground();
-    buildSkyline();
-    var r = mk(W, HZ); skyC = r[0]; sg = r[1];
-    sg.lineCap = 'round';
-    r = mk(W, HZ); refC = r[0]; rg = r[1];
+  function pick(a) { return a[Math.random() * a.length | 0]; }
+  function farHue(h) { let k; do { k = pick(HUES); } while (Math.abs(((k - h) % 360 + 540) % 360 - 180) < 110); return k; }
+
+  function addPart(p) {
+    if (parts.length >= MAX_PARTS) return;
+    p.px = p.x; p.py = p.y;
+    p.maxLife = p.life;
+    parts.push(p);
   }
 
-  // ---------- particles ----------
-  function spawn(x, y, vx, vy, o) {
-    ps.push({
-      x: x, y: y, px: x, py: y, vx: vx, vy: vy,
-      h: o.h, s: o.s === undefined ? 100 : o.s, l: o.l === undefined ? 60 : o.l,
-      h2: o.h2 === undefined ? -1 : o.h2,
-      life: 1, decay: 1 / o.t,
-      size: o.size || 2.4 * S,
-      g: o.g === undefined ? G : o.g,
-      drag: o.drag === undefined ? 1.1 : o.drag,
-      hot: o.hot === undefined ? 1 : o.hot,
-      strobe: !!o.strobe, emit: o.emit || 0,
-      split: !!o.split, splitAt: o.splitAt || 0
+  function launch() {
+    const x = W * (0.1 + Math.random() * 0.8);
+    const ty = H * (0.1 + Math.random() * 0.4);
+    const g = H * 0.45;
+    const vy = -Math.sqrt(2 * g * (horizon - ty));
+    rockets.push({
+      x, y: horizon + 4, vx: (Math.random() - 0.5) * W * 0.05, vy, g,
+      hue: pick(HUES), type: pick(TYPES)
     });
   }
 
-  var HUES = [0, 18, 35, 48, 95, 125, 165, 190, 210, 235, 270, 290, 320, 345];
-  var TYPES = ['peony', 'peony', 'chrys', 'ring', 'heart', 'star', 'willow', 'palm', 'crossette', 'strobe', 'double', 'saturn', 'shift'];
+  function flash(x, y, hue) {
+    const R = Math.min(W, H) * 0.3;
+    const gr = fctx.createRadialGradient(x, y, 0, x, y, R);
+    gr.addColorStop(0, `hsla(${hue},100%,75%,0.55)`);
+    gr.addColorStop(0.3, `hsla(${hue},100%,60%,0.18)`);
+    gr.addColorStop(1, `hsla(${hue},100%,60%,0)`);
+    fctx.globalCompositeOperation = 'lighter';
+    fctx.fillStyle = gr;
+    fctx.fillRect(x - R, y - R, R * 2, R * 2);
+  }
 
-  function burst(x, y, type, hue, hue2) {
-    flashes.push({ x: x, y: y, r: rnd(140, 260) * S, a: 0.65, h: hue });
-    var v = rnd(230, 360) * S;
-    var i, n, a, z, sp, rot, tilt;
+  function explode(x, y, type, hue) {
+    flash(x, y, hue);
+    const base = H * (0.16 + Math.random() * 0.12);
+    const G = H * 0.12;
+    const rot = Math.random() * Math.PI * 2;
+    const cr = Math.cos(rot), sr = Math.sin(rot);
+    const tilt = 0.35 + Math.random() * 0.65;
+    const spread = () => (Math.random() - 0.5) * base * 0.05;
 
-    function sphere(count, speed, o, emitP) {
-      for (var k = 0; k < count; k++) {
-        var ang = rnd(0, TAU), zz = rnd(-1, 1);
-        var s2 = speed * Math.sqrt(1 - zz * zz) * rnd(0.92, 1.08);
-        var opt = {};
-        for (var key in o) opt[key] = o[key];
-        if (emitP && Math.random() < emitP) opt.emit = 0.7;
-        spawn(x, y, Math.cos(ang) * s2, Math.sin(ang) * s2, opt);
+    const sphere = (n, fn) => {
+      for (let i = 0; i < n; i++) {
+        const a = Math.random() * Math.PI * 2, u = Math.random() * 2 - 1;
+        const s = Math.sqrt(1 - u * u) * (0.55 + 0.45 * Math.random());
+        fn(Math.cos(a) * s, Math.sin(a) * s, s);
       }
-    }
+    };
+    const outline = (pts, n, fn) => {
+      for (let i = 0; i < n; i++) {
+        const [ox, oy] = pts(i / n);
+        const vx = ox * cr - oy * sr, vy = ox * sr + oy * cr;
+        fn(vx, vy * tilt, 1);
+      }
+    };
 
     switch (type) {
       case 'peony':
-        sphere(ri(90, 140), v, { h: hue, t: rnd(1.4, 2.0), size: 2.6 * S });
+        sphere(170, (vx, vy) => addPart({ x, y, vx: vx * base + spread(), vy: vy * base + spread(),
+          life: 1.4 + Math.random() * 0.6, h: hue, l: 62, size: 2.4 * unit + 0.8, g: G, drag: 1.4 }));
         break;
-
-      case 'chrys':
-        sphere(ri(80, 110), v * 0.95, { h: hue, t: rnd(1.8, 2.4), size: 2.4 * S, drag: 1.3 }, 0.35);
+      case 'twotone': {
+        const h2 = farHue(hue);
+        sphere(190, (vx, vy, s) => addPart({ x, y, vx: vx * base + spread(), vy: vy * base + spread(),
+          life: 1.5 + Math.random() * 0.5, h: s > 0.6 ? hue : h2, l: 62, size: 2.4 * unit + 0.8, g: G, drag: 1.4 }));
         break;
-
+      }
       case 'ring':
-        n = ri(60, 90); sp = v * 1.05;
-        tilt = rnd(0.25, 1); rot = rnd(0, TAU);
-        for (i = 0; i < n; i++) {
-          a = i / n * TAU + rnd(-0.03, 0.03);
-          var rx = Math.cos(a), ry = Math.sin(a) * tilt;
-          var vx = (rx * Math.cos(rot) - ry * Math.sin(rot)) * sp;
-          var vy = (rx * Math.sin(rot) + ry * Math.cos(rot)) * sp;
-          spawn(x, y, vx, vy, { h: hue, t: rnd(1.5, 1.9), size: 3 * S, drag: 1.3 });
+        outline(t => [Math.cos(t * 6.2832), Math.sin(t * 6.2832)], 110, (vx, vy) => addPart({ x, y,
+          vx: vx * base * 1.05 + spread() * 0.4, vy: vy * base * 1.05 + spread() * 0.4,
+          life: 1.5 + Math.random() * 0.4, h: hue, l: 62, size: 2.6 * unit + 0.8, g: G * 0.8, drag: 1.5 }));
+        if (Math.random() < 0.6) {
+          const h2 = farHue(hue);
+          outline(t => [Math.cos(t * 6.2832) * 0.5, Math.sin(t * 6.2832) * 0.5], 60, (vx, vy) => addPart({ x, y,
+            vx: vx * base + spread() * 0.4, vy: vy * base + spread() * 0.4,
+            life: 1.5 + Math.random() * 0.4, h: h2, l: 65, size: 2.6 * unit + 0.8, g: G * 0.8, drag: 1.5 }));
         }
-        if (Math.random() < 0.5) sphere(30, v * 0.3, { h: hue2, t: 1.2, size: 2 * S });
         break;
-
       case 'heart':
-        n = ri(80, 110); sp = v * 0.9; rot = rnd(-0.35, 0.35);
-        for (i = 0; i < n; i++) {
-          a = i / n * TAU;
-          var hx = 16 * Math.pow(Math.sin(a), 3);
-          var hy = 13 * Math.cos(a) - 5 * Math.cos(2 * a) - 2 * Math.cos(3 * a) - Math.cos(4 * a);
-          hx /= 17; hy /= 17;
-          var sc = sp * rnd(0.97, 1.03);
-          var fx = (hx * Math.cos(rot) + hy * Math.sin(rot)) * sc;
-          var fy = -(hy * Math.cos(rot) - hx * Math.sin(rot)) * sc;
-          spawn(x, y, fx, fy, { h: hue, t: rnd(1.6, 2.0), size: 3 * S, drag: 1.4 });
-        }
-        for (i = 0; i < 25; i++) {
-          a = rnd(0, TAU); z = rnd(0.1, 0.5) * sp;
-          spawn(x, y, Math.cos(a) * z, Math.sin(a) * z, { h: hue2, t: 1.1, size: 1.8 * S, drag: 1.4 });
-        }
+        outline(t => { const a = t * 6.2832; return [16 * Math.pow(Math.sin(a), 3) / 17,
+          -(13 * Math.cos(a) - 5 * Math.cos(2 * a) - 2 * Math.cos(3 * a) - Math.cos(4 * a)) / 17]; }, 140,
+          (vx, vy) => addPart({ x, y, vx: vx * base * 0.95 + spread() * 0.3, vy: vy * base * 0.95 + spread() * 0.3,
+            life: 1.6 + Math.random() * 0.4, h: Math.random() < 0.5 ? 338 : 0, l: 62, size: 2.6 * unit + 0.8, g: G * 0.6, drag: 1.5 }));
         break;
-
       case 'star':
-        n = 10; sp = v * 0.95; rot = rnd(0, TAU);
-        var ptsPerEdge = 9;
-        for (i = 0; i < n; i++) {
-          var r1 = (i % 2 === 0) ? 1 : 0.42, r2 = ((i + 1) % 2 === 0) ? 1 : 0.42;
-          var a1 = rot + i / n * TAU, a2 = rot + (i + 1) / n * TAU;
-          for (var k = 0; k < ptsPerEdge; k++) {
-            var f = k / ptsPerEdge;
-            var px = (Math.cos(a1) * r1) * (1 - f) + (Math.cos(a2) * r2) * f;
-            var py = (Math.sin(a1) * r1) * (1 - f) + (Math.sin(a2) * r2) * f;
-            spawn(x, y, px * sp, py * sp, { h: hue, t: rnd(1.6, 2.0), size: 3 * S, drag: 1.35 });
-          }
-        }
-        sphere(20, v * 0.25, { h: hue2, t: 1.0, size: 2 * S });
+        outline(t => {
+          const k = t * 10, i = Math.floor(k), f = k - i;
+          const ang = a => a * Math.PI / 5 - Math.PI / 2;
+          const r0 = i % 2 ? 0.42 : 1, r1 = (i + 1) % 2 ? 0.42 : 1;
+          const x0 = Math.cos(ang(i)) * r0, y0 = Math.sin(ang(i)) * r0;
+          const x1 = Math.cos(ang(i + 1)) * r1, y1 = Math.sin(ang(i + 1)) * r1;
+          return [x0 + (x1 - x0) * f, y0 + (y1 - y0) * f];
+        }, 130, (vx, vy) => addPart({ x, y, vx: vx * base + spread() * 0.3, vy: vy * base + spread() * 0.3,
+          life: 1.6 + Math.random() * 0.4, h: Math.random() < 0.7 ? 52 : hue, l: 64, size: 2.6 * unit + 0.8, g: G * 0.6, drag: 1.5 }));
         break;
-
       case 'willow':
-        sphere(ri(90, 130), v * 0.8, { h: rnd(38, 48), s: 90, l: 62, t: rnd(3.2, 4.2), size: 2.2 * S, g: G * 1.3, drag: 1.6, hot: 0.6 }, 0.2);
+        sphere(110, (vx, vy) => addPart({ x, y, vx: vx * base * 0.8 + spread(), vy: vy * base * 0.8 + spread(),
+          life: 2.6 + Math.random() * 0.8, h: 42 + Math.random() * 14, l: 60, size: 2 * unit + 0.6, g: G * 1.3, drag: 1.1, trail: 0.5 }));
         break;
-
+      case 'chrys':
+        sphere(150, (vx, vy) => addPart({ x, y, vx: vx * base + spread(), vy: vy * base + spread(),
+          life: 1.7 + Math.random() * 0.5, h: hue, l: 62, size: 2.2 * unit + 0.7, g: G, drag: 1.4, trail: 0.3 }));
+        break;
       case 'palm':
-        n = ri(12, 18); sp = v * 0.85;
-        for (i = 0; i < n; i++) {
-          a = rnd(0, TAU); z = rnd(-1, 1);
-          var s3 = sp * Math.sqrt(1 - z * z) * rnd(0.9, 1.1);
-          spawn(x, y, Math.cos(a) * s3, Math.sin(a) * s3, { h: hue, t: rnd(1.5, 1.9), size: 4.5 * S, g: G * 0.9, drag: 1.3, emit: 2.5 });
-        }
+        sphere(16, (vx, vy) => addPart({ x, y, vx: vx * base * 1.1 + spread(), vy: (vy - 0.25) * base * 1.1 + spread(),
+          life: 1.6 + Math.random() * 0.4, h: hue, l: 62, size: 4 * unit + 1.2, g: G * 1.1, drag: 1.3, trail: 1.5 }));
         break;
-
       case 'crossette':
-        n = ri(18, 26); sp = v * 0.75;
-        for (i = 0; i < n; i++) {
-          a = rnd(0, TAU); z = rnd(-1, 1);
-          var s4 = sp * Math.sqrt(1 - z * z) * rnd(0.9, 1.1);
-          spawn(x, y, Math.cos(a) * s4, Math.sin(a) * s4, { h: hue, t: 1.7, size: 3.4 * S, drag: 1.4, split: true, splitAt: rnd(0.5, 0.62) });
-        }
+        sphere(26, (vx, vy) => addPart({ x, y, vx: vx * base * 0.9 + spread(), vy: vy * base * 0.9 + spread(),
+          life: 1.9 + Math.random() * 0.3, h: hue, l: 62, size: 3 * unit + 1, g: G, drag: 1.4, split: true }));
         break;
-
-      case 'strobe':
-        sphere(ri(90, 130), v * 0.85, { h: hue, s: 35, l: 85, t: rnd(2.4, 3.0), size: 3 * S, g: G * 1.2, drag: 1.5, strobe: true, hot: 0.4 });
-        break;
-
-      case 'double':
-        sphere(ri(80, 110), v, { h: hue, t: rnd(1.5, 2.0), size: 2.6 * S });
-        sphere(ri(50, 70), v * 0.5, { h: hue2, t: rnd(1.3, 1.7), size: 2.6 * S });
-        break;
-
-      case 'saturn':
-        sphere(ri(50, 70), v * 0.45, { h: hue, t: 1.5, size: 2.6 * S });
-        n = 70; sp = v * 1.1; tilt = rnd(0.2, 0.45); rot = rnd(-0.4, 0.4);
-        for (i = 0; i < n; i++) {
-          a = i / n * TAU;
-          var qx = Math.cos(a), qy = Math.sin(a) * tilt;
-          spawn(x, y, (qx * Math.cos(rot) - qy * Math.sin(rot)) * sp, (qx * Math.sin(rot) + qy * Math.cos(rot)) * sp, { h: hue2, t: 1.7, size: 3 * S, drag: 1.3 });
-        }
-        break;
-
-      case 'shift':
-        sphere(ri(100, 140), v, { h: hue, h2: hue2, t: rnd(1.8, 2.3), size: 2.6 * S, drag: 1.2 });
+      case 'glitter':
+        sphere(200, (vx, vy) => addPart({ x, y, vx: vx * base + spread(), vy: vy * base + spread(),
+          life: 2 + Math.random() * 0.8, h: Math.random() < 0.6 ? hue : 55, l: 70, size: 2.2 * unit + 0.7, g: G * 0.9, drag: 1.5, flicker: true }));
         break;
     }
   }
 
-  function launch(count) {
-    for (var i = 0; i < count; i++) {
-      var x = rnd(W * 0.08, W * 0.92);
-      var target = rnd(H * 0.08, H * 0.46);
-      var vy = -Math.sqrt(2 * G * (HZ - target));
-      var hue = pick(HUES);
-      var hue2 = (hue + pick([40, 150, 180, 200, 300])) % 360;
-      var type = pick(TYPES);
-      if (Math.random() < 0.12) hue2 = -1; // white companion
-      rockets.push({ x: x, y: HZ, px: x, py: HZ, vx: rnd(-28, 28) * S, vy: vy, target: target, type: type, hue: hue, hue2: hue2 < 0 ? 0 : hue2, white2: hue2 < 0 });
-    }
+  function spark(p, speed, life, size) {
+    addPart({ x: p.x, y: p.y, vx: p.vx * 0.3 + (Math.random() - 0.5) * speed, vy: p.vy * 0.3 + (Math.random() - 0.5) * speed,
+      life, h: p.h, l: 70, size, g: p.g, drag: 2.5 });
   }
 
-  function schedule() {
-    var cycle = t % 52;
-    if (cycle > 44) {                      // finale
-      launchTimer = rnd(0.08, 0.22);
-      launch(Math.random() < 0.3 ? 2 : 1);
-    } else {
-      launchTimer = rnd(0.3, 1.15);
-      if (Math.random() < 0.18) launch(ri(2, 4));
-      else launch(1);
-    }
-  }
-
-  // ---------- simulation ----------
   function update(dt) {
-    launchTimer -= dt;
-    if (launchTimer <= 0 && ps.length < 7000) schedule();
-
-    var i, p;
-    for (i = rockets.length - 1; i >= 0; i--) {
-      var r = rockets[i];
-      r.px = r.x; r.py = r.y;
-      r.vy += G * dt;
-      r.x += r.vx * dt;
-      r.y += r.vy * dt;
-      // exhaust sparks
-      for (var k = 0; k < 2; k++) {
-        spawn(r.x + rnd(-1, 1) * S, r.y + rnd(0, 4) * S, rnd(-25, 25) * S, rnd(20, 70) * S,
-          { h: rnd(25, 45), s: 100, l: 65, t: rnd(0.25, 0.5), size: 1.6 * S, g: G * 0.3, drag: 2, hot: 0.8 });
-      }
-      if (r.vy >= -45 * S || r.y <= r.target) {
-        burst(r.x, r.y, r.type, r.hue, r.hue2);
-        rockets.splice(i, 1);
-      }
+    // Rockets
+    for (let i = rockets.length - 1; i >= 0; i--) {
+      const r = rockets[i];
+      r.vy += r.g * dt;
+      r.x += r.vx * dt; r.y += r.vy * dt;
+      // trail
+      for (let k = 0; k < 2; k++) addPart({ x: r.x, y: r.y, vx: (Math.random() - 0.5) * 30 * unit, vy: 40 * unit + Math.random() * 60 * unit,
+        life: 0.25 + Math.random() * 0.35, h: 40, l: 72, size: 1.8 * unit + 0.6, g: 0, drag: 1 });
+      if (r.vy > -H * 0.04) { explode(r.x, r.y, r.type, r.hue); rockets.splice(i, 1); }
     }
-
-    for (i = ps.length - 1; i >= 0; i--) {
-      p = ps[i];
+    // Sparks
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const p = parts[i];
       p.px = p.x; p.py = p.y;
-      var dk = 1 - p.drag * dt; if (dk < 0) dk = 0;
-      p.vx *= dk; p.vy *= dk;
       p.vy += p.g * dt;
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      p.life -= p.decay * dt;
-
-      if (p.split && p.life < p.splitAt) {
+      const d = Math.exp(-p.drag * dt);
+      p.vx *= d; p.vy *= d;
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.life -= dt;
+      if (p.trail && Math.random() < p.trail * dt * 60 * 0.5) spark(p, 20 * unit, 0.35 + Math.random() * 0.35, 1.4 * unit + 0.5);
+      if (p.split && p.life < p.maxLife * 0.55) {
         p.split = false; p.life = 0;
-        var ang = Math.atan2(p.vy, p.vx);
-        for (var j = 0; j < 4; j++) {
-          var a2 = ang + j * Math.PI / 2 + Math.PI / 4;
-          var sp2 = rnd(110, 160) * S;
-          spawn(p.x, p.y, p.vx * 0.3 + Math.cos(a2) * sp2, p.vy * 0.3 + Math.sin(a2) * sp2,
-            { h: p.h, t: 0.9, size: 2.4 * S, drag: 1.6 });
+        const h2 = Math.random() < 0.5 ? p.h : farHue(p.h);
+        const s = H * 0.09;
+        for (let k = 0; k < 5; k++) {
+          const a = k * Math.PI * 2 / 5 + Math.random() * 0.3;
+          addPart({ x: p.x, y: p.y, vx: p.vx * 0.3 + Math.cos(a) * s, vy: p.vy * 0.3 + Math.sin(a) * s,
+            life: 0.8 + Math.random() * 0.4, h: h2, l: 64, size: 2.2 * unit + 0.7, g: p.g, drag: 1.6 });
         }
       }
-      if (p.emit && ps.length < 9000) {
-        var em = p.emit * dt * 60 * p.life;
-        while (em > 0) {
-          if (Math.random() < em) {
-            spawn(p.x, p.y, p.vx * 0.15 + rnd(-30, 30) * S, p.vy * 0.15 + rnd(-30, 30) * S,
-              { h: p.h, s: 90, l: 70, t: rnd(0.35, 0.8), size: 1.5 * S, g: G * 0.8, drag: 2.2, hot: 0.5 });
-          }
-          em -= 1;
-        }
-      }
-      if (p.life <= 0 || p.y > HZ + 40 * S) {
-        ps[i] = ps[ps.length - 1];
-        ps.pop();
-      }
-    }
-
-    for (i = flashes.length - 1; i >= 0; i--) {
-      flashes[i].a -= dt * 3.2;
-      if (flashes[i].a <= 0) flashes.splice(i, 1);
+      if (p.life <= 0 || p.y > H + 20) { parts[i] = parts[parts.length - 1]; parts.pop(); }
     }
   }
 
-  // ---------- rendering ----------
-  function drawSky() {
-    sg.globalCompositeOperation = 'destination-out';
-    sg.fillStyle = 'rgba(0,0,0,0.19)';
-    sg.fillRect(0, 0, W, HZ);
-    sg.globalCompositeOperation = 'lighter';
-
-    var i, p;
-    for (i = 0; i < flashes.length; i++) {
-      var f = flashes[i];
-      var fg = sg.createRadialGradient(f.x, f.y, 0, f.x, f.y, f.r);
-      fg.addColorStop(0, 'hsla(' + f.h + ',70%,90%,' + (f.a * 0.6).toFixed(3) + ')');
-      fg.addColorStop(0.35, 'hsla(' + f.h + ',90%,65%,' + (f.a * 0.18).toFixed(3) + ')');
-      fg.addColorStop(1, 'hsla(' + f.h + ',90%,60%,0)');
-      sg.fillStyle = fg;
-      sg.fillRect(f.x - f.r, f.y - f.r, f.r * 2, f.r * 2);
+  function renderFx() {
+    fctx.globalCompositeOperation = 'destination-out';
+    fctx.fillStyle = 'rgba(0,0,0,0.2)';
+    fctx.fillRect(0, 0, W, H);
+    fctx.globalCompositeOperation = 'lighter';
+    fctx.lineCap = 'round';
+    for (const r of rockets) {
+      fctx.strokeStyle = 'rgba(255,230,180,0.95)';
+      fctx.lineWidth = 2.5 * unit + 0.8;
+      fctx.beginPath(); fctx.moveTo(r.x - r.vx * 0.02, r.y - r.vy * 0.02); fctx.lineTo(r.x, r.y); fctx.stroke();
     }
-
-    for (i = 0; i < rockets.length; i++) {
-      var r = rockets[i];
-      sg.strokeStyle = 'hsla(42,100%,88%,0.95)';
-      sg.lineWidth = 2.4 * S;
-      sg.beginPath(); sg.moveTo(r.px, r.py); sg.lineTo(r.x, r.y); sg.stroke();
-    }
-
-    for (i = 0; i < ps.length; i++) {
-      p = ps[i];
-      var a = p.life; if (a > 1) a = 1;
-      var alpha = a < 0.3 ? a / 0.3 : 1;
-      if (p.strobe) alpha *= (Math.random() < 0.45 ? 1 : 0.08);
-      var hot = Math.pow(a, 4) * p.hot;
-      var l = p.l + (97 - p.l) * hot;
-      var s = p.s * (1 - hot * 0.7);
-      var h = p.h;
-      if (p.h2 >= 0 && a < 0.55) h = p.h2;
-      sg.strokeStyle = 'hsla(' + h + ',' + s.toFixed(0) + '%,' + l.toFixed(0) + '%,' + alpha.toFixed(3) + ')';
-      sg.lineWidth = p.size * (0.45 + 0.55 * a);
-      sg.beginPath(); sg.moveTo(p.px, p.py); sg.lineTo(p.x, p.y); sg.stroke();
+    for (const p of parts) {
+      let a = p.life / p.maxLife;
+      a = a < 0.5 ? a * 2 : 1;
+      if (p.flicker && Math.random() < 0.6) a *= 0.12;
+      if (a < 0.02) continue;
+      fctx.strokeStyle = `hsla(${p.h},100%,${p.l}%,${a})`;
+      fctx.lineWidth = p.size;
+      fctx.beginPath(); fctx.moveTo(p.px, p.py); fctx.lineTo(p.x, p.y); fctx.stroke();
     }
   }
 
-  function compose() {
-    cx.globalAlpha = 1;
-    cx.globalCompositeOperation = 'source-over';
-    cx.drawImage(bgC, 0, 0, W, H);
+  function composite(t) {
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.drawImage(bg, 0, 0, bg.width, bg.height, 0, 0, W, H);
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.drawImage(fx, 0, 0, fx.width, Math.round(horizon * DPR), 0, 0, W, horizon);
 
-    // twinkling stars
-    for (var i = 0; i < twinkles.length; i++) {
-      var tw = twinkles[i];
-      var ta = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(t * tw.sp + tw.ph));
-      cx.fillStyle = 'rgba(255,255,255,' + ta.toFixed(2) + ')';
-      cx.beginPath(); cx.arc(tw.x, tw.y, tw.r, 0, TAU); cx.fill();
+    // River reflection: strips of the sky and fireworks, flipped, wobbled and dimmed.
+    const RH = H - horizon, step = 3;
+    for (let y = horizon; y < H; y += step) {
+      const dist = y - horizon, f = dist / RH;
+      const sy = horizon - dist * 1.25 - step;
+      if (sy < 0) break;
+      const off = Math.sin(dist * 0.11 + t * 2.4) * (0.8 + f * 6 * unit)
+                + Math.sin(dist * 0.37 - t * 3.3 + f * 4) * 1.4 * unit;
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = 0.5 - 0.32 * f;
+      ctx.drawImage(bg, 0, sy * DPR, bg.width, step * DPR, off, y, W, step);
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.75 - 0.45 * f;
+      ctx.drawImage(fx, 0, sy * DPR, fx.width, step * DPR, off, y, W, step);
     }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
 
-    cx.drawImage(skyC, 0, 0, W, HZ);
-    cx.drawImage(skylineC, 0, 0, W, HZ);
-
-    // flashes light the city and water
-    if (flashes.length) {
-      cx.globalCompositeOperation = 'lighter';
-      for (i = 0; i < flashes.length; i++) {
-        var f = flashes[i];
-        var rr = f.r * 3.2;
-        var fg = cx.createRadialGradient(f.x, f.y, 0, f.x, f.y, rr);
-        fg.addColorStop(0, 'hsla(' + f.h + ',80%,70%,' + (f.a * 0.16).toFixed(3) + ')');
-        fg.addColorStop(1, 'hsla(' + f.h + ',80%,70%,0)');
-        cx.fillStyle = fg;
-        cx.fillRect(f.x - rr, f.y - rr, rr * 2, rr * 2);
+    // Blinking red beacons on antennas
+    for (const b of beacons) {
+      if (Math.sin(t * 3 + b.p) > 0.3) {
+        ctx.fillStyle = 'rgba(255,50,50,0.95)';
+        ctx.beginPath(); ctx.arc(b.x, b.y, 1.6 * unit + 0.8, 0, Math.PI * 2); ctx.fill();
       }
-      cx.globalCompositeOperation = 'source-over';
     }
+  }
 
-    // beacons
-    for (i = 0; i < beacons.length; i++) {
-      var b = beacons[i];
-      var ba = 0.3 + 0.7 * Math.max(0, Math.sin(t * 2.4 + b.ph));
-      var bg = cx.createRadialGradient(b.x, b.y, 0, b.x, b.y, 6 * S);
-      bg.addColorStop(0, 'rgba(255,60,60,' + ba.toFixed(2) + ')');
-      bg.addColorStop(0.3, 'rgba(255,40,40,' + (ba * 0.5).toFixed(2) + ')');
-      bg.addColorStop(1, 'rgba(255,40,40,0)');
-      cx.fillStyle = bg;
-      cx.fillRect(b.x - 6 * S, b.y - 6 * S, 12 * S, 12 * S);
+  // ---------- Scheduling & loop ----------
+  let last = performance.now(), t = 0, nextLaunch = 0.4;
+  const queue = [];
+
+  function schedule(dt) {
+    nextLaunch -= dt;
+    if (nextLaunch <= 0) {
+      if (Math.random() < 0.2) {
+        const n = 3 + (Math.random() * 4 | 0);
+        for (let i = 0; i < n; i++) queue.push(t + i * 0.16);
+        nextLaunch = 2.4 + Math.random() * 1.4;
+      } else {
+        queue.push(t);
+        nextLaunch = 0.35 + Math.random() * 0.9;
+      }
     }
-
-    // reflection source = skyline + fireworks
-    rg.globalCompositeOperation = 'source-over';
-    rg.clearRect(0, 0, W, HZ);
-    rg.drawImage(skylineC, 0, 0, W, HZ);
-    rg.drawImage(skyC, 0, 0, W, HZ);
-
-    // rippled reflection strips
-    var sh = 2, comp = 0.8;
-    var srcH = sh / comp;
-    for (var y = 0; y < RH; y += sh) {
-      var fr = y / RH;
-      var srcY = HZ - (y + sh) / comp;
-      if (srcY < 0) break;
-      var off = Math.sin(y * 0.16 + t * 2.4) * (0.8 + fr * 5) * S
-              + Math.sin(y * 0.047 - t * 1.4 + 1.3) * (fr * 4.5) * S
-              + Math.sin(y * 0.33 + t * 3.7) * 0.6 * S;
-      cx.globalAlpha = 0.6 * (1 - fr * 0.75);
-      cx.drawImage(refC, 0, srcY * DPR, W * DPR, srcH * DPR, off, HZ + y, W, sh);
-    }
-    cx.globalAlpha = 1;
-
-    // soft shoreline edge
-    var eg = cx.createLinearGradient(0, HZ, 0, HZ + 14 * S);
-    eg.addColorStop(0, 'rgba(10,16,40,0.55)');
-    eg.addColorStop(1, 'rgba(10,16,40,0)');
-    cx.fillStyle = eg;
-    cx.fillRect(0, HZ, W, 14 * S);
+    for (let i = queue.length - 1; i >= 0; i--) if (queue[i] <= t) { launch(); queue.splice(i, 1); }
   }
 
   function frame(now) {
-    requestAnimationFrame(frame);
-    if (!last) last = now;
-    var dt = (now - last) / 1000;
-    last = now;
-    if (dt > 0.05) dt = 0.05;
-    if (dt < 0) dt = 0;
-    t += dt;
+    const dt = Math.min(0.05, Math.max(0.001, (now - last) / 1000));
+    last = now; t += dt;
+    schedule(dt);
     update(dt);
-    drawSky();
-    compose();
+    renderFx();
+    composite(t);
+    requestAnimationFrame(frame);
   }
 
-  window.addEventListener('resize', function () {
-    resize();
-    ps.length = 0; rockets.length = 0; flashes.length = 0;
-  });
-
+  window.addEventListener('resize', resize);
   resize();
-  launch(2);
+  // Open with bursts already in the sky, then keep launching.
+  explode(W * 0.35, H * 0.3, 'peony', pick(HUES));
+  explode(W * 0.65, H * 0.22, 'ring', pick(HUES));
+  launch(); launch();
   requestAnimationFrame(frame);
 })();
 </script>

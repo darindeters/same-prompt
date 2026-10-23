@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Coral Reef Aquarium</title>
 <style>
   * {
@@ -14,7 +14,10 @@
     width: 100%;
     height: 100%;
     overflow: hidden;
-    background: #020b18;
+    background: #020818;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
   }
   canvas {
     display: block;
@@ -30,18 +33,13 @@
   const canvas = document.getElementById('aquarium');
   const ctx = canvas.getContext('2d', { alpha: false });
 
-  // Logical coordinate system designed around 1080x1080
-  let width = 1080;
-  let height = 1080;
-  let dpr = 1;
+  // Reference virtual resolution optimized for 1080x1080 while adapting seamlessly to any aspect ratio
+  let width = window.innerWidth;
+  let height = window.innerHeight;
+  let dpr = Math.min(window.devicePixelRatio || 1, 2);
+  let scale = 1;
 
-  // Offscreen static & semi-static layer caching for lush reef complexity at 60fps
-  const bgCanvas = document.createElement('canvas');
-  const bgCtx = bgCanvas.getContext('2d');
-  const fgRockCanvas = document.createElement('canvas');
-  const fgRockCtx = fgRockCanvas.getContext('2d');
-
-  // Seeded pseudo-random for deterministic reef composition across resizes
+  // Deterministic PRNG for rich procedural reef generation
   let seed = 42197;
   function rand() {
     seed = (seed * 1664525 + 1013904223) % 4294967296;
@@ -51,1249 +49,1703 @@
     return min + rand() * (max - min);
   }
 
-  // Scene entities
-  const sunRays = [];
-  const marineSnow = [];
-  const bubbles = [];
-  const bubbleEmitters = [];
-  const kelps = [];
-  const anemones = [];
-  const seaFans = [];
-  const school = [];
-  const reefFish = [];
-  let prowler = null;
+  // Static offscreen buffer for complex reef backdrop & detailed coral structures
+  const bgCanvas = document.createElement('canvas');
+  const bgCtx = bgCanvas.getContext('2d');
 
-  // School state machine for dramatic cohesive choreography + scattering
-  const schoolState = {
-    mode: 'cruising', // 'cruising', 'turning', 'swirling', 'scattering', 'regrouping'
+  // Caustic texture buffer
+  const causticCanvas = document.createElement('canvas');
+  const causticCtx = causticCanvas.getContext('2d');
+  causticCanvas.width = 256;
+  causticCanvas.height = 256;
+
+  // Scene entities
+  const sunbeams = [];
+  const bubbles = [];
+  const plankton = [];
+  const seaFans = [];
+  const kelpStrands = [];
+  const anemones = [];
+  const tubeSponges = [];
+  const starfishes = [];
+  const clams = [];
+  const school = [];
+  const accentFish = [];
+  let cruiser = null; // Graceful manta ray / reef shadow that periodically glides through & scatters the school
+
+  // School choreography state
+  const choreographer = {
+    mode: 'schooling', // 'schooling' | 'turning' | 'scattering' | 'regrouping'
     timer: 0,
-    leaderX: 540,
-    leaderY: 420,
-    leaderVx: 2.2,
-    leaderVy: 0.4,
-    targetX: 760,
-    targetY: 360,
-    scatterOriginX: 540,
-    scatterOriginY: 420,
+    nextEventTime: 3.8,
+    attractorX: 0.5,
+    attractorY: 0.42,
+    targetAttractorX: 0.5,
+    targetAttractorY: 0.42,
+    attractorVx: 0,
+    attractorVy: 0,
+    scatterOriginX: 0.5,
+    scatterOriginY: 0.45,
     scatterStrength: 0,
-    swirlCenter: { x: 540, y: 400 },
-    swirlDir: 1
+    turnDirection: 1,
+    weavePhase: 0
   };
 
-  // Interactive or autonomous disturbance
-  const pointer = { x: -9999, y: -9999, active: false, pulse: 0 };
-  window.addEventListener('pointermove', (e) => {
-    const rect = canvas.getBoundingClientRect();
-    pointer.x = ((e.clientX - rect.left) / rect.width) * width;
-    pointer.y = ((e.clientY - rect.top) / rect.height) * height;
-    pointer.active = true;
-  });
-  window.addEventListener('pointerleave', () => {
-    pointer.active = false;
-  });
+  // Interactive pointer disturbance (optional bonus on top of automatic choreography)
+  const pointer = {
+    active: false,
+    x: 0,
+    y: 0,
+    timer: 0
+  };
+
+  // Color Palettes - Vivid, high-saturation tropical reef colors for phone screens
+  const CORAL_COLORS = {
+    magenta: ['#ff1e8a', '#ff5eb3', '#b80058'],
+    orange:  ['#ff5500', '#ff8c1a', '#b33000'],
+    gold:    ['#ffbe00', '#ffe44d', '#b87d00'],
+    violet:  ['#9b26ff', '#c97aff', '#5600a8'],
+    teal:    ['#00f0b5', '#6bffdf', '#008a68'],
+    crimson: ['#ff1744', '#ff616f', '#9e0020'],
+    electric:['#00d4ff', '#7ce8ff', '#00688a'],
+    lime:    ['#76ff03', '#b2ff59', '#328a00']
+  };
+
+  const FISH_PALETTES = [
+    // Electric Gold & Cyan Chromis / Anthias blend
+    {
+      bodyTop: '#ff4500',
+      bodyMid: '#ffaa00',
+      bodyBot: '#ffee55',
+      tail: '#00f5ff',
+      fin: '#ff1e8a',
+      stripe: '#00ffff',
+      glow: 'rgba(255, 165, 0, 0.35)'
+    },
+    // Neon Magenta & Gold Royal Gramma / Anthias
+    {
+      bodyTop: '#ff007f',
+      bodyMid: '#ff5500',
+      bodyBot: '#ffcc00',
+      tail: '#ffde00',
+      fin: '#00f0ff',
+      stripe: '#ff77cc',
+      glow: 'rgba(255, 0, 127, 0.35)'
+    },
+    // Vivid Turquoise & Electric Yellow Damselfish
+    {
+      bodyTop: '#00b8ff',
+      bodyMid: '#00f5d4',
+      bodyBot: '#ffe600',
+      tail: '#ffbe00',
+      fin: '#00ffff',
+      stripe: '#ffffff',
+      glow: 'rgba(0, 245, 212, 0.35)'
+    }
+  ];
 
   function initScene() {
-    seed = 73819;
-    sunRays.length = 0;
-    marineSnow.length = 0;
+    seed = 42197;
+    sunbeams.length = 0;
     bubbles.length = 0;
-    bubbleEmitters.length = 0;
-    kelps.length = 0;
-    anemones.length = 0;
+    plankton.length = 0;
     seaFans.length = 0;
+    kelpStrands.length = 0;
+    anemones.length = 0;
+    tubeSponges.length = 0;
+    starfishes.length = 0;
+    clams.length = 0;
+    school.length = 0;
+    accentFish.length = 0;
 
-    // 1. Volumetric Sun Rays
-    const rayCount = 14;
-    for (let i = 0; i < rayCount; i++) {
-      sunRays.push({
-        xTop: width * (-0.05 + (i / (rayCount - 1)) * 1.05) + randRange(-30, 30),
-        angle: 0.16 + randRange(-0.06, 0.08),
-        topWidth: randRange(35, 95),
-        bottomWidth: randRange(120, 260),
-        length: height * randRange(0.78, 1.05),
-        phase: randRange(0, Math.PI * 2),
+    // 1. Sunbeams from top water surface
+    const numBeams = 11;
+    for (let i = 0; i < numBeams; i++) {
+      sunbeams.push({
+        xNorm: -0.05 + (i / (numBeams - 1)) * 1.1 + randRange(-0.04, 0.04),
+        angle: randRange(0.10, 0.24),
+        widthTop: randRange(0.035, 0.09),
+        widthBot: randRange(0.12, 0.26),
         speed: randRange(0.4, 0.9),
-        alpha: randRange(0.035, 0.085),
-        hue: randRange(178, 198)
-      });
-    }
-
-    // 2. Marine Snow / Plankton
-    for (let i = 0; i < 140; i++) {
-      marineSnow.push({
-        x: randRange(0, width),
-        y: randRange(0, height),
-        r: randRange(0.7, 2.3),
-        vx: randRange(-0.18, 0.18),
-        vy: randRange(-0.12, 0.25),
         phase: randRange(0, Math.PI * 2),
-        alpha: randRange(0.15, 0.55),
-        hue: rand() > 0.3 ? 185 : 52
+        hue: rand() > 0.4 ? 186 : 168,
+        alpha: randRange(0.07, 0.16)
       });
     }
 
-    // 3. Bubble Emitters & Initial Bubbles
-    bubbleEmitters.push(
-      { x: width * 0.16, y: height * 0.87, rate: 0.08 },
-      { x: width * 0.48, y: height * 0.91, rate: 0.05 },
-      { x: width * 0.83, y: height * 0.84, rate: 0.09 }
-    );
-    for (let i = 0; i < 45; i++) {
+    // 2. Plankton / bioluminescent marine snow
+    const numPlankton = 110;
+    for (let i = 0; i < numPlankton; i++) {
+      const colors = ['#70ffff', '#fffa80', '#ff85d8', '#6bffb8', '#ffffff'];
+      plankton.push({
+        x: rand() * width,
+        y: rand() * height,
+        r: randRange(1.1, 3.2) * scale,
+        vx: randRange(-8, 8) * scale,
+        vy: randRange(-12, -3) * scale,
+        phase: randRange(0, Math.PI * 2),
+        color: colors[Math.floor(rand() * colors.length)],
+        alpha: randRange(0.35, 0.9)
+      });
+    }
+
+    // 3. Rising Bubble vents from reef crevices
+    const ventPositions = [0.14, 0.32, 0.68, 0.87];
+    for (let i = 0; i < 64; i++) {
+      const ventX = ventPositions[i % ventPositions.length];
       bubbles.push({
-        x: randRange(width * 0.08, width * 0.92),
-        y: randRange(height * 0.1, height * 0.95),
-        r: randRange(1.5, 6.2),
-        vy: randRange(0.8, 2.3),
+        ventX,
+        x: (ventX + randRange(-0.03, 0.03)) * width,
+        y: randRange(0.1, 0.95) * height,
+        r: randRange(1.8, 7.2) * scale,
+        speed: randRange(42, 105) * scale,
+        wobbleAmp: randRange(8, 22) * scale,
         wobbleFreq: randRange(1.8, 3.8),
-        wobbleAmp: randRange(0.4, 1.4),
         phase: randRange(0, Math.PI * 2)
       });
     }
 
-    // 4. Swaying Kelp & Sea Grasses (Back, Mid, Front layers)
-    const kelpClusters = [
-      { x: width * 0.05, y: height * 0.93, count: 6, minH: 180, maxH: 340, layer: 'back', hue: 162 },
-      { x: width * 0.27, y: height * 0.89, count: 4, minH: 120, maxH: 210, layer: 'mid', hue: 145 },
-      { x: width * 0.72, y: height * 0.90, count: 5, minH: 130, maxH: 230, layer: 'mid', hue: 152 },
-      { x: width * 0.94, y: height * 0.95, count: 7, minH: 200, maxH: 390, layer: 'front', hue: 138 }
+    // 4. Swaying Sea Fans (Gorgonian corals)
+    const fanSpecs = [
+      { x: 0.08, y: 0.77, size: 135, angle: 0.32, color: '#ff1e8a', highlight: '#ff85c2' },
+      { x: 0.22, y: 0.85, size: 110, angle: 0.12, color: '#ff6d00', highlight: '#ffbe4d' },
+      { x: 0.89, y: 0.75, size: 145, angle: -0.35, color: '#aa00ff', highlight: '#e08aff' },
+      { x: 0.74, y: 0.87, size: 105, angle: -0.15, color: '#ff1744', highlight: '#ff7782' },
+      { x: 0.47, y: 0.90, size: 95,  angle: 0.04,  color: '#00e676', highlight: '#8affc1' }
     ];
-    for (const cluster of kelpClusters) {
-      for (let i = 0; i < cluster.count; i++) {
-        kelps.push({
-          x: cluster.x + randRange(-38, 38),
-          y: cluster.y + randRange(-12, 15),
-          height: randRange(cluster.minH, cluster.maxH),
-          segments: 12,
-          width: randRange(7, 13),
-          hue: cluster.hue + randRange(-10, 10),
-          light: cluster.layer === 'back' ? 24 : cluster.layer === 'mid' ? 34 : 40,
+    for (const spec of fanSpecs) {
+      const branches = [];
+      generateFanBranches(branches, 0, 0, -Math.PI / 2 + spec.angle, spec.size * scale, 5);
+      seaFans.push({
+        ...spec,
+        branches,
+        phase: randRange(0, Math.PI * 2)
+      });
+    }
+
+    // 5. Lush swaying Seaweed / Ribbon Kelp clusters on edges
+    const kelpX = [0.02, 0.045, 0.07, 0.93, 0.955, 0.98, 0.36, 0.62];
+    for (let i = 0; i < kelpX.length; i++) {
+      const isEdge = kelpX[i] < 0.15 || kelpX[i] > 0.85;
+      kelpStrands.push({
+        x: kelpX[i],
+        y: isEdge ? 0.86 : 0.95,
+        segments: isEdge ? 14 : 9,
+        segLen: (isEdge ? 22 : 15) * scale,
+        width: (isEdge ? 14 : 10) * scale,
+        color1: i % 2 === 0 ? '#00e676' : '#00bfa5',
+        color2: i % 2 === 0 ? '#b2ff59' : '#64ffda',
+        phase: randRange(0, Math.PI * 2)
+      });
+    }
+
+    // 6. Glowing Sea Anemones on foreground coral heads
+    const anemoneSpecs = [
+      { x: 0.17, y: 0.82, rx: 52, ry: 24, baseColor: '#7c00ff', tentacleColor: '#ff1e9b', tipColor: '#ffff00', count: 34 },
+      { x: 0.56, y: 0.84, rx: 60, ry: 26, baseColor: '#008c7a', tentacleColor: '#00ffcc', tipColor: '#ffea00', count: 38 },
+      { x: 0.83, y: 0.83, rx: 48, ry: 22, baseColor: '#b0003a', tentacleColor: '#ff5500', tipColor: '#ff00e6', count: 32 }
+    ];
+    for (const spec of anemoneSpecs) {
+      const tentacles = [];
+      for (let i = 0; i < spec.count; i++) {
+        const tNorm = (i / (spec.count - 1)) * 2 - 1; // -1 to 1
+        const ringRow = (i % 3) / 2; // 0, 0.5, 1
+        tentacles.push({
+          ox: tNorm * spec.rx * scale * (0.7 + ringRow * 0.3),
+          oy: (ringRow - 0.5) * spec.ry * 0.6 * scale,
+          len: randRange(42, 72) * scale * (1.15 - Math.abs(tNorm) * 0.35),
+          spread: tNorm * 0.65 + randRange(-0.12, 0.12),
+          thickness: randRange(4.5, 7.2) * scale,
           phase: randRange(0, Math.PI * 2),
-          speed: randRange(1.0, 1.6),
-          layer: cluster.layer
+          speed: randRange(1.6, 2.5)
+        });
+      }
+      anemones.push({ ...spec, tentacles });
+    }
+
+    // 7. Giant Clams with iridescent mantles
+    clams.push(
+      { x: 0.38, y: 0.90, size: 46 * scale, hue: '#00e5ff', spots: '#ff00aa', phase: 0.4 },
+      { x: 0.69, y: 0.91, size: 40 * scale, hue: '#aa00ff', spots: '#00ffcc', phase: 2.1 }
+    );
+
+    // 8. Main School of Fish (95 vibrant schooling reef fish)
+    const schoolCount = 95;
+    const startCenterX = width * 0.48;
+    const startCenterY = height * 0.40;
+    for (let i = 0; i < schoolCount; i++) {
+      const angle = randRange(-0.25, 0.25);
+      const speed = randRange(150, 230) * scale;
+      const paletteIdx = i % 7 === 0 ? 1 : (i % 5 === 0 ? 2 : 0);
+      const size = randRange(13, 20.5) * scale;
+      school.push({
+        x: startCenterX + randRange(-180, 180) * scale,
+        y: startCenterY + randRange(-110, 110) * scale,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        angle: angle,
+        turnRate: 0,
+        size: size,
+        baseSpeed: speed,
+        maxSpeed: 265 * scale,
+        scatterBoost: 0,
+        swimPhase: randRange(0, Math.PI * 2),
+        swimFreq: randRange(11, 15),
+        palette: FISH_PALETTES[paletteIdx],
+        depth: randRange(0.78, 1.12), // subtle scale & brightness layering
+        individualOffset: randRange(-0.35, 0.35)
+      });
+    }
+
+    // 9. Resident Reef Fish (Clownfish near anemones & Angelfish near coral heads)
+    for (let a = 0; a < anemones.length; a++) {
+      const anem = anemones[a];
+      for (let c = 0; c < 2; c++) {
+        accentFish.push({
+          type: 'clownfish',
+          homeX: anem.x,
+          homeY: anem.y - 0.055,
+          x: (anem.x + randRange(-0.04, 0.04)) * width,
+          y: (anem.y - 0.05 + randRange(-0.03, 0.02)) * height,
+          vx: randRange(-30, 30) * scale,
+          vy: randRange(-15, 15) * scale,
+          angle: 0,
+          size: (c === 0 ? 17 : 13.5) * scale,
+          phase: randRange(0, Math.PI * 2),
+          targetTimer: randRange(0.5, 2.5),
+          tx: anem.x * width,
+          ty: (anem.y - 0.06) * height
         });
       }
     }
 
-    // 5. Sea Fans (Gorgonian lacy corals that gently flex)
-    seaFans.push(
-      { x: width * 0.19, y: height * 0.78, size: 125, angle: 0.35, color: '#e84a7f', highlight: '#ff85ad', phase: 0.4, layer: 'mid' },
-      { x: width * 0.82, y: height * 0.73, size: 140, angle: -0.42, color: '#ff6b35', highlight: '#ffab73', phase: 1.9, layer: 'mid' },
-      { x: width * 0.36, y: height * 0.89, size: 95, angle: 0.15, color: '#9b5de5', highlight: '#cba3ff', phase: 3.1, layer: 'front' }
-    );
-
-    // 6. Sea Anemones with dynamic tentacles
-    anemones.push(
+    // Couple of Regal Blue Tangs / Butterflyfish patrolling lower reef
+    accentFish.push(
       {
-        x: width * 0.24,
-        y: height * 0.83,
-        baseRx: 38,
-        baseRy: 18,
-        tentacles: 34,
-        length: 62,
-        baseColor: '#7b2cbf',
-        tentacleColor: '#ff4d8d',
-        tipColor: '#ffe66d',
-        layer: 'mid'
+        type: 'tang',
+        homeX: 0.30,
+        homeY: 0.67,
+        x: 0.30 * width,
+        y: 0.67 * height,
+        vx: 50 * scale,
+        vy: 0,
+        angle: 0,
+        size: 24 * scale,
+        phase: 0,
+        targetTimer: 1.5,
+        tx: 0.65 * width,
+        ty: 0.64 * height
       },
       {
-        x: width * 0.63,
-        y: height * 0.85,
-        baseRx: 44,
-        baseRy: 20,
-        tentacles: 40,
-        length: 70,
-        baseColor: '#d90429',
-        tentacleColor: '#ff758f',
-        tipColor: '#b8f2e6',
-        layer: 'front'
-      },
-      {
-        x: width * 0.86,
-        y: height * 0.88,
-        baseRx: 32,
-        baseRy: 15,
-        tentacles: 28,
-        length: 52,
-        baseColor: '#1b4332',
-        tentacleColor: '#40916c',
-        tipColor: '#95d5b2',
-        layer: 'front'
+        type: 'moorish',
+        homeX: 0.68,
+        homeY: 0.63,
+        x: 0.68 * width,
+        y: 0.63 * height,
+        vx: -45 * scale,
+        vy: 0,
+        angle: Math.PI,
+        size: 26 * scale,
+        phase: 1.7,
+        targetTimer: 2.0,
+        tx: 0.25 * width,
+        ty: 0.60 * height
       }
     );
 
-    // 7. Build Main School of Fish (115 Anthias / Chromis schooling fish)
-    if (school.length === 0) {
-      const schoolCount = 115;
-      for (let i = 0; i < schoolCount; i++) {
-        const angle = randRange(0, Math.PI * 2);
-        const dist = randRange(10, 180);
-        // Subtle color variation within the vibrant tropical school (Cyan-Gold-Coral Damselfish/Anthias)
-        const variant = rand();
-        let primaryHue, secondaryHue;
-        if (variant < 0.72) {
-          // Electric Turquoise & Gold-tailed Chromis
-          primaryHue = randRange(182, 198);
-          secondaryHue = randRange(42, 54);
-        } else {
-          // Lyretail Anthias (Sunset Coral-Gold & Magenta)
-          primaryHue = randRange(14, 34);
-          secondaryHue = randRange(325, 348);
-        }
-        school.push({
-          x: schoolState.leaderX + Math.cos(angle) * dist,
-          y: schoolState.leaderY + Math.sin(angle) * dist * 0.65,
-          vx: randRange(1.5, 3.0),
-          vy: randRange(-0.5, 0.5),
-          ax: 0,
-          ay: 0,
-          size: randRange(10.5, 15.5),
-          maxSpeed: randRange(3.2, 4.1),
-          panicSpeed: randRange(7.4, 9.8),
-          maxForce: randRange(0.11, 0.16),
-          tailPhase: randRange(0, Math.PI * 2),
-          tailSpeed: randRange(0.28, 0.38),
-          primaryHue,
-          secondaryHue,
-          depthScale: randRange(0.82, 1.15),
-          offsetBiasX: randRange(-28, 28),
-          offsetBiasY: randRange(-22, 22),
-          panicTimer: 0
-        });
-      }
+    // 10. Cruiser (Graceful Spotted Eagle Ray that glides across periodically and scatters the school)
+    cruiser = {
+      active: false,
+      timer: 9.5, // first appearance after 9.5s
+      x: -200,
+      y: height * 0.38,
+      vx: 160 * scale,
+      vy: 10 * scale,
+      wingPhase: 0,
+      size: 88 * scale
+    };
 
-      // 8. Solo Reef Dwellers (Angelfish, Butterflyfish, Clownfish near anemones)
-      reefFish.push(
-        {
-          type: 'c2', // Clownfish pair near left anemone
-          homeX: width * 0.24,
-          homeY: height * 0.80,
-          x: width * 0.23,
-          y: height * 0.79,
-          vx: 0.6,
-          vy: 0.1,
-          size: 16,
-          phase: 0.2
-        },
-        {
-          type: 'c2',
-          homeX: width * 0.24,
-          homeY: height * 0.80,
-          x: width * 0.26,
-          y: height * 0.81,
-          vx: -0.5,
-          vy: -0.1,
-          size: 13,
-          phase: 2.1
-        },
-        {
-          type: 'c2', // Clownfish near right anemone
-          homeX: width * 0.63,
-          homeY: height * 0.82,
-          x: width * 0.63,
-          y: height * 0.81,
-          vx: 0.5,
-          vy: 0.15,
-          size: 15,
-          phase: 1.4
-        },
-        {
-          type: 'angelfish', // Regal / Emperor Angelfish gliding mid-reef
-          homeX: width * 0.72,
-          homeY: height * 0.64,
-          x: width * 0.70,
-          y: height * 0.65,
-          vx: -0.8,
-          vy: 0.1,
-          size: 30,
-          phase: 0.7
-        },
-        {
-          type: 'tang', // Yellow Tang grazing near left coral arch
-          homeX: width * 0.30,
-          homeY: height * 0.68,
-          x: width * 0.32,
-          y: height * 0.68,
-          vx: 0.9,
-          vy: -0.1,
-          size: 25,
-          phase: 3.5
-        }
-      );
-
-      // 9. Reef Prowler (Large graceful Blue Trevally / Reef Shark silhouette that periodically triggers natural scatters)
-      prowler = {
-        x: -220,
-        y: height * 0.35,
-        vx: 3.4,
-        vy: 0.2,
-        active: false,
-        cooldown: 260, // frames until first pass
-        size: 68,
-        tailPhase: 0
-      };
-    }
-
-    renderStaticLayers();
+    renderStaticBackground();
   }
 
-  // Draw intricate static background & foreground coral reef onto offscreen canvases
-  function renderStaticLayers() {
-    bgCanvas.width = width * dpr;
-    bgCanvas.height = height * dpr;
-    bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  function generateFanBranches(list, x1, y1, angle, len, depth) {
+    if (depth <= 0 || len < 4) return;
+    const x2 = x1 + Math.cos(angle) * len;
+    const y2 = y1 + Math.sin(angle) * len;
+    list.push({ x1, y1, x2, y2, depth, len, angle });
 
-    fgRockCanvas.width = width * dpr;
-    fgRockCanvas.height = height * dpr;
-    fgRockCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const subCount = depth === 5 ? 3 : 2;
+    for (let i = 0; i < subCount; i++) {
+      const spread = subCount === 3 ? (i - 1) * 0.38 : (i === 0 ? -0.32 : 0.32);
+      const nextAngle = angle + spread + randRange(-0.1, 0.1);
+      const nextLen = len * randRange(0.66, 0.78);
+      generateFanBranches(list, x2, y2, nextAngle, nextLen, depth - 1);
+    }
+    // Cross-mesh twigs for authentic gorgonian sea fan look
+    if (depth >= 2 && depth <= 4) {
+      const mx = (x1 + x2) * 0.5;
+      const my = (y1 + y2) * 0.5;
+      const side = rand() > 0.5 ? 1 : -1;
+      generateFanBranches(list, mx, my, angle + side * 0.45, len * 0.5, depth - 2);
+    }
+  }
 
-    let s = 918273;
-    const lRand = () => {
-      s = (s * 1664525 + 1013904223) % 4294967296;
-      return s / 4294967296;
-    };
-    const lRange = (a, b) => a + lRand() * (b - a);
+  // Render the layered pelagic water, distant reef silhouettes, mid-ground coral heads,
+  // staghorn forests, brain corals, tube sponges, and glowing sandy seabed onto offscreen canvas
+  function renderStaticBackground() {
+    bgCanvas.width = width;
+    bgCanvas.height = height;
+    const g = bgCtx;
 
-    // --- 1. Deep Tropical Ocean Water Gradient ---
-    const waterGrad = bgCtx.createLinearGradient(0, 0, 0, height);
-    waterGrad.addColorStop(0.0, '#1ad1e6');
-    waterGrad.addColorStop(0.08, '#0ca4c6');
-    waterGrad.addColorStop(0.28, '#056996');
-    waterGrad.addColorStop(0.58, '#043c68');
-    waterGrad.addColorStop(0.85, '#031f3e');
-    waterGrad.addColorStop(1.0, '#021226');
-    bgCtx.fillStyle = waterGrad;
-    bgCtx.fillRect(0, 0, width, height);
+    // 1. Deep vibrant tropical water gradient
+    const waterGrad = g.createLinearGradient(0, 0, 0, height);
+    waterGrad.addColorStop(0.00, '#00e5ff');
+    waterGrad.addColorStop(0.07, '#00b4ff');
+    waterGrad.addColorStop(0.22, '#0068d6');
+    waterGrad.addColorStop(0.50, '#04328c');
+    waterGrad.addColorStop(0.78, '#051952');
+    waterGrad.addColorStop(1.00, '#030b29');
+    g.fillStyle = waterGrad;
+    g.fillRect(0, 0, width, height);
 
-    // Subtle radial surface glow (Snell's window above the reef)
-    const sunGlow = bgCtx.createRadialGradient(width * 0.38, -height * 0.08, 20, width * 0.42, height * 0.15, width * 0.75);
-    sunGlow.addColorStop(0, 'rgba(175, 255, 255, 0.52)');
-    sunGlow.addColorStop(0.35, 'rgba(64, 224, 240, 0.22)');
-    sunGlow.addColorStop(1, 'rgba(5, 80, 125, 0)');
-    bgCtx.fillStyle = sunGlow;
-    bgCtx.fillRect(0, 0, width, height);
+    // 2. Radiant surface sun glow at top center
+    const sunGlow = g.createRadialGradient(
+      width * 0.48, -height * 0.08, width * 0.02,
+      width * 0.48, height * 0.05, width * 0.75
+    );
+    sunGlow.addColorStop(0.0, 'rgba(195, 255, 255, 0.85)');
+    sunGlow.addColorStop(0.25, 'rgba(0, 240, 255, 0.45)');
+    sunGlow.addColorStop(0.6, 'rgba(0, 150, 255, 0.12)');
+    sunGlow.addColorStop(1.0, 'rgba(0, 80, 200, 0)');
+    g.fillStyle = sunGlow;
+    g.fillRect(0, 0, width, height * 0.75);
 
-    // --- 2. Distant Reef Silhouettes (Atmospheric Perspective) ---
-    bgCtx.fillStyle = '#043258';
-    bgCtx.beginPath();
-    bgCtx.moveTo(0, height);
-    bgCtx.lineTo(0, height * 0.62);
-    bgCtx.bezierCurveTo(width * 0.12, height * 0.56, width * 0.22, height * 0.68, width * 0.35, height * 0.72);
-    bgCtx.bezierCurveTo(width * 0.50, height * 0.76, width * 0.60, height * 0.63, width * 0.75, height * 0.66);
-    bgCtx.bezierCurveTo(width * 0.88, height * 0.69, width * 0.94, height * 0.57, width, height * 0.59);
-    bgCtx.lineTo(width, height);
-    bgCtx.closePath();
-    bgCtx.fill();
+    // 3. Distant Pelagic Reef Silhouettes (Layer 1 - Misty Cyan-Blue)
+    drawReefRidge(g, height * 0.62, height * 0.12, '#034096', 14, 101);
+    drawDistantStaghorns(g, height * 0.63, '#0551b0', 9);
 
-    // Distant staghorn silhouettes on far ridge
-    drawDistantCoralSilhouette(bgCtx, width * 0.14, height * 0.61, 65, '#063b64', lRand);
-    drawDistantCoralSilhouette(bgCtx, width * 0.78, height * 0.65, 75, '#063b64', lRand);
-    drawDistantCoralSilhouette(bgCtx, width * 0.88, height * 0.61, 55, '#05355b', lRand);
+    // 4. Mid-Distant Reef Silhouettes (Layer 2 - Deep Indigo-Violet)
+    drawReefRidge(g, height * 0.70, height * 0.14, '#082972', 18, 202);
+    drawDistantStaghorns(g, height * 0.71, '#0d3b94', 12);
 
-    // Mid-distance reef arch and ledges
-    const midRockGrad = bgCtx.createLinearGradient(0, height * 0.55, 0, height);
-    midRockGrad.addColorStop(0, '#072a4a');
-    midRockGrad.addColorStop(1, '#041529');
-    bgCtx.fillStyle = midRockGrad;
-    bgCtx.beginPath();
-    bgCtx.moveTo(0, height);
-    bgCtx.lineTo(0, height * 0.54);
-    bgCtx.bezierCurveTo(width * 0.16, height * 0.52, width * 0.26, height * 0.66, width * 0.34, height * 0.77);
-    bgCtx.bezierCurveTo(width * 0.44, height * 0.86, width * 0.58, height * 0.85, width * 0.68, height * 0.76);
-    bgCtx.bezierCurveTo(width * 0.78, height * 0.66, width * 0.87, height * 0.50, width, height * 0.48);
-    bgCtx.lineTo(width, height);
-    bgCtx.closePath();
-    bgCtx.fill();
-
-    // --- 3. Bright Sandy Lagoon Floor ---
-    const sandGrad = bgCtx.createLinearGradient(0, height * 0.78, 0, height);
-    sandGrad.addColorStop(0, '#1e6b7b');
-    sandGrad.addColorStop(0.35, '#154e63');
-    sandGrad.addColorStop(1, '#082338');
-    bgCtx.fillStyle = sandGrad;
-    bgCtx.beginPath();
-    bgCtx.moveTo(0, height);
-    bgCtx.lineTo(0, height * 0.84);
-    bgCtx.bezierCurveTo(width * 0.25, height * 0.79, width * 0.45, height * 0.77, width * 0.65, height * 0.81);
-    bgCtx.bezierCurveTo(width * 0.82, height * 0.85, width * 0.92, height * 0.83, width, height * 0.86);
-    bgCtx.lineTo(width, height);
-    bgCtx.closePath();
-    bgCtx.fill();
+    // 5. Luminous Tropical Sand Lagoon Floor (visible in center valley)
+    const sandGrad = g.createLinearGradient(0, height * 0.72, 0, height);
+    sandGrad.addColorStop(0.0, '#064e8c');
+    sandGrad.addColorStop(0.35, '#0b72a8');
+    sandGrad.addColorStop(0.75, '#0f9ac7');
+    sandGrad.addColorStop(1.0, '#065c85');
+    g.fillStyle = sandGrad;
+    g.beginPath();
+    g.moveTo(0, height * 0.78);
+    g.quadraticCurveTo(width * 0.5, height * 0.73, width, height * 0.79);
+    g.lineTo(width, height);
+    g.lineTo(0, height);
+    g.closePath();
+    g.fill();
 
     // Sand ripples
-    bgCtx.save();
-    bgCtx.strokeStyle = 'rgba(102, 217, 232, 0.12)';
-    bgCtx.lineWidth = 2.5;
-    for (let i = 0; i < 14; i++) {
-      const rx = lRange(width * 0.25, width * 0.75);
-      const ry = lRange(height * 0.83, height * 0.97);
-      const rw = lRange(45, 130);
-      bgCtx.beginPath();
-      bgCtx.moveTo(rx - rw, ry);
-      bgCtx.quadraticCurveTo(rx, ry - 6, rx + rw, ry);
-      bgCtx.stroke();
+    g.save();
+    g.strokeStyle = 'rgba(110, 245, 255, 0.18)';
+    g.lineWidth = 3 * scale;
+    for (let i = 0; i < 9; i++) {
+      const ry = height * (0.78 + i * 0.024);
+      g.beginPath();
+      for (let x = width * 0.15; x <= width * 0.85; x += 20 * scale) {
+        const sy = ry + Math.sin(x * 0.025 + i * 1.3) * 4 * scale;
+        if (x === width * 0.15) g.moveTo(x, sy);
+        else g.lineTo(x, sy);
+      }
+      g.stroke();
     }
-    bgCtx.restore();
+    g.restore();
 
-    // --- 4. Midground Coral Formations (drawn onto bgCanvas) ---
-    // Left reef outcrop
-    drawReefRock(bgCtx, width * 0.16, height * 0.84, 240, 145, '#0d2b45', '#1b4d6e', lRand);
-    // Right reef outcrop
-    drawReefRock(bgCtx, width * 0.84, height * 0.82, 260, 165, '#0b253c', '#184564', lRand);
-    // Center-left low bommie
-    drawReefRock(bgCtx, width * 0.43, height * 0.89, 150, 75, '#0e2c47', '#1c5274', lRand);
+    // 6. Mid-ground Reef Outcrops (Left & Right Amphitheater + Central Bombs)
+    drawRockyOutcrop(g, -width * 0.05, height * 0.56, width * 0.42, height * 0.48, '#141b56', '#26338a', true);
+    drawRockyOutcrop(g, width * 0.63, height * 0.54, width * 0.44, height * 0.50, '#12184f', '#233082', false);
+    drawRockyOutcrop(g, width * 0.25, height * 0.76, width * 0.52, height * 0.28, '#172163', '#293c9c', true);
 
-    // Plate Corals (Acropora table corals) on left and right ledges
-    drawTableCoral(bgCtx, width * 0.14, height * 0.71, 115, 28, '#2b9348', '#80ed99', '#e9ff70');
-    drawTableCoral(bgCtx, width * 0.08, height * 0.66, 90, 22, '#0077b6', '#48cae4', '#caf0f8');
-    drawTableCoral(bgCtx, width * 0.87, height * 0.67, 125, 30, '#9d4edd', '#e0aaff', '#ffccd5');
-    drawTableCoral(bgCtx, width * 0.75, height * 0.76, 95, 24, '#d90429', '#ff758f', '#ffe5ec');
+    // 7. Rich Mid-Ground & Foreground Coral Formations
+    // Table Corals (Acropora) on left and right ledges
+    drawTableCoral(g, width * 0.12, height * 0.62, 115 * scale, 32 * scale, CORAL_COLORS.teal);
+    drawTableCoral(g, width * 0.07, height * 0.67, 95 * scale, 26 * scale, CORAL_COLORS.gold);
+    drawTableCoral(g, width * 0.88, height * 0.60, 125 * scale, 35 * scale, CORAL_COLORS.magenta);
+    drawTableCoral(g, width * 0.92, height * 0.66, 98 * scale, 28 * scale, CORAL_COLORS.electric);
 
-    // Staghorn Corals (Branching)
-    drawStaghornCoral(bgCtx, width * 0.28, height * 0.79, 85, -Math.PI / 2 + 0.18, 4, '#ff5400', '#ffbd00', '#fff3b0', lRand);
-    drawStaghornCoral(bgCtx, width * 0.71, height * 0.79, 92, -Math.PI / 2 - 0.15, 4, '#f72585', '#ff70a6', '#ffd6ff', lRand);
-    drawStaghornCoral(bgCtx, width * 0.11, height * 0.79, 75, -Math.PI / 2 + 0.3, 4, '#00b4d8', '#90e0ef', '#caf0f8', lRand);
-    drawStaghornCoral(bgCtx, width * 0.91, height * 0.75, 80, -Math.PI / 2 - 0.25, 4, '#ff9e00', '#ffea00', '#ffffff', lRand);
+    // Staghorn Coral Forests
+    drawStaghornCluster(g, width * 0.19, height * 0.74, 115 * scale, 7, CORAL_COLORS.orange);
+    drawStaghornCluster(g, width * 0.06, height * 0.79, 130 * scale, 8, CORAL_COLORS.magenta);
+    drawStaghornCluster(g, width * 0.81, height * 0.73, 125 * scale, 8, CORAL_COLORS.gold);
+    drawStaghornCluster(g, width * 0.94, height * 0.77, 135 * scale, 7, CORAL_COLORS.teal);
+    drawStaghornCluster(g, width * 0.44, height * 0.83, 95 * scale, 6, CORAL_COLORS.violet);
+    drawStaghornCluster(g, width * 0.62, height * 0.81, 105 * scale, 7, CORAL_COLORS.crimson);
 
-    // Tubular Organ-Pipe & Sponge Corals
-    drawTubeCoralCluster(bgCtx, width * 0.34, height * 0.85, 11, '#ff006e', '#ffbe0b', lRand);
-    drawTubeCoralCluster(bgCtx, width * 0.67, height * 0.84, 13, '#fb5607', '#ffbe0b', lRand);
-    drawTubeCoralCluster(bgCtx, width * 0.18, height * 0.86, 9, '#8338ec', '#ff99c8', lRand);
+    // Organ Pipe / Tube Sponge Clusters
+    drawTubeSponges(g, width * 0.28, height * 0.79, 9, 85 * scale, CORAL_COLORS.gold);
+    drawTubeSponges(g, width * 0.73, height * 0.78, 10, 92 * scale, CORAL_COLORS.orange);
+    drawTubeSponges(g, width * 0.11, height * 0.88, 8, 80 * scale, CORAL_COLORS.violet);
+    drawTubeSponges(g, width * 0.89, height * 0.89, 8, 78 * scale, CORAL_COLORS.crimson);
 
-    // Brain Corals with intricate meandroid grooves
-    drawBrainCoral(bgCtx, width * 0.42, height * 0.87, 54, 42, '#007f5f', '#55a630', '#accf46', lRand);
-    drawBrainCoral(bgCtx, width * 0.56, height * 0.88, 48, 38, '#b5179e', '#f72585', '#ff99c8', lRand);
-    drawBrainCoral(bgCtx, width * 0.78, height * 0.85, 62, 46, '#e85d04', '#f48c06', '#ffba08', lRand);
+    // Sculpted Brain Corals & Dome Corals
+    drawBrainCoral(g, width * 0.23, height * 0.86, 68 * scale, 52 * scale, CORAL_COLORS.lime);
+    drawBrainCoral(g, width * 0.50, height * 0.88, 76 * scale, 56 * scale, CORAL_COLORS.orange);
+    drawBrainCoral(g, width * 0.78, height * 0.87, 70 * scale, 54 * scale, CORAL_COLORS.electric);
+    drawBrainCoral(g, width * 0.34, height * 0.93, 62 * scale, 48 * scale, CORAL_COLORS.magenta);
+    drawBrainCoral(g, width * 0.64, height * 0.94, 64 * scale, 48 * scale, CORAL_COLORS.gold);
 
-    // --- 5. Foreground Framing Reef Ledges (drawn onto fgRockCanvas for depth overlap) ---
-    drawReefRock(fgRockCtx, width * 0.08, height * 0.97, 230, 115, '#07192b', '#123854', lRand);
-    drawReefRock(fgRockCtx, width * 0.92, height * 0.98, 250, 120, '#07192b', '#123854', lRand);
-    drawReefRock(fgRockCtx, width * 0.51, height * 0.99, 175, 65, '#091f35', '#15405e', lRand);
+    // Foreground Rocky Boulders framing the bottom corners
+    drawForegroundReefBase(g);
 
-    // Foreground vibrant corals
-    drawBrainCoral(fgRockCtx, width * 0.13, height * 0.93, 58, 44, '#3a0ca3', '#7209b7', '#f72585', lRand);
-    drawTubeCoralCluster(fgRockCtx, width * 0.81, height * 0.94, 12, '#ff4d6d', '#ffb3c1', lRand);
-    drawStaghornCoral(fgRockCtx, width * 0.49, height * 0.95, 64, -Math.PI / 2 + 0.06, 3, '#06d6a0', '#83e377', '#eff7f6', lRand);
+    // Plated Montipora whorls & encrusting sponges on foreground rocks
+    drawMontiporaWhorls(g, width * 0.08, height * 0.94, 58 * scale, CORAL_COLORS.teal);
+    drawMontiporaWhorls(g, width * 0.93, height * 0.95, 62 * scale, CORAL_COLORS.gold);
+    drawMontiporaWhorls(g, width * 0.45, height * 0.96, 52 * scale, CORAL_COLORS.magenta);
 
-    // Giant Maxima Clam in the foreground
-    drawGiantClam(fgRockCtx, width * 0.57, height * 0.94, 48);
-
-    // Starfish on foreground rock
-    drawStarfish(fgRockCtx, width * 0.22, height * 0.94, 24, 0.4, '#ff595e', '#ffca3a');
-    drawStarfish(fgRockCtx, width * 0.74, height * 0.95, 20, -0.3, '#ff924c', '#ffca3a');
+    // Vivid Starfish resting on foreground rocks
+    drawStarfish(g, width * 0.29, height * 0.95, 24 * scale, 0.3, '#ff2a55', '#ffbe00');
+    drawStarfish(g, width * 0.57, height * 0.96, 21 * scale, -0.4, '#ff6d00', '#ffff00');
+    drawStarfish(g, width * 0.82, height * 0.95, 25 * scale, 0.8, '#00e5ff', '#ff00aa');
   }
 
-  function drawDistantCoralSilhouette(c, x, y, size, color, lRand) {
-    c.save();
-    c.strokeStyle = color;
-    c.lineCap = 'round';
-    function branch(bx, by, len, ang, depth) {
-      if (depth <= 0) return;
-      const ex = bx + Math.cos(ang) * len;
-      const ey = by + Math.sin(ang) * len;
-      c.lineWidth = depth * 2.2;
-      c.beginPath();
-      c.moveTo(bx, by);
-      c.lineTo(ex, ey);
-      c.stroke();
-      branch(ex, ey, len * 0.74, ang - 0.32 - lRand() * 0.2, depth - 1);
-      branch(ex, ey, len * 0.74, ang + 0.32 + lRand() * 0.2, depth - 1);
+  function drawReefRidge(g, baseY, amp, color, bumps, localSeed) {
+    g.save();
+    g.fillStyle = color;
+    g.beginPath();
+    g.moveTo(0, height);
+    g.lineTo(0, baseY);
+    for (let i = 0; i <= bumps * 4; i++) {
+      const t = i / (bumps * 4);
+      const x = t * width;
+      // Dip in the middle to create a grand reef canyon
+      const canyonFactor = 1 - 0.55 * Math.exp(-Math.pow((t - 0.5) / 0.28, 2));
+      const wave =
+        Math.sin(t * Math.PI * bumps + localSeed) * 0.45 +
+        Math.cos(t * Math.PI * bumps * 2.3 + localSeed * 1.7) * 0.3 +
+        0.5;
+      const y = baseY - wave * amp * canyonFactor;
+      g.lineTo(x, y);
     }
-    branch(x, y, size * 0.38, -Math.PI / 2, 4);
-    c.restore();
+    g.lineTo(width, height);
+    g.closePath();
+    g.fill();
+    g.restore();
   }
 
-  function drawReefRock(c, cx, cy, rx, ry, darkColor, litColor, lRand) {
-    c.save();
-    const grad = c.createLinearGradient(cx, cy - ry, cx, cy + ry * 0.5);
-    grad.addColorStop(0, litColor);
-    grad.addColorStop(0.55, darkColor);
-    grad.addColorStop(1, '#040e1a');
-    c.fillStyle = grad;
+  function drawDistantStaghorns(g, baseY, color, count) {
+    g.save();
+    g.strokeStyle = color;
+    g.lineCap = 'round';
+    for (let i = 0; i < count; i++) {
+      const t = (i + 0.5) / count;
+      if (t > 0.33 && t < 0.67) continue; // keep center canyon open
+      const cx = t * width + randRange(-30, 30) * scale;
+      const cy = baseY + randRange(-25, 15) * scale;
+      const branches = 5;
+      for (let b = 0; b < branches; b++) {
+        const ang = -Math.PI / 2 + (b - 2) * 0.28;
+        const len = randRange(35, 65) * scale;
+        g.lineWidth = 4.5 * scale;
+        g.beginPath();
+        g.moveTo(cx, cy);
+        const mx = cx + Math.cos(ang) * len;
+        const my = cy + Math.sin(ang) * len;
+        g.lineTo(mx, my);
+        g.stroke();
+        // fork
+        g.lineWidth = 3 * scale;
+        g.beginPath();
+        g.moveTo(mx, my);
+        g.lineTo(mx + Math.cos(ang - 0.35) * len * 0.55, my + Math.sin(ang - 0.35) * len * 0.55);
+        g.moveTo(mx, my);
+        g.lineTo(mx + Math.cos(ang + 0.35) * len * 0.55, my + Math.sin(ang + 0.35) * len * 0.55);
+        g.stroke();
+      }
+    }
+    g.restore();
+  }
 
-    c.beginPath();
-    const steps = 28;
+  function drawRockyOutcrop(g, x, y, w, h, darkCol, lightCol, leftSide) {
+    g.save();
+    const grad = g.createLinearGradient(x, y, x, y + h);
+    grad.addColorStop(0, lightCol);
+    grad.addColorStop(1, darkCol);
+    g.fillStyle = grad;
+    g.beginPath();
+    g.moveTo(x, y + h);
+    const steps = 16;
     for (let i = 0; i <= steps; i++) {
-      const t = (i / steps) * Math.PI * 2;
-      const bump = 1 + Math.sin(t * 5) * 0.08 + (lRand() - 0.5) * 0.08;
-      const px = cx + Math.cos(t) * rx * bump;
-      const py = cy + Math.sin(t) * ry * (t > Math.PI ? bump * 1.05 : 0.6);
-      if (i === 0) c.moveTo(px, py);
-      else c.lineTo(px, py);
+      const t = i / steps;
+      const px = x + t * w;
+      const slope = leftSide ? Math.pow(1 - t, 0.7) : Math.pow(t, 0.7);
+      const crag = Math.sin(t * Math.PI * 6) * 14 * scale + Math.cos(t * Math.PI * 11) * 7 * scale;
+      const py = y + h - slope * h * 0.85 + crag;
+      g.lineTo(px, py);
     }
-    c.closePath();
-    c.fill();
+    g.lineTo(x + w, y + h);
+    g.closePath();
+    g.fill();
 
-    // Subtle rim light and coralline algae patches
-    c.fillStyle = 'rgba(181, 23, 158, 0.16)';
-    for (let i = 0; i < 8; i++) {
-      const px = cx + (lRand() - 0.5) * rx * 1.2;
-      const py = cy - lRand() * ry * 0.65;
-      c.beginPath();
-      c.ellipse(px, py, lRand() * 28 + 10, lRand() * 10 + 4, (lRand() - 0.5) * 0.5, 0, Math.PI * 2);
-      c.fill();
-    }
-    c.restore();
+    // Rim lighting on rock ledges
+    g.strokeStyle = 'rgba(0, 229, 255, 0.22)';
+    g.lineWidth = 3 * scale;
+    g.stroke();
+    g.restore();
   }
 
-  function drawTableCoral(c, cx, cy, rx, ry, baseCol, midCol, rimCol) {
-    c.save();
+  function drawTableCoral(g, cx, cy, rx, ry, palette) {
+    g.save();
     // Stalk
-    c.fillStyle = baseCol;
-    c.beginPath();
-    c.moveTo(cx - rx * 0.25, cy + ry * 1.4);
-    c.quadraticCurveTo(cx, cy, cx - rx * 0.5, cy);
-    c.lineTo(cx + rx * 0.5, cy);
-    c.quadraticCurveTo(cx, cy, cx + rx * 0.25, cy + ry * 1.4);
-    c.closePath();
-    c.fill();
+    g.fillStyle = palette[2];
+    g.beginPath();
+    g.moveTo(cx - rx * 0.25, cy + ry * 1.4);
+    g.lineTo(cx + rx * 0.25, cy + ry * 1.4);
+    g.lineTo(cx + rx * 0.12, cy);
+    g.lineTo(cx - rx * 0.12, cy);
+    g.closePath();
+    g.fill();
 
-    // Layered tiers
-    for (let tier = 0; tier < 3; tier++) {
-      const tx = cx + (tier - 1) * 14;
-      const ty = cy - tier * 10;
-      const trx = rx * (1 - tier * 0.18);
-      const try_ = ry * (1 - tier * 0.15);
+    // Tiered plates
+    for (let layer = 2; layer >= 0; layer--) {
+      const ly = cy + (layer - 1) * ry * 0.48;
+      const lrx = rx * (1 - layer * 0.16);
+      const lry = ry * (1 - layer * 0.12);
 
-      const grad = c.createRadialGradient(tx, ty - try_ * 0.3, 4, tx, ty, trx);
-      grad.addColorStop(0, baseCol);
-      grad.addColorStop(0.75, midCol);
-      grad.addColorStop(1, rimCol);
+      // Underside shadow
+      g.fillStyle = palette[2];
+      g.beginPath();
+      g.ellipse(cx, ly + 6 * scale, lrx, lry, 0, 0, Math.PI * 2);
+      g.fill();
 
-      c.fillStyle = grad;
-      c.beginPath();
+      // Main plate
+      const plateGrad = g.createRadialGradient(cx, ly - lry * 0.3, lrx * 0.1, cx, ly, lrx);
+      plateGrad.addColorStop(0, palette[1]);
+      plateGrad.addColorStop(0.7, palette[0]);
+      plateGrad.addColorStop(1, palette[1]);
+      g.fillStyle = plateGrad;
+
+      g.beginPath();
       const lobes = 24;
       for (let i = 0; i <= lobes; i++) {
         const a = (i / lobes) * Math.PI * 2;
         const rMod = 1 + Math.sin(a * 12) * 0.06;
-        const px = tx + Math.cos(a) * trx * rMod;
-        const py = ty + Math.sin(a) * try_ * rMod;
-        if (i === 0) c.moveTo(px, py);
-        else c.lineTo(px, py);
+        const px = cx + Math.cos(a) * lrx * rMod;
+        const py = ly + Math.sin(a) * lry * rMod;
+        if (i === 0) g.moveTo(px, py);
+        else g.lineTo(px, py);
       }
-      c.closePath();
-      c.fill();
+      g.closePath();
+      g.fill();
+
+      // Glowing polyp texture dots
+      g.fillStyle = palette[1];
+      for (let d = 0; d < 28; d++) {
+        const a = rand() * Math.PI * 2;
+        const r = Math.sqrt(rand()) * 0.85;
+        g.beginPath();
+        g.arc(cx + Math.cos(a) * lrx * r, ly + Math.sin(a) * lry * r, 2.2 * scale, 0, Math.PI * 2);
+        g.fill();
+      }
     }
-    c.restore();
+    g.restore();
   }
 
-  function drawStaghornCoral(c, x, y, size, angle, maxDepth, baseCol, midCol, tipCol, lRand) {
-    c.save();
-    c.lineCap = 'round';
-    c.lineJoin = 'round';
+  function drawStaghornCluster(g, cx, cy, maxLen, branches, palette) {
+    g.save();
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
 
-    function branch(bx, by, len, ang, depth) {
-      if (depth <= 0) return;
-      const ex = bx + Math.cos(ang) * len;
-      const ey = by + Math.sin(ang) * len;
+    function drawBranch(x, y, angle, len, thick, depth) {
+      if (depth <= 0 || len < 8 * scale) return;
+      const x2 = x + Math.cos(angle) * len;
+      const y2 = y + Math.sin(angle) * len;
 
-      const grad = c.createLinearGradient(bx, by, ex, ey);
-      grad.addColorStop(0, depth === maxDepth ? baseCol : midCol);
-      grad.addColorStop(1, depth === 1 ? tipCol : midCol);
+      // Shadow/base pass
+      g.strokeStyle = palette[2];
+      g.lineWidth = thick;
+      g.beginPath();
+      g.moveTo(x, y);
+      g.lineTo(x2, y2);
+      g.stroke();
 
-      c.strokeStyle = grad;
-      c.lineWidth = Math.max(3, depth * 3.6);
-      c.beginPath();
-      c.moveTo(bx, by);
-      c.quadraticCurveTo(
-        (bx + ex) * 0.5 + (lRand() - 0.5) * 8,
-        (by + ey) * 0.5,
-        ex,
-        ey
-      );
-      c.stroke();
+      // Main vibrant core
+      const grad = g.createLinearGradient(x, y, x2, y2);
+      grad.addColorStop(0, palette[0]);
+      grad.addColorStop(1, palette[1]);
+      g.strokeStyle = grad;
+      g.lineWidth = thick * 0.78;
+      g.beginPath();
+      g.moveTo(x, y);
+      g.lineTo(x2, y2);
+      g.stroke();
 
+      // Glowing tip bulb
       if (depth === 1) {
-        c.fillStyle = tipCol;
-        c.beginPath();
-        c.arc(ex, ey, 3.2, 0, Math.PI * 2);
-        c.fill();
-      } else {
-        const subCount = lRand() > 0.35 ? 2 : 3;
-        for (let i = 0; i < subCount; i++) {
-          const spread = (i - (subCount - 1) / 2) * (0.48 + lRand() * 0.22);
-          branch(ex, ey, len * (0.68 + lRand() * 0.14), ang + spread, depth - 1);
-        }
+        g.fillStyle = '#ffffff';
+        g.beginPath();
+        g.arc(x2, y2, thick * 0.36, 0, Math.PI * 2);
+        g.fill();
+      }
+
+      const subCount = depth === 3 ? 2 : (rand() > 0.35 ? 2 : 1);
+      for (let i = 0; i < subCount; i++) {
+        const dir = subCount === 1 ? randRange(-0.25, 0.25) : (i === 0 ? -1 : 1) * randRange(0.24, 0.46);
+        drawBranch(x2, y2, angle + dir, len * randRange(0.62, 0.76), thick * 0.72, depth - 1);
       }
     }
 
-    branch(x, y, size * 0.42, angle, maxDepth);
-    c.restore();
+    for (let i = 0; i < branches; i++) {
+      const norm = (i / (branches - 1)) - 0.5;
+      const startX = cx + norm * maxLen * 0.7;
+      const startY = cy + Math.abs(norm) * 18 * scale;
+      const angle = -Math.PI / 2 + norm * 0.85 + randRange(-0.1, 0.1);
+      drawBranch(startX, startY, angle, maxLen * randRange(0.45, 0.62), 13 * scale, 3);
+    }
+    g.restore();
   }
 
-  function drawTubeCoralCluster(c, cx, cy, count, bodyCol, rimCol, lRand) {
-    c.save();
+  function drawTubeSponges(g, cx, cy, count, maxH, palette) {
+    g.save();
     for (let i = 0; i < count; i++) {
-      const frac = (i / (count - 1)) - 0.5;
-      const angle = -Math.PI / 2 + frac * 0.85 + (lRand() - 0.5) * 0.15;
-      const len = 32 + (1 - Math.abs(frac)) * 38 + lRand() * 16;
-      const w = 7 + lRand() * 4.5;
-      const bx = cx + frac * 42;
-      const by = cy + Math.abs(frac) * 10;
-      const tx = bx + Math.cos(angle) * len;
-      const ty = by + Math.sin(angle) * len;
+      const norm = (i / (count - 1)) - 0.5;
+      const tx = cx + norm * 90 * scale + randRange(-5, 5) * scale;
+      const ty = cy + Math.abs(norm) * 16 * scale;
+      const h = maxH * (1 - Math.abs(norm) * 0.45) * randRange(0.75, 1.1);
+      const w = randRange(13, 20) * scale;
+      const tilt = norm * 0.32;
 
-      const grad = c.createLinearGradient(bx, by, tx, ty);
-      grad.addColorStop(0, '#1a0b2e');
-      grad.addColorStop(0.35, bodyCol);
-      grad.addColorStop(1, rimCol);
+      g.save();
+      g.translate(tx, ty);
+      g.rotate(tilt);
 
-      c.strokeStyle = grad;
-      c.lineWidth = w;
-      c.lineCap = 'round';
-      c.beginPath();
-      c.moveTo(bx, by);
-      c.lineTo(tx, ty);
-      c.stroke();
+      // Cylinder body
+      const bodyGrad = g.createLinearGradient(-w / 2, 0, w / 2, -h);
+      bodyGrad.addColorStop(0, palette[2]);
+      bodyGrad.addColorStop(0.5, palette[0]);
+      bodyGrad.addColorStop(1, palette[1]);
+      g.fillStyle = bodyGrad;
 
-      // Tube opening
-      c.save();
-      c.translate(tx, ty);
-      c.rotate(angle + Math.PI / 2);
-      c.fillStyle = rimCol;
-      c.beginPath();
-      c.ellipse(0, 0, w * 0.58, w * 0.28, 0, 0, Math.PI * 2);
-      c.fill();
-      c.fillStyle = '#240046';
-      c.beginPath();
-      c.ellipse(0, 0, w * 0.34, w * 0.16, 0, 0, Math.PI * 2);
-      c.fill();
-      c.restore();
-    }
-    c.restore();
-  }
+      g.beginPath();
+      g.moveTo(-w * 0.42, 0);
+      g.lineTo(-w * 0.55, -h);
+      g.lineTo(w * 0.55, -h);
+      g.lineTo(w * 0.42, 0);
+      g.closePath();
+      g.fill();
 
-  function drawBrainCoral(c, cx, cy, rx, ry, darkCol, midCol, ridgeCol, lRand) {
-    c.save();
-    const grad = c.createRadialGradient(cx - rx * 0.2, cy - ry * 0.35, 5, cx, cy, rx);
-    grad.addColorStop(0, ridgeCol);
-    grad.addColorStop(0.6, midCol);
-    grad.addColorStop(1, darkCol);
-
-    c.fillStyle = grad;
-    c.beginPath();
-    c.ellipse(cx, cy, rx, ry, 0, Math.PI, Math.PI * 2);
-    c.bezierCurveTo(cx + rx, cy + ry * 0.35, cx - rx, cy + ry * 0.35, cx - rx, cy);
-    c.closePath();
-    c.fill();
-
-    // Wavy cerebral labyrinth ridges
-    c.strokeStyle = darkCol;
-    c.lineWidth = 2.6;
-    c.lineCap = 'round';
-    for (let r = 0.22; r < 0.88; r += 0.18) {
-      c.beginPath();
-      const steps = 28;
-      for (let i = 0; i <= steps; i++) {
-        const a = Math.PI + (i / steps) * Math.PI;
-        const wave = Math.sin(i * 1.9 + r * 20) * 4.5;
-        const px = cx + Math.cos(a) * rx * r + wave * 0.5;
-        const py = cy + Math.sin(a) * ry * r + wave;
-        if (i === 0) c.moveTo(px, py);
-        else c.lineTo(px, py);
+      // Rib ridges on sponge
+      g.strokeStyle = palette[1];
+      g.lineWidth = 1.4 * scale;
+      for (let r = 0.2; r < 0.9; r += 0.18) {
+        g.beginPath();
+        g.ellipse(0, -h * r, w * (0.42 + r * 0.12), 3 * scale, 0, 0, Math.PI);
+        g.stroke();
       }
-      c.stroke();
-    }
 
-    c.strokeStyle = ridgeCol;
-    c.lineWidth = 1.4;
-    for (let r = 0.30; r < 0.86; r += 0.18) {
-      c.beginPath();
-      const steps = 28;
-      for (let i = 0; i <= steps; i++) {
-        const a = Math.PI + (i / steps) * Math.PI;
-        const wave = Math.sin(i * 1.9 + r * 20) * 4.5;
-        const px = cx + Math.cos(a) * rx * r + wave * 0.5;
-        const py = cy + Math.sin(a) * ry * r + wave - 1.5;
-        if (i === 0) c.moveTo(px, py);
-        else c.lineTo(px, py);
+      // Hollow dark interior opening at top
+      g.fillStyle = palette[1];
+      g.beginPath();
+      g.ellipse(0, -h, w * 0.56, w * 0.24, 0, 0, Math.PI * 2);
+      g.fill();
+
+      g.fillStyle = '#140429';
+      g.beginPath();
+      g.ellipse(0, -h, w * 0.36, w * 0.14, 0, 0, Math.PI * 2);
+      g.fill();
+
+      g.restore();
+    }
+    g.restore();
+  }
+
+  function drawBrainCoral(g, cx, cy, rx, ry, palette) {
+    g.save();
+    // Base shadow
+    g.fillStyle = 'rgba(2, 6, 28, 0.55)';
+    g.beginPath();
+    g.ellipse(cx, cy + ry * 0.25, rx * 1.06, ry * 0.85, 0, 0, Math.PI * 2);
+    g.fill();
+
+    // Main dome gradient
+    const domeGrad = g.createRadialGradient(
+      cx - rx * 0.2, cy - ry * 0.35, rx * 0.1,
+      cx, cy, rx * 1.05
+    );
+    domeGrad.addColorStop(0, palette[1]);
+    domeGrad.addColorStop(0.55, palette[0]);
+    domeGrad.addColorStop(1, palette[2]);
+    g.fillStyle = domeGrad;
+
+    // Scalloped dome contour
+    g.beginPath();
+    const bumps = 32;
+    for (let i = 0; i <= bumps; i++) {
+      const a = (i / bumps) * Math.PI * 2;
+      const mod = 1 + Math.sin(a * 16) * 0.03;
+      const px = cx + Math.cos(a) * rx * mod;
+      const py = cy + Math.sin(a) * ry * mod;
+      if (i === 0) g.moveTo(px, py);
+      else g.lineTo(px, py);
+    }
+    g.closePath();
+    g.fill();
+
+    // Clip to dome for brain labyrinth grooves
+    g.clip();
+
+    // Winding labyrinthine grooves
+    g.lineCap = 'round';
+    const rings = 6;
+    for (let r = 1; r <= rings; r++) {
+      const ratio = r / (rings + 0.5);
+      const grx = rx * ratio;
+      const gry = ry * ratio;
+
+      // Dark groove channel
+      g.strokeStyle = palette[2];
+      g.lineWidth = 5.5 * scale;
+      g.beginPath();
+      for (let a = 0; a <= Math.PI * 2; a += 0.1) {
+        const wig = Math.sin(a * (5 + r * 2) + r) * 5.5 * scale;
+        const px = cx + Math.cos(a) * grx + Math.cos(a) * wig;
+        const py = cy + Math.sin(a) * gry + Math.sin(a) * wig * 0.75;
+        if (a === 0) g.moveTo(px, py);
+        else g.lineTo(px, py);
       }
-      c.stroke();
+      g.closePath();
+      g.stroke();
+
+      // Luminous neon ridge highlight
+      g.strokeStyle = palette[1];
+      g.lineWidth = 2.2 * scale;
+      g.stroke();
     }
-    c.restore();
+    g.restore();
   }
 
-  function drawGiantClam(c, cx, cy, size) {
-    c.save();
-    // Fluted shell
-    c.fillStyle = '#3d5a80';
-    c.beginPath();
-    c.ellipse(cx, cy, size, size * 0.52, -0.08, 0, Math.PI * 2);
-    c.fill();
+  function drawForegroundReefBase(g) {
+    g.save();
+    const rockGrad = g.createLinearGradient(0, height * 0.84, 0, height);
+    rockGrad.addColorStop(0, '#1c1654');
+    rockGrad.addColorStop(0.5, '#110c38');
+    rockGrad.addColorStop(1, '#07041c');
+    g.fillStyle = rockGrad;
 
-    // Iridescent turquoise/cobalt mantle
-    const mantleGrad = c.createRadialGradient(cx, cy - 4, 4, cx, cy, size * 0.85);
-    mantleGrad.addColorStop(0, '#03045e');
-    mantleGrad.addColorStop(0.55, '#0077b6');
-    mantleGrad.addColorStop(0.85, '#00f5d4');
-    mantleGrad.addColorStop(1, '#7209b7');
-    c.fillStyle = mantleGrad;
+    g.beginPath();
+    g.moveTo(0, height);
+    g.lineTo(0, height * 0.85);
+    g.quadraticCurveTo(width * 0.14, height * 0.83, width * 0.28, height * 0.91);
+    g.quadraticCurveTo(width * 0.50, height * 0.96, width * 0.72, height * 0.90);
+    g.quadraticCurveTo(width * 0.86, height * 0.83, width, height * 0.85);
+    g.lineTo(width, height);
+    g.closePath();
+    g.fill();
 
-    c.beginPath();
-    const waves = 16;
-    for (let i = 0; i <= waves; i++) {
-      const a = (i / waves) * Math.PI * 2;
-      const rMod = 1 + Math.sin(a * 6) * 0.14;
-      const px = cx + Math.cos(a) * size * 0.82 * rMod;
-      const py = cy - 4 + Math.sin(a) * size * 0.34 * rMod;
-      if (i === 0) c.moveTo(px, py);
-      else c.lineTo(px, py);
+    // Glowing coralline algae patches on foreground reef rock
+    const patches = [
+      { x: 0.14, y: 0.93, rx: 65, ry: 22, col: 'rgba(255, 0, 128, 0.25)' },
+      { x: 0.35, y: 0.96, rx: 75, ry: 20, col: 'rgba(138, 43, 226, 0.28)' },
+      { x: 0.65, y: 0.95, rx: 80, ry: 22, col: 'rgba(0, 229, 255, 0.22)' },
+      { x: 0.85, y: 0.92, rx: 70, ry: 24, col: 'rgba(255, 94, 0, 0.24)' }
+    ];
+    for (const p of patches) {
+      g.fillStyle = p.col;
+      g.beginPath();
+      g.ellipse(p.x * width, p.y * height, p.rx * scale, p.ry * scale, 0, 0, Math.PI * 2);
+      g.fill();
     }
-    c.closePath();
-    c.fill();
-    c.restore();
+    g.restore();
   }
 
-  function drawStarfish(c, cx, cy, radius, rot, bodyCol, spotCol) {
-    c.save();
-    c.translate(cx, cy);
-    c.rotate(rot);
-    c.scale(1, 0.55); // Perspective foreshortening on seafloor
-    c.fillStyle = bodyCol;
-    c.beginPath();
+  function drawMontiporaWhorls(g, cx, cy, radius, palette) {
+    g.save();
+    for (let w = 3; w >= 0; w--) {
+      const r = radius * (0.4 + w * 0.2);
+      const ox = cx + (w - 1.5) * 12 * scale;
+      const oy = cy + w * 6 * scale;
+      g.fillStyle = palette[2];
+      g.beginPath();
+      g.ellipse(ox, oy + 4 * scale, r, r * 0.48, (w - 1) * 0.15, 0, Math.PI * 2);
+      g.fill();
+
+      const grad = g.createRadialGradient(ox, oy, r * 0.1, ox, oy, r);
+      grad.addColorStop(0, palette[2]);
+      grad.addColorStop(0.65, palette[0]);
+      grad.addColorStop(1, palette[1]);
+      g.fillStyle = grad;
+      g.beginPath();
+      g.ellipse(ox, oy, r, r * 0.46, (w - 1) * 0.15, 0, Math.PI * 2);
+      g.fill();
+
+      g.strokeStyle = '#ffffff';
+      g.lineWidth = 1.5 * scale;
+      g.stroke();
+    }
+    g.restore();
+  }
+
+  function drawStarfish(g, cx, cy, r, rot, baseCol, dotCol) {
+    g.save();
+    g.translate(cx, cy);
+    g.rotate(rot);
+    g.scale(1, 0.62); // perspective foreshortening on seafloor
+
+    g.fillStyle = baseCol;
+    g.beginPath();
     const arms = 5;
     for (let i = 0; i < arms * 2; i++) {
-      const r = i % 2 === 0 ? radius : radius * 0.36;
       const a = (i / (arms * 2)) * Math.PI * 2;
-      const px = Math.cos(a) * r;
-      const py = Math.sin(a) * r;
-      if (i === 0) c.moveTo(px, py);
-      else c.quadraticCurveTo(0, 0, px, py);
+      const rad = i % 2 === 0 ? r : r * 0.36;
+      const px = Math.cos(a) * rad;
+      const py = Math.sin(a) * rad;
+      if (i === 0) g.moveTo(px, py);
+      else g.quadraticCurveTo(0, 0, px, py);
     }
-    c.closePath();
-    c.fill();
+    g.closePath();
+    g.fill();
 
-    c.fillStyle = spotCol;
+    // Bright dorsal nodules
+    g.fillStyle = dotCol;
     for (let i = 0; i < arms; i++) {
       const a = (i / arms) * Math.PI * 2;
-      for (let d = 0.2; d <= 0.75; d += 0.25) {
-        c.beginPath();
-        c.arc(Math.cos(a) * radius * d, Math.sin(a) * radius * d, 1.8, 0, Math.PI * 2);
-        c.fill();
+      for (let d = 0.2; d <= 0.8; d += 0.22) {
+        g.beginPath();
+        g.arc(Math.cos(a) * r * d, Math.sin(a) * r * d, 2.2 * scale, 0, Math.PI * 2);
+        g.fill();
       }
     }
-    c.restore();
+    g.restore();
   }
 
-  function resize() {
-    dpr = Math.min(window.devicePixelRatio || 1, 2);
-    width = window.innerWidth;
-    height = window.innerHeight;
-    canvas.width = width * dpr;
-    canvas.height = height * dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    initScene();
-  }
-
-  window.addEventListener('resize', resize);
-  resize();
-
-  // --- Dynamic Flora & Fauna Renderers ---
-
-  function drawSunRays(time) {
+  // Dynamic Animated Elements
+  function drawSunbeams(t) {
     ctx.save();
     ctx.globalCompositeOperation = 'screen';
-    for (const ray of sunRays) {
-      const pulse = 0.7 + 0.3 * Math.sin(time * ray.speed + ray.phase);
-      const sway = Math.sin(time * 0.35 + ray.phase) * 28;
-      const x1 = ray.xTop + sway * 0.25;
-      const x2 = x1 + Math.sin(ray.angle) * ray.length + sway;
-      const y2 = ray.length;
 
-      const grad = ctx.createLinearGradient(x1, 0, x2, y2);
-      const a = (ray.alpha * pulse).toFixed(3);
-      grad.addColorStop(0, `hsla(${ray.hue}, 95%, 82%, ${a})`);
-      grad.addColorStop(0.45, `hsla(${ray.hue + 6}, 90%, 65%, ${(ray.alpha * pulse * 0.55).toFixed(3)})`);
-      grad.addColorStop(1, `hsla(${ray.hue + 12}, 85%, 50%, 0)`);
+    for (let i = 0; i < sunbeams.length; i++) {
+      const b = sunbeams[i];
+      const sway = Math.sin(t * b.speed + b.phase) * 0.035;
+      const topX = (b.xNorm + sway) * width;
+      const botX = topX + Math.sin(b.angle + sway * 0.6) * height;
+      const wTop = b.widthTop * width * (0.85 + 0.25 * Math.sin(t * 1.1 + b.phase));
+      const wBot = b.widthBot * width * (0.9 + 0.2 * Math.cos(t * 0.8 + b.phase));
+
+      const pulseAlpha = b.alpha * (0.7 + 0.3 * Math.sin(t * 1.4 + b.phase * 2));
+      const grad = ctx.createLinearGradient(topX, 0, botX, height * 0.92);
+      grad.addColorStop(0.0, `hsla(${b.hue}, 100%, 82%, ${pulseAlpha * 1.4})`);
+      grad.addColorStop(0.35, `hsla(${b.hue}, 100%, 68%, ${pulseAlpha})`);
+      grad.addColorStop(0.75, `hsla(${b.hue + 10}, 100%, 55%, ${pulseAlpha * 0.35})`);
+      grad.addColorStop(1.0, `hsla(${b.hue + 15}, 100%, 50%, 0)`);
 
       ctx.fillStyle = grad;
       ctx.beginPath();
-      ctx.moveTo(x1 - ray.topWidth * 0.5, 0);
-      ctx.lineTo(x1 + ray.topWidth * 0.5, 0);
-      ctx.lineTo(x2 + ray.bottomWidth * 0.5, y2);
-      ctx.lineTo(x2 - ray.bottomWidth * 0.5, y2);
+      ctx.moveTo(topX - wTop * 0.5, 0);
+      ctx.lineTo(topX + wTop * 0.5, 0);
+      ctx.lineTo(botX + wBot * 0.5, height * 0.95);
+      ctx.lineTo(botX - wBot * 0.5, height * 0.95);
       ctx.closePath();
       ctx.fill();
     }
+
+    // Rippling water surface sparkles at the very top
+    for (let i = 0; i < 18; i++) {
+      const sx = ((i / 17) + Math.sin(t * 0.7 + i) * 0.03) * width;
+      const sy = (0.012 + Math.cos(t * 1.5 + i * 1.9) * 0.008) * height;
+      const rx = (35 + Math.sin(t * 2.2 + i) * 18) * scale;
+      const ry = 4.5 * scale;
+      ctx.fillStyle = `rgba(210, 255, 255, ${0.22 + 0.15 * Math.sin(t * 3 + i)})`;
+      ctx.beginPath();
+      ctx.ellipse(sx, sy, rx, ry, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     ctx.restore();
   }
 
-  function drawKelpLayer(layerName, time) {
+  function drawAnimatedCaustics(t) {
     ctx.save();
-    for (const k of kelps) {
-      if (k.layer !== layerName) continue;
-      const segLen = k.height / k.segments;
-      const spineX = [k.x];
-      const spineY = [k.y];
-      let curX = k.x;
-      let curY = k.y;
+    ctx.globalCompositeOperation = 'overlay';
+    ctx.strokeStyle = 'rgba(130, 250, 255, 0.14)';
+    ctx.lineWidth = 2.2 * scale;
 
-      for (let i = 1; i <= k.segments; i++) {
-        const frac = i / k.segments;
-        const sway = Math.sin(time * k.speed - frac * 2.6 + k.phase) * (16 * frac * frac);
-        curX += sway * 0.32;
-        curY -= segLen;
-        spineX.push(curX);
-        spineY.push(curY);
-      }
+    // Shimmering caustic light web across the lower reef and sand
+    const rows = 5;
+    const cols = 10;
+    const startY = height * 0.62;
+    const endY = height * 0.98;
 
-      // Draw central stem
-      ctx.strokeStyle = `hsl(${k.hue}, 68%, ${k.light}%)`;
-      ctx.lineWidth = 3.2;
-      ctx.lineCap = 'round';
+    for (let r = 0; r < rows; r++) {
       ctx.beginPath();
-      ctx.moveTo(spineX[0], spineY[0]);
-      for (let i = 1; i <= k.segments; i++) {
-        ctx.lineTo(spineX[i], spineY[i]);
+      for (let c = 0; c <= cols; c++) {
+        const u = c / cols;
+        const v = r / (rows - 1);
+        const x = u * width + Math.sin(t * 1.8 + r * 1.4 + c * 0.9) * 18 * scale;
+        const y = startY + v * (endY - startY) + Math.cos(t * 2.1 + c * 1.2 + r) * 9 * scale;
+        if (c === 0) ctx.moveTo(x, y);
+        else ctx.quadraticCurveTo(x - (width / cols) * 0.5, y + Math.sin(t * 2.5 + c + r) * 12 * scale, x, y);
       }
       ctx.stroke();
-
-      // Draw leafy blades along stem
-      for (let i = 2; i < k.segments; i++) {
-        const side = i % 2 === 0 ? 1 : -1;
-        const frac = i / k.segments;
-        const leafLen = k.width * (1.8 - frac * 0.7) * 2.1;
-        const leafAng = -Math.PI / 2 + side * (0.65 + Math.sin(time * k.speed + i + k.phase) * 0.18);
-        const lx = spineX[i] + Math.cos(leafAng) * leafLen;
-        const ly = spineY[i] + Math.sin(leafAng) * leafLen;
-
-        ctx.fillStyle = `hsla(${k.hue + (i % 3) * 4}, 74%, ${k.light + 7}%, 0.88)`;
-        ctx.beginPath();
-        ctx.moveTo(spineX[i], spineY[i]);
-        ctx.quadraticCurveTo(
-          (spineX[i] + lx) * 0.5 + side * 6,
-          (spineY[i] + ly) * 0.5 - 5,
-          lx,
-          ly
-        );
-        ctx.quadraticCurveTo(
-          (spineX[i] + lx) * 0.5 - side * 3,
-          (spineY[i] + ly) * 0.5 + 4,
-          spineX[i],
-          spineY[i]
-        );
-        ctx.fill();
-      }
     }
     ctx.restore();
   }
 
-  function drawSeaFans(layerName, time) {
+  function drawKelpAndSeaFans(t) {
+    // 1. Swaying Ribbon Kelp / Seagrass
     ctx.save();
-    for (const fan of seaFans) {
-      if (fan.layer !== layerName) continue;
-      const sway = Math.sin(time * 1.15 + fan.phase) * 0.07;
-      ctx.save();
-      ctx.translate(fan.x, fan.y);
-      ctx.rotate(fan.angle + sway);
+    ctx.lineCap = 'round';
+    for (let i = 0; i < kelpStrands.length; i++) {
+      const k = kelpStrands[i];
+      let x = k.x * width;
+      let y = k.y * height;
 
-      // Draw delicate gorgonian fan mesh
-      const rays = 9;
-      for (let r = 0; r < rays; r++) {
-        const frac = (r / (rays - 1)) - 0.5;
-        const a = -Math.PI / 2 + frac * 1.35;
-        const len = fan.size * (1 - Math.abs(frac) * 0.32);
-        const ex = Math.cos(a) * len;
-        const ey = Math.sin(a) * len;
+      const pts = [{ x, y }];
+      let curAngle = -Math.PI / 2;
+      for (let s = 1; s <= k.segments; s++) {
+        const frac = s / k.segments;
+        const wave = Math.sin(t * 1.9 + k.phase - frac * 2.6) * 0.22 * frac;
+        curAngle = -Math.PI / 2 + wave;
+        x += Math.cos(curAngle) * k.segLen;
+        y += Math.sin(curAngle) * k.segLen;
+        pts.push({ x, y });
+      }
 
-        ctx.strokeStyle = fan.color;
-        ctx.lineWidth = 3.2;
-        ctx.lineCap = 'round';
+      // Draw main stem + leaf blades
+      const grad = ctx.createLinearGradient(pts[0].x, pts[0].y, pts[pts.length - 1].x, pts[pts.length - 1].y);
+      grad.addColorStop(0, k.color1);
+      grad.addColorStop(1, k.color2);
+      ctx.strokeStyle = grad;
+
+      for (let s = 0; s < pts.length - 1; s++) {
+        const frac = 1 - s / pts.length;
+        ctx.lineWidth = Math.max(2 * scale, k.width * frac);
         ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.quadraticCurveTo(ex * 0.5 + Math.sin(r) * 8, ey * 0.5, ex, ey);
+        ctx.moveTo(pts[s].x, pts[s].y);
+        ctx.lineTo(pts[s + 1].x, pts[s + 1].y);
         ctx.stroke();
+      }
+    }
+    ctx.restore();
 
-        // Cross-fronds
-        ctx.strokeStyle = fan.highlight;
-        ctx.lineWidth = 1.4;
-        for (let d = 0.25; d < 0.95; d += 0.16) {
-          const bx = ex * d;
-          const by = ey * d;
-          ctx.beginPath();
-          ctx.moveTo(bx, by);
-          ctx.lineTo(bx + Math.cos(a - 0.45) * 18 * (1 - d * 0.3), by + Math.sin(a - 0.45) * 18 * (1 - d * 0.3));
-          ctx.moveTo(bx, by);
-          ctx.lineTo(bx + Math.cos(a + 0.45) * 18 * (1 - d * 0.3), by + Math.sin(a + 0.45) * 18 * (1 - d * 0.3));
-          ctx.stroke();
-        }
+    // 2. Swaying Sea Fans (Gorgonians)
+    ctx.save();
+    ctx.lineCap = 'round';
+    for (let i = 0; i < seaFans.length; i++) {
+      const fan = seaFans[i];
+      const baseX = fan.x * width;
+      const baseY = fan.y * height;
+      const sway = Math.sin(t * 1.5 + fan.phase) * 0.075;
+
+      ctx.save();
+      ctx.translate(baseX, baseY);
+      ctx.rotate(sway);
+
+      for (let b = 0; b < fan.branches.length; b++) {
+        const br = fan.branches[b];
+        const flex = (6 - br.depth) * 0.015 * Math.sin(t * 2.2 + fan.phase + br.depth * 0.5);
+        ctx.strokeStyle = br.depth <= 2 ? fan.highlight : fan.color;
+        ctx.lineWidth = Math.max(1.4, br.depth * 2.1) * scale;
+        ctx.beginPath();
+        ctx.moveTo(br.x1, br.y1);
+        ctx.lineTo(br.x2 + flex * br.len, br.y2);
+        ctx.stroke();
       }
       ctx.restore();
     }
     ctx.restore();
   }
 
-  function drawAnemones(layerName, time) {
+  function drawGiantClams(t) {
     ctx.save();
-    for (const anem of anemones) {
-      if (anem.layer !== layerName) continue;
+    for (let i = 0; i < clams.length; i++) {
+      const c = clams[i];
+      const cx = c.x * width;
+      const cy = c.y * height;
+      const openFactor = 0.78 + 0.15 * Math.sin(t * 1.2 + c.phase);
+      const r = c.size;
 
-      // Fleshy base column
-      const baseGrad = ctx.createLinearGradient(anem.x, anem.y - anem.baseRy, anem.x, anem.y + anem.baseRy);
-      baseGrad.addColorStop(0, anem.tentacleColor);
-      baseGrad.addColorStop(1, anem.baseColor);
+      // Fluted lower shell
+      ctx.fillStyle = '#251c52';
+      ctx.beginPath();
+      ctx.ellipse(cx, cy + 5 * scale, r * 1.05, r * 0.45, 0, 0, Math.PI * 2);
+      ctx.fill();
 
-      // Draw swaying tentacles
-      for (let i = 0; i < anem.tentacles; i++) {
-        const frac = (i / (anem.tentacles - 1)) - 0.5;
-        const row = i % 2 === 0 ? -1 : 1;
-        const bx = anem.x + frac * anem.baseRx * 1.65;
-        const by = anem.y + row * 4 + Math.abs(frac) * 6;
+      // Iridescent fleshy mantle inside
+      ctx.fillStyle = c.hue;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, r * 0.92, r * 0.34 * openFactor, 0, 0, Math.PI * 2);
+      ctx.fill();
 
-        const baseAngle = -Math.PI / 2 + frac * 1.15;
-        const wave1 = Math.sin(time * 2.1 + i * 0.55) * 14;
-        const wave2 = Math.cos(time * 1.5 + i * 0.35) * 9;
-        const len = anem.length * (0.78 + 0.22 * Math.sin(i * 1.7));
-
-        const cpx = bx + Math.cos(baseAngle) * len * 0.55 + wave1;
-        const cpy = by + Math.sin(baseAngle) * len * 0.55;
-        const tx = bx + Math.cos(baseAngle) * len + wave1 + wave2;
-        const ty = by + Math.sin(baseAngle) * len + Math.abs(wave1) * 0.2;
-
-        ctx.strokeStyle = anem.tentacleColor;
-        ctx.lineWidth = 5.2;
-        ctx.lineCap = 'round';
+      // Glowing pattern spots on mantle edge
+      ctx.fillStyle = c.spots;
+      for (let s = -4; s <= 4; s++) {
+        const a = (s / 4.5) * 1.2;
+        const sx = cx + Math.sin(a) * r * 0.72;
+        const sy = cy + Math.cos(a) * r * 0.22 * openFactor;
         ctx.beginPath();
-        ctx.moveTo(bx, by);
-        ctx.quadraticCurveTo(cpx, cpy, tx, ty);
-        ctx.stroke();
-
-        // Glowing bulbous tip
-        ctx.fillStyle = anem.tipColor;
-        ctx.beginPath();
-        ctx.arc(tx, ty, 3.2, 0, Math.PI * 2);
+        ctx.arc(sx, sy, 3.2 * scale, 0, Math.PI * 2);
         ctx.fill();
       }
 
-      // Base foot overlay
-      ctx.fillStyle = baseGrad;
+      // Fluted upper shell rim
+      ctx.strokeStyle = '#6c75b5';
+      ctx.lineWidth = 4 * scale;
       ctx.beginPath();
-      ctx.ellipse(anem.x, anem.y + 8, anem.baseRx, anem.baseRy, 0, 0, Math.PI * 2);
-      ctx.fill();
+      for (let j = 0; j <= 14; j++) {
+        const a = (j / 14) * Math.PI;
+        const wave = (j % 2 === 0 ? 1.04 : 0.92);
+        const px = cx + Math.cos(a) * r * wave;
+        const py = cy + Math.sin(a) * r * 0.38 * wave;
+        if (j === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
     }
     ctx.restore();
   }
 
-  // --- School of Fish Choreography (Boids + Autonomous Choreography & Scatters) ---
+  function drawAnemones(t) {
+    ctx.save();
+    ctx.lineCap = 'round';
+    for (let i = 0; i < anemones.length; i++) {
+      const a = anemones[i];
+      const cx = a.x * width;
+      const cy = a.y * height;
 
-  function triggerScatter(originX, originY, strength) {
-    schoolState.mode = 'scattering';
-    schoolState.timer = 78; // frames of rapid radial burst
-    schoolState.scatterOriginX = originX;
-    schoolState.scatterOriginY = originY;
-    schoolState.scatterStrength = strength;
+      // Fleshy pedal base
+      const baseGrad = ctx.createRadialGradient(cx, cy, 5 * scale, cx, cy, a.rx * scale);
+      baseGrad.addColorStop(0, a.tentacleColor);
+      baseGrad.addColorStop(1, a.baseColor);
+      ctx.fillStyle = baseGrad;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy + 8 * scale, a.rx * 0.92 * scale, a.ry * 0.85 * scale, 0, 0, Math.PI * 2);
+      ctx.fill();
 
-    for (const f of school) {
-      const dx = f.x - originX;
-      const dy = f.y - originY;
-      const dist = Math.hypot(dx, dy) || 1;
-      if (dist < 380) {
-        const ang = Math.atan2(dy, dx) + (Math.random() - 0.5) * 0.45;
-        const impulse = strength * (1 - dist / 420) * (7.5 + Math.random() * 3.0);
-        f.vx = Math.cos(ang) * impulse;
-        f.vy = Math.sin(ang) * impulse;
-        f.panicTimer = 55 + Math.floor(Math.random() * 30);
+      // Waving bioluminescent tentacles
+      for (let j = 0; j < a.tentacles.length; j++) {
+        const ten = a.tentacles[j];
+        const sx = cx + ten.ox;
+        const sy = cy + ten.oy;
+        const sway1 = Math.sin(t * ten.speed + ten.phase) * 16 * scale;
+        const sway2 = Math.cos(t * ten.speed * 1.3 + ten.phase) * 24 * scale;
+
+        const cpx = sx + Math.sin(ten.spread) * ten.len * 0.5 + sway1;
+        const cpy = sy - ten.len * 0.55;
+        const tx = sx + Math.sin(ten.spread) * ten.len + sway2;
+        const ty = sy - Math.cos(ten.spread * 0.5) * ten.len + Math.abs(sway1) * 0.2;
+
+        const tGrad = ctx.createLinearGradient(sx, sy, tx, ty);
+        tGrad.addColorStop(0, a.baseColor);
+        tGrad.addColorStop(0.65, a.tentacleColor);
+        tGrad.addColorStop(1, a.tipColor);
+
+        ctx.strokeStyle = tGrad;
+        ctx.lineWidth = ten.thickness;
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.quadraticCurveTo(cpx, cpy, tx, ty);
+        ctx.stroke();
+
+        // Glowing bulb tip
+        ctx.fillStyle = a.tipColor;
+        ctx.beginPath();
+        ctx.arc(tx, ty, ten.thickness * 0.58, 0, Math.PI * 2);
+        ctx.fill();
       }
+    }
+    ctx.restore();
+  }
+
+  // Update and draw the Eagle Ray cruiser that gracefully glides across the reef and scatters the school
+  function updateAndDrawCruiser(dt, t) {
+    if (!cruiser.active) {
+      cruiser.timer -= dt;
+      if (cruiser.timer <= 0) {
+        cruiser.active = true;
+        const fromLeft = rand() > 0.45;
+        cruiser.size = 86 * scale;
+        cruiser.x = fromLeft ? -cruiser.size * 2.2 : width + cruiser.size * 2.2;
+        cruiser.y = height * randRange(0.26, 0.50);
+        const speed = 155 * scale;
+        cruiser.vx = fromLeft ? speed : -speed;
+        cruiser.vy = randRange(-14, 14) * scale;
+      }
+      return;
+    }
+
+    cruiser.x += cruiser.vx * dt;
+    cruiser.y += (cruiser.vy + Math.sin(t * 1.6) * 18 * scale) * dt;
+    cruiser.wingPhase += dt * 3.4;
+
+    // Trigger natural scatter on nearby schooling fish
+    const dir = cruiser.vx >= 0 ? 1 : -1;
+    const cx = cruiser.x;
+    const cy = cruiser.y;
+    const wingBeat = Math.sin(cruiser.wingPhase);
+    const s = cruiser.size;
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    if (dir < 0) ctx.scale(-1, 1);
+    ctx.rotate(Math.sin(t * 1.6) * 0.06);
+
+    // Whip-like tail
+    ctx.strokeStyle = '#07225c';
+    ctx.lineWidth = 3 * scale;
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.6, 0);
+    ctx.quadraticCurveTo(
+      -s * 1.4,
+      Math.sin(t * 5) * 12 * scale,
+      -s * 2.2,
+      Math.cos(t * 5) * 18 * scale
+    );
+    ctx.stroke();
+
+    // Pectoral wings (diamond eagle-ray silhouette with graceful vertical undulation)
+    const wingTipY = wingBeat * s * 0.48;
+    const bodyGrad = ctx.createLinearGradient(0, -s * 0.5, 0, s * 0.5);
+    bodyGrad.addColorStop(0, '#0050b3');
+    bodyGrad.addColorStop(0.5, '#07286e');
+    bodyGrad.addColorStop(1, '#00b8ff');
+    ctx.fillStyle = bodyGrad;
+
+    ctx.beginPath();
+    ctx.moveTo(s * 0.85, 0); // snout
+    ctx.quadraticCurveTo(s * 0.35, wingTipY * 0.4 - s * 0.18, -s * 0.05, wingTipY - s * 0.55); // upper wingtip
+    ctx.quadraticCurveTo(-s * 0.38, wingTipY * 0.3 - s * 0.15, -s * 0.68, 0); // tail base
+    ctx.quadraticCurveTo(-s * 0.38, wingTipY * 0.3 + s * 0.15, -s * 0.05, wingTipY + s * 0.55); // lower wingtip
+    ctx.quadraticCurveTo(s * 0.35, wingTipY * 0.4 + s * 0.18, s * 0.85, 0);
+    ctx.closePath();
+    ctx.fill();
+
+    // Luminous cyan-white eagle ray spots
+    ctx.fillStyle = 'rgba(135, 250, 255, 0.78)';
+    const spotOffsets = [
+      [-0.1, -0.22], [0.05, -0.14], [-0.22, -0.10], [-0.08, 0.0],
+      [0.12, 0.08], [-0.12, 0.20], [-0.28, 0.12], [0.22, -0.04]
+    ];
+    for (let i = 0; i < spotOffsets.length; i++) {
+      const ox = spotOffsets[i][0] * s;
+      const oy = spotOffsets[i][1] * s + wingTipY * Math.abs(spotOffsets[i][1]);
+      ctx.beginPath();
+      ctx.arc(ox, oy, 2.8 * scale, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+
+    if ((dir > 0 && cruiser.x > width + s * 2.6) || (dir < 0 && cruiser.x < -s * 2.6)) {
+      cruiser.active = false;
+      cruiser.timer = randRange(13, 19);
     }
   }
 
-  function updateSchoolChoreography(time) {
-    schoolState.timer--;
-
-    // Update prowler fish (natural catalyst for realistic fish scattering)
-    if (prowler) {
-      if (!prowler.active) {
-        prowler.cooldown--;
-        if (prowler.cooldown <= 0) {
-          prowler.active = true;
-          const fromLeft = Math.random() > 0.5;
-          prowler.x = fromLeft ? -160 : width + 160;
-          prowler.y = Math.max(160, Math.min(height * 0.58, schoolState.leaderY + (Math.random() - 0.5) * 90));
-          prowler.vx = (fromLeft ? 1 : -1) * (5.2 + Math.random() * 1.2);
-          prowler.vy = (schoolState.leaderY - prowler.y) * 0.008;
-        }
-      } else {
-        prowler.x += prowler.vx;
-        prowler.y += prowler.vy + Math.sin(time * 2.5) * 0.35;
-        prowler.tailPhase += 0.26;
-
-        // Check proximity to school centroid to trigger dramatic flash-expansion scatter
-        const dToSchool = Math.hypot(prowler.x - schoolState.leaderX, prowler.y - schoolState.leaderY);
-        if (dToSchool < 150 && schoolState.mode !== 'scattering') {
-          triggerScatter(prowler.x, prowler.y, 1.15);
-        }
-
-        if (prowler.x < -240 || prowler.x > width + 240) {
-          prowler.active = false;
-          prowler.cooldown = 360 + Math.floor(Math.random() * 180);
-        }
-      }
-    }
-
-    // State transitions for school leader
-    if (schoolState.timer <= 0) {
-      if (schoolState.mode === 'scattering') {
-        schoolState.mode = 'regrouping';
-        schoolState.timer = 130;
-        schoolState.targetX = width * (0.28 + Math.random() * 0.44);
-        schoolState.targetY = height * (0.24 + Math.random() * 0.34);
-      } else {
-        const roll = Math.random();
-        if (roll < 0.42) {
-          // Sweeping turn across the reef
-          schoolState.mode = 'turning';
-          schoolState.timer = 150 + Math.floor(Math.random() * 90);
-          const nextSideX = schoolState.leaderX < width * 0.5
-            ? width * (0.62 + Math.random() * 0.22)
-            : width * (0.16 + Math.random() * 0.22);
-          schoolState.targetX = nextSideX;
-          schoolState.targetY = height * (0.20 + Math.random() * 0.42);
-        } else if (roll < 0.78) {
-          // Graceful figure-8 / bait-ball swirl
-          schoolState.mode = 'swirling';
-          schoolState.timer = 190 + Math.floor(Math.random() * 80);
-          schoolState.swirlCenter.x = Math.max(width * 0.28, Math.min(width * 0.72, schoolState.leaderX));
-          schoolState.swirlCenter.y = Math.max(height * 0.26, Math.min(height * 0.56, schoolState.leaderY));
-          schoolState.swirlDir = Math.random() > 0.5 ? 1 : -1;
+  // Update and draw Resident Accent Fish (Clownfish, Blue Tang, Moorish Idol)
+  function updateAndDrawAccentFish(dt, t) {
+    for (let i = 0; i < accentFish.length; i++) {
+      const f = accentFish[i];
+      f.targetTimer -= dt;
+      if (f.targetTimer <= 0) {
+        if (f.type === 'clownfish') {
+          f.tx = (f.homeX + randRange(-0.055, 0.055)) * width;
+          f.ty = (f.homeY + randRange(-0.045, 0.035)) * height;
+          f.targetTimer = randRange(1.0, 2.4);
         } else {
-          // Spontaneous startle scatter (like a sudden reef current or shadow overhead)
-          triggerScatter(
-            schoolState.leaderX + (Math.random() - 0.5) * 40,
-            schoolState.leaderY + (Math.random() - 0.5) * 40,
-            1.0
-          );
+          f.tx = randRange(0.18, 0.82) * width;
+          f.ty = randRange(0.56, 0.76) * height;
+          f.targetTimer = randRange(3.2, 6.0);
         }
+      }
+
+      const dx = f.tx - f.x;
+      const dy = f.ty - f.y;
+      const dist = Math.hypot(dx, dy) || 1;
+      const maxSpd = (f.type === 'clownfish' ? 68 : 92) * scale;
+      const desiredVx = (dx / dist) * Math.min(maxSpd, dist * 1.8);
+      const desiredVy = (dy / dist) * Math.min(maxSpd, dist * 1.8);
+
+      f.vx += (desiredVx - f.vx) * Math.min(1, dt * 3.5);
+      f.vy += (desiredVy - f.vy) * Math.min(1, dt * 3.5);
+      f.x += f.vx * dt;
+      f.y += f.vy * dt + Math.sin(t * 3 + f.phase) * 0.25 * scale;
+      f.phase += dt * (f.type === 'clownfish' ? 11 : 8.5);
+
+      const s = f.size;
+      const facingLeft = f.vx < 0;
+      const pitch = Math.max(-0.35, Math.min(0.35, f.vy / (maxSpd + 10)));
+
+      ctx.save();
+      ctx.translate(f.x, f.y);
+      if (facingLeft) ctx.scale(-1, 1);
+      ctx.rotate(facingLeft ? -pitch : pitch);
+
+      const wag = Math.sin(f.phase) * 0.28;
+
+      if (f.type === 'clownfish') {
+        // Tail
+        ctx.fillStyle = '#ff6d00';
+        ctx.beginPath();
+        ctx.moveTo(-s * 0.7, 0);
+        ctx.lineTo(-s * 1.25, -s * 0.42 + wag * s * 0.4);
+        ctx.quadraticCurveTo(-s * 1.38, wag * s * 0.4, -s * 1.25, s * 0.42 + wag * s * 0.4);
+        ctx.closePath();
+        ctx.fill();
+
+        // Rounded orange body
+        ctx.fillStyle = '#ff5500';
+        ctx.beginPath();
+        ctx.ellipse(0, 0, s * 0.85, s * 0.50, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // White vertical bands with dark outlines
+        ctx.save();
+        ctx.beginPath();
+        ctx.ellipse(0, 0, s * 0.85, s * 0.50, 0, 0, Math.PI * 2);
+        ctx.clip();
+
+        ctx.strokeStyle = '#111111';
+        ctx.lineWidth = s * 0.28;
+        [-0.45, 0.05, 0.46].forEach(bx => {
+          ctx.beginPath();
+          ctx.moveTo(s * bx, -s * 0.6);
+          ctx.quadraticCurveTo(s * (bx - 0.08), 0, s * bx, s * 0.6);
+          ctx.stroke();
+        });
+
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = s * 0.18;
+        [-0.45, 0.05, 0.46].forEach(bx => {
+          ctx.beginPath();
+          ctx.moveTo(s * bx, -s * 0.6);
+          ctx.quadraticCurveTo(s * (bx - 0.08), 0, s * bx, s * 0.6);
+          ctx.stroke();
+        });
+        ctx.restore();
+
+        // Eye
+        ctx.fillStyle = '#111111';
+        ctx.beginPath();
+        ctx.arc(s * 0.55, -s * 0.1, s * 0.11, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (f.type === 'tang') {
+        // Regal Blue Tang (Vibrant Royal Blue with Neon Yellow Tail)
+        ctx.fillStyle = '#ffea00';
+        ctx.beginPath();
+        ctx.moveTo(-s * 0.65, 0);
+        ctx.lineTo(-s * 1.2, -s * 0.42 + wag * s * 0.35);
+        ctx.lineTo(-s * 1.15, wag * s * 0.35);
+        ctx.lineTo(-s * 1.2, s * 0.42 + wag * s * 0.35);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = '#0055ff';
+        ctx.beginPath();
+        ctx.ellipse(0, 0, s * 0.85, s * 0.58, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Dark palette marking
+        ctx.strokeStyle = '#050b2e';
+        ctx.lineWidth = s * 0.16;
+        ctx.beginPath();
+        ctx.moveTo(s * 0.45, -s * 0.12);
+        ctx.quadraticCurveTo(0, -s * 0.38, -s * 0.6, 0);
+        ctx.stroke();
+
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(s * 0.52, -s * 0.14, s * 0.12, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#000000';
+        ctx.beginPath();
+        ctx.arc(s * 0.55, -s * 0.14, s * 0.06, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        // Moorish Idol (Dramatic Pennant Dorsal Fin, Gold/White/Black bands)
+        // Flowing white pennant streamer
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2.6 * scale;
+        ctx.beginPath();
+        ctx.moveTo(-s * 0.1, -s * 0.65);
+        ctx.quadraticCurveTo(-s * 0.9, -s * 1.3 + wag * s * 0.5, -s * 1.85, -s * 0.8 + wag * s * 0.9);
+        ctx.stroke();
+
+        // Disc body
+        ctx.fillStyle = '#fff59d';
+        ctx.beginPath();
+        ctx.moveTo(s * 0.95, 0);
+        ctx.quadraticCurveTo(s * 0.1, -s * 0.85, -s * 0.25, -s * 0.72);
+        ctx.lineTo(-s * 0.75, 0);
+        ctx.lineTo(-s * 0.25, s * 0.72);
+        ctx.quadraticCurveTo(s * 0.1, s * 0.85, s * 0.95, 0);
+        ctx.closePath();
+        ctx.fill();
+
+        // Bold black & gold vertical stripes
+        ctx.save();
+        ctx.clip();
+        ctx.fillStyle = '#111111';
+        ctx.fillRect(s * 0.22, -s, s * 0.28, s * 2);
+        ctx.fillRect(-s * 0.55, -s, s * 0.32, s * 2);
+        ctx.fillStyle = '#ffbe00';
+        ctx.fillRect(-s * 0.15, -s, s * 0.35, s * 2);
+        ctx.restore();
+      }
+
+      ctx.restore();
+    }
+  }
+
+  // Update Schooling Choreography (Swimming Together -> Synchronized Turning -> Scattering -> Regrouping)
+  function updateSchool(dt, t) {
+    choreographer.timer += dt;
+    choreographer.weavePhase += dt * 1.15;
+
+    // State machine for dramatic, lifelike schooling behavior
+    if (choreographer.timer >= choreographer.nextEventTime) {
+      choreographer.timer = 0;
+
+      if (choreographer.mode === 'schooling') {
+        // Choose between a sharp synchronized bank/turn or an explosive scatter
+        if (rand() < 0.58) {
+          choreographer.mode = 'turning';
+          choreographer.nextEventTime = randRange(2.4, 3.6);
+          choreographer.turnDirection = rand() > 0.5 ? 1 : -1;
+          // Sweep attractor across the tank in a dramatic arc
+          choreographer.targetAttractorX = choreographer.attractorX > 0.5 ? randRange(0.22, 0.36) : randRange(0.64, 0.78);
+          choreographer.targetAttractorY = randRange(0.24, 0.58);
+        } else {
+          // Explosive flash-expansion scatter!
+          choreographer.mode = 'scattering';
+          choreographer.nextEventTime = randRange(1.1, 1.5);
+          // Compute school centroid as the scatter epicenter
+          let cx = 0, cy = 0;
+          for (let i = 0; i < school.length; i++) {
+            cx += school[i].x;
+            cy += school[i].y;
+          }
+          cx /= school.length;
+          cy /= school.length;
+          choreographer.scatterOriginX = cx + randRange(-35, 35) * scale;
+          choreographer.scatterOriginY = cy + randRange(-35, 35) * scale;
+          choreographer.scatterStrength = 1.0;
+
+          // Give every fish an immediate radial burst impulse + flash shimmer
+          for (let i = 0; i < school.length; i++) {
+            const f = school[i];
+            const dx = f.x - choreographer.scatterOriginX;
+            const dy = f.y - choreographer.scatterOriginY;
+            const dist = Math.hypot(dx, dy) || 1;
+            const burstAngle = Math.atan2(dy, dx) + randRange(-0.28, 0.28);
+            const burstSpeed = randRange(360, 520) * scale;
+            f.vx = Math.cos(burstAngle) * burstSpeed;
+            f.vy = Math.sin(burstAngle) * burstSpeed;
+            f.scatterBoost = 1.0;
+          }
+        }
+      } else if (choreographer.mode === 'turning') {
+        choreographer.mode = 'schooling';
+        choreographer.nextEventTime = randRange(3.2, 4.8);
+        choreographer.targetAttractorX = randRange(0.24, 0.76);
+        choreographer.targetAttractorY = randRange(0.24, 0.56);
+      } else if (choreographer.mode === 'scattering') {
+        choreographer.mode = 'regrouping';
+        choreographer.nextEventTime = randRange(2.2, 3.0);
+        choreographer.targetAttractorX = randRange(0.32, 0.68);
+        choreographer.targetAttractorY = randRange(0.30, 0.52);
+      } else if (choreographer.mode === 'regrouping') {
+        choreographer.mode = 'schooling';
+        choreographer.nextEventTime = randRange(3.4, 5.0);
       }
     }
 
-    // Move invisible school leader smoothly
-    if (schoolState.mode === 'swirling') {
-      const ang = time * 1.35 * schoolState.swirlDir;
-      schoolState.targetX = schoolState.swirlCenter.x + Math.cos(ang) * (width * 0.22);
-      schoolState.targetY = schoolState.swirlCenter.y + Math.sin(ang * 2) * (height * 0.11);
-    }
+    // Smoothly move school leader/attractor along figure-8 currents
+    const figure8X = 0.5 + Math.sin(choreographer.weavePhase * 0.75) * 0.27;
+    const figure8Y = 0.40 + Math.sin(choreographer.weavePhase * 1.5) * 0.14;
 
-    const dxL = schoolState.targetX - schoolState.leaderX;
-    const dyL = schoolState.targetY - schoolState.leaderY;
-    const distL = Math.hypot(dxL, dyL) || 1;
-    const desiredSpeed = schoolState.mode === 'regrouping' ? 3.5 : 2.9;
-    schoolState.leaderVx += ((dxL / distL) * desiredSpeed - schoolState.leaderVx) * 0.045;
-    schoolState.leaderVy += ((dyL / distL) * desiredSpeed - schoolState.leaderVy) * 0.045;
-    schoolState.leaderX += schoolState.leaderVx;
-    schoolState.leaderY += schoolState.leaderVy;
+    const goalX = choreographer.mode === 'schooling'
+      ? figure8X * 0.65 + choreographer.targetAttractorX * 0.35
+      : choreographer.targetAttractorX;
+    const goalY = choreographer.mode === 'schooling'
+      ? figure8Y * 0.65 + choreographer.targetAttractorY * 0.35
+      : choreographer.targetAttractorY;
 
-    // Keep leader in upper/mid open water above the reef
-    const marginX = width * 0.14;
-    const minY = height * 0.14;
-    const maxY = height * 0.66;
-    if (schoolState.leaderX < marginX) schoolState.targetX = width * 0.72;
-    if (schoolState.leaderX > width - marginX) schoolState.targetX = width * 0.28;
-    if (schoolState.leaderY < minY) schoolState.targetY = height * 0.42;
-    if (schoolState.leaderY > maxY) schoolState.targetY = height * 0.30;
+    const pullRate = choreographer.mode === 'turning' ? 3.2 : 1.8;
+    choreographer.attractorX += (goalX - choreographer.attractorX) * Math.min(1, dt * pullRate);
+    choreographer.attractorY += (goalY - choreographer.attractorY) * Math.min(1, dt * pullRate);
 
-    // --- Boids Update for All Schooling Fish ---
-    const n = school.length;
-    const perception = 82;
-    const separationDist = 28;
+    const leaderX = choreographer.attractorX * width;
+    const leaderY = choreographer.attractorY * height;
 
-    for (let i = 0; i < n; i++) {
+    // Boids neighborhood parameters
+    const sepRadius = 38 * scale;
+    const alignRadius = 115 * scale;
+    const cohRadius = 155 * scale;
+    const sepRadiusSq = sepRadius * sepRadius;
+    const alignRadiusSq = alignRadius * alignRadius;
+    const cohRadiusSq = cohRadius * cohRadius;
+
+    const isScattering = choreographer.mode === 'scattering';
+    const isRegrouping = choreographer.mode === 'regrouping';
+    const isTurning = choreographer.mode === 'turning';
+
+    // Update each fish in the school
+    for (let i = 0; i < school.length; i++) {
       const f = school[i];
-      f.ax = 0;
-      f.ay = 0;
+      f.scatterBoost = Math.max(0, f.scatterBoost - dt * 0.85);
 
-      if (f.panicTimer > 0) f.panicTimer--;
+      let sepX = 0, sepY = 0, sepCount = 0;
+      let alignX = 0, alignY = 0, alignCount = 0;
+      let cohX = 0, cohY = 0, cohCount = 0;
 
-      let alignX = 0, alignY = 0;
-      let cohX = 0, cohY = 0;
-      let sepX = 0, sepY = 0;
-      let neighbors = 0;
-
-      for (let j = 0; j < n; j++) {
+      for (let j = 0; j < school.length; j++) {
         if (i === j) continue;
         const other = school[j];
         const dx = other.x - f.x;
         const dy = other.y - f.y;
-        const dSq = dx * dx + dy * dy;
+        const distSq = dx * dx + dy * dy;
 
-        if (dSq < perception * perception && dSq > 0.0001) {
-          const d = Math.sqrt(dSq);
-          alignX += other.vx;
-          alignY += other.vy;
+        if (distSq < cohRadiusSq && distSq > 0.0001) {
           cohX += other.x;
           cohY += other.y;
-          neighbors++;
+          cohCount++;
 
-          if (d < separationDist) {
-            const push = (separationDist - d) / separationDist;
-            sepX -= (dx / d) * push;
-            sepY -= (dy / d) * push;
+          if (distSq < alignRadiusSq) {
+            alignX += other.vx;
+            alignY += other.vy;
+            alignCount++;
+
+            if (distSq < sepRadiusSq) {
+              const invDist = 1 / Math.sqrt(distSq);
+              sepX -= dx * invDist * (sepRadius * invDist);
+              sepY -= dy * invDist * (sepRadius * invDist);
+              sepCount++;
+            }
           }
         }
       }
 
-      const isScattering = f.panicTimer > 0 || schoolState.mode === 'scattering';
+      let ax = 0;
+      let ay = 0;
 
-      if (neighbors > 0) {
-        // Alignment
-        alignX /= neighbors;
-        alignY /= neighbors;
-        const alignMag = Math.hypot(alignX, alignY) || 1;
-        alignX = (alignX / alignMag) * f.maxSpeed - f.vx;
-        alignY = (alignY / alignMag) * f.maxSpeed - f.vy;
-
-        // Cohesion
-        cohX = cohX / neighbors - f.x;
-        cohY = cohY / neighbors - f.y;
-        const cohMag = Math.hypot(cohX, cohY) || 1;
-        cohX = (cohX / cohMag) * f.maxSpeed - f.vx;
-        cohY = (cohY / cohMag) * f.maxSpeed - f.vy;
-
-        const alignWeight = isScattering ? 0.25 : 1.15;
-        const cohWeight = isScattering ? -0.35 : (schoolState.mode === 'regrouping' ? 1.35 : 0.95);
-        const sepWeight = isScattering ? 2.4 : 1.55;
-
-        f.ax += (alignX * alignWeight + cohX * cohWeight) * 0.035 + sepX * sepWeight * 0.09;
-        f.ay += (alignY * alignWeight + cohY * cohWeight) * 0.035 + sepY * sepWeight * 0.09;
+      // 1. Separation (Always active, amplified during scatter)
+      if (sepCount > 0) {
+        const sepWeight = isScattering ? 460 : 240;
+        ax += (sepX / sepCount) * sepWeight * scale;
+        ay += (sepY / sepCount) * sepWeight * scale;
       }
 
-      // Attraction to moving school target / ribbon formation
+      // 2. Alignment (Synchronized heading when schooling,turning, or regrouping)
+      if (alignCount > 0 && !isScattering) {
+        const avgVx = alignX / alignCount;
+        const avgVy = alignY / alignCount;
+        const alignWeight = isTurning ? 5.2 : 3.8;
+        ax += (avgVx - f.vx) * alignWeight;
+        ay += (avgVy - f.vy) * alignWeight;
+      }
+
+      // 3. Cohesion (Pull toward local neighbors)
+      if (cohCount > 0 && !isScattering) {
+        const centerX = cohX / cohCount;
+        const centerY = cohY / cohCount;
+        const cohWeight = isRegrouping ? 3.6 : 1.9;
+        ax += (centerX - f.x) * cohWeight;
+        ay += (centerY - f.y) * cohWeight;
+      }
+
+      // 4. Global School Attractor / Swirling Turn Force
       if (!isScattering) {
-        const goalX = schoolState.leaderX + f.offsetBiasX;
-        const goalY = schoolState.leaderY + f.offsetBiasY;
-        const gx = goalX - f.x;
-        const gy = goalY - f.y;
-        const gDist = Math.hypot(gx, gy) || 1;
-        const pull = schoolState.mode === 'regrouping' ? 0.085 : 0.052;
-        f.ax += (gx / gDist) * pull * Math.min(gDist / 60, 2.2);
-        f.ay += (gy / gDist) * pull * Math.min(gDist / 60, 2.2);
+        const dxL = leaderX - f.x;
+        const dyL = leaderY - f.y;
+        const distL = Math.hypot(dxL, dyL) || 1;
+        const leaderWeight = isRegrouping ? 320 : (isTurning ? 290 : 195);
+        ax += (dxL / distL) * leaderWeight * scale;
+        ay += (dyL / distL) * leaderWeight * scale;
+
+        // Add banking swirl during synchronized turns
+        if (isTurning && distL < 260 * scale) {
+          const swirlX = -dyL / distL * choreographer.turnDirection;
+          const swirlY = dxL / distL * choreographer.turnDirection;
+          ax += swirlX * 220 * scale;
+          ay += swirlY * 220 * scale;
+        }
+      } else {
+        // Active radial outward force during the first half of scattering
+        const dxS = f.x - choreographer.scatterOriginX;
+        const dyS = f.y - choreographer.scatterOriginY;
+        const distS = Math.hypot(dxS, dyS) || 1;
+        ax += (dxS / distS) * 380 * scale;
+        ay += (dyS / distS) * 380 * scale;
       }
 
-      // Evade Prowler if nearby
-      if (prowler && prowler.active) {
-        const pdx = f.x - prowler.x;
-        const pdy = f.y - prowler.y;
-        const pDist = Math.hypot(pdx, pdy) || 1;
-        if (pDist < 220) {
-          const evade = ((220 - pDist) / 220) * 0.85;
-          f.ax += (pdx / pDist) * evade;
-          f.ay += (pdy / pDist) * evade;
-          f.panicTimer = Math.max(f.panicTimer, 28);
+      // 5. Evade the gliding Eagle Ray cruiser when it passes nearby!
+      if (cruiser && cruiser.active) {
+        const dxC = f.x - cruiser.x;
+        const dyC = f.y - cruiser.y;
+        const distC = Math.hypot(dxC, dyC);
+        const fearRadius = 210 * scale;
+        if (distC < fearRadius && distC > 1) {
+          const fearFactor = Math.pow(1 - distC / fearRadius, 1.5);
+          ax += (dxC / distC) * 1400 * fearFactor * scale;
+          ay += (dyC / distC) * 1400 * fearFactor * scale;
+          f.scatterBoost = Math.max(f.scatterBoost, fearFactor * 0.9);
         }
       }
 
-      // Evade Pointer if user moves mouse over the tank
+      // 6. Evade pointer if user touches/moves mouse on screen
       if (pointer.active) {
-        const mdx = f.x - pointer.x;
-        const mdy = f.y - pointer.y;
-        const mDist = Math.hypot(mdx, mdy) || 1;
-        if (mDist < 180) {
-          const evade = ((180 - mDist) / 180) * 0.95;
-          f.ax += (mdx / mDist) * evade;
-          f.ay += (mdy / mDist) * evade;
-          f.panicTimer = Math.max(f.panicTimer, 24);
+        const dxP = f.x - pointer.x;
+        const dyP = f.y - pointer.y;
+        const distP = Math.hypot(dxP, dyP);
+        const pRadius = 220 * scale;
+        if (distP < pRadius && distP > 1) {
+          const pf = Math.pow(1 - distP / pRadius, 1.4);
+          ax += (dxP / distP) * 1600 * pf * scale;
+          ay += (dyP / distP) * 1600 * pf * scale;
+          f.scatterBoost = Math.max(f.scatterBoost, pf);
         }
       }
 
-      // Soft aquarium & coral boundary avoidance
-      const padX = width * 0.07;
-      const topPad = height * 0.08;
-      const bottomPad = height * 0.74;
-      if (f.x < padX) f.ax += (padX - f.x) * 0.015;
-      if (f.x > width - padX) f.ax -= (f.x - (width - padX)) * 0.015;
-      if (f.y < topPad) f.ay += (topPad - f.y) * 0.018;
-      if (f.y > bottomPad) f.ay -= (f.y - bottomPad) * 0.022;
+      // 7. Soft Boundary Avoidance (keep school inside the sunlit open water & reef amphitheater)
+      const marginX = width * 0.11;
+      const topMargin = height * 0.10;
+      const botMargin = height * 0.73; // stay gracefully above the dense bottom coral floor
 
-      // Apply acceleration and speed limits
-      f.vx += f.ax;
-      f.vy += f.ay;
+      if (f.x < marginX) ax += ((marginX - f.x) / marginX) * 680 * scale;
+      if (f.x > width - marginX) ax -= ((f.x - (width - marginX)) / marginX) * 680 * scale;
+      if (f.y < topMargin) ay += ((topMargin - f.y) / topMargin) * 680 * scale;
+      if (f.y > botMargin) ay -= ((f.y - botMargin) / (height * 0.15)) * 780 * scale;
 
-      const currentMax = f.panicTimer > 0 ? f.panicSpeed : f.maxSpeed;
-      const speed = Math.hypot(f.vx, f.vy) || 1;
-      if (speed > currentMax) {
-        f.vx = (f.vx / speed) * currentMax;
-        f.vy = (f.vy / speed) * currentMax;
-      } else if (speed < 1.35) {
-        f.vx = (f.vx / speed) * 1.35;
-        f.vy = (f.vy / speed) * 1.35;
+      // Integrate velocity
+      f.vx += ax * dt;
+      f.vy += ay * dt;
+
+      // Speed limits (cruise vs burst scatter)
+      const currentSpeed = Math.hypot(f.vx, f.vy) || 1;
+      const minSpd = 125 * scale * f.depth;
+      const maxSpd = (f.maxSpeed + f.scatterBoost * 260 * scale) * f.depth;
+
+      if (currentSpeed > maxSpd) {
+        f.vx = (f.vx / currentSpeed) * maxSpd;
+        f.vy = (f.vy / currentSpeed) * maxSpd;
+      } else if (currentSpeed < minSpd) {
+        f.vx = (f.vx / currentSpeed) * minSpd;
+        f.vy = (f.vy / currentSpeed) * minSpd;
       }
 
-      // Drag decay after scatter burst
-      if (f.panicTimer > 0 && speed > f.maxSpeed) {
-        f.vx *= 0.965;
-        f.vy *= 0.965;
-      }
+      f.x += f.vx * dt;
+      f.y += f.vy * dt;
 
-      f.x += f.vx;
-      f.y += f.vy;
-      f.tailPhase += f.tailSpeed * (0.65 + speed * 0.22);
+      // Smooth angular orientation & banking turn rate calculation
+      const targetAngle = Math.atan2(f.vy, f.vx);
+      let diff = targetAngle - f.angle;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+
+      const angularStep = diff * Math.min(1, dt * 14);
+      f.turnRate = diff; // used for body curvature and silver scale flash on sharp turns
+      f.angle += angularStep;
+
+      // Advance tail undulation proportional to swimming speed
+      const speedRatio = currentSpeed / (160 * scale);
+      f.swimPhase += dt * f.swimFreq * (0.65 + speedRatio * 0.55);
     }
   }
 
-  function drawSchool(time) {
+  function drawSchool(t) {
     ctx.save();
     for (let i = 0; i < school.length; i++) {
       const f = school[i];
-      const s = f.size * f.depthScale;
-      const angle = Math.atan2(f.vy, f.vx);
-      const facingLeft = Math.abs(angle) > Math.PI * 0.5;
-      const wag = Math.sin(f.tailPhase) * 0.34;
-      const turnBank = Math.min(1, Math.hypot(f.ax, f.ay) * 4.5);
+      const s = f.size * f.depth;
+      const wag = Math.sin(f.swimPhase) * (0.28 + f.scatterBoost * 0.18);
+      const bend = Math.max(-0.45, Math.min(0.45, f.turnRate * 0.45)) + wag * 0.35;
 
       ctx.save();
       ctx.translate(f.x, f.y);
-      ctx.rotate(angle);
-      if (facingLeft) ctx.scale(1, -1);
+      ctx.rotate(f.angle);
 
-      // Subtle iridescent flash when banking or scattering
-      const flashLight = 54 + turnBank * 24;
+      // Keep dorsal side oriented upward when swimming left vs right
+      const cosA = Math.cos(f.angle);
+      if (cosA < 0) {
+        ctx.scale(1, -1);
+      }
 
-      // Forked Swimmer Tail
-      ctx.fillStyle = `hsl(${f.secondaryHue}, 95%, 62%)`;
+      // Banking foreshortening when turning sharply
+      const bankScaleY = 1 - Math.min(0.28, Math.abs(f.turnRate) * 0.12);
+      ctx.scale(1, bankScaleY);
+
+      const pal = f.palette;
+      const tailOffset = wag * s * 0.42;
+
+      // 1. Forked Lyretail Caudal Fin (vibrant translucent)
+      ctx.fillStyle = pal.tail;
       ctx.beginPath();
-      ctx.moveTo(-s * 0.65, 0);
-      ctx.lineTo(-s * 1.48, -s * 0.48 + wag * s * 0.55);
-      ctx.lineTo(-s * 1.12, wag * s * 0.28);
-      ctx.lineTo(-s * 1.48, s * 0.48 + wag * s * 0.55);
+      ctx.moveTo(-s * 0.72, tailOffset * 0.35);
+      ctx.lineTo(-s * 1.48, -s * 0.56 + tailOffset);
+      ctx.quadraticCurveTo(-s * 1.15, tailOffset * 0.7, -s * 1.05, tailOffset * 0.5);
+      ctx.quadraticCurveTo(-s * 1.15, tailOffset * 0.7, -s * 1.48, s * 0.56 + tailOffset);
       ctx.closePath();
       ctx.fill();
 
-      // Dorsal & Ventral fins
-      ctx.fillStyle = `hsla(${f.secondaryHue}, 90%, 60%, 0.85)`;
+      // 2. Flowing Dorsal & Ventral Fins
+      ctx.fillStyle = pal.fin;
       ctx.beginPath();
-      ctx.moveTo(s * 0.1, -s * 0.32);
-      ctx.quadraticCurveTo(-s * 0.35, -s * 0.72, -s * 0.65, -s * 0.18);
+      ctx.moveTo(s * 0.15, -s * 0.34);
+      ctx.quadraticCurveTo(-s * 0.35, -s * 0.76 + tailOffset * 0.25, -s * 0.82, -s * 0.18 + tailOffset * 0.35);
+      ctx.lineTo(-s * 0.5, -s * 0.15);
       ctx.closePath();
       ctx.fill();
 
-      // Streamlined Fusiform Body
-      const bodyGrad = ctx.createLinearGradient(s * 0.9, -s * 0.3, -s * 0.8, s * 0.3);
-      bodyGrad.addColorStop(0, `hsl(${f.primaryHue}, 92%, ${flashLight}%)`);
-      bodyGrad.addColorStop(0.65, `hsl(${f.primaryHue + 10}, 88%, ${flashLight - 8}%)`);
-      bodyGrad.addColorStop(1, `hsl(${f.secondaryHue}, 95%, 58%)`);
+      ctx.beginPath();
+      ctx.moveTo(-s * 0.05, s * 0.32);
+      ctx.quadraticCurveTo(-s * 0.42, s * 0.66 + tailOffset * 0.25, -s * 0.78, s * 0.16 + tailOffset * 0.35);
+      ctx.lineTo(-s * 0.45, s * 0.15);
+      ctx.closePath();
+      ctx.fill();
 
+      // 3. Streamlined Fusiform Body with vivid tropical gradient
+      const bodyGrad = ctx.createLinearGradient(0, -s * 0.45, 0, s * 0.45);
+      bodyGrad.addColorStop(0, pal.bodyTop);
+      bodyGrad.addColorStop(0.55, pal.bodyMid);
+      bodyGrad.addColorStop(1, pal.bodyBot);
       ctx.fillStyle = bodyGrad;
+
       ctx.beginPath();
-      ctx.moveTo(s * 0.95, 0);
-      ctx.bezierCurveTo(s * 0.45, -s * 0.52, -s * 0.35, -s * 0.44, -s * 0.82, 0);
-      ctx.bezierCurveTo(-s * 0.35, s * 0.44, s * 0.45, s * 0.52, s * 0.95, 0);
+      ctx.moveTo(s * 0.95, 0); // nose
+      ctx.quadraticCurveTo(s * 0.25, -s * 0.52, -s * 0.82, -s * 0.14 + tailOffset * 0.35);
+      ctx.lineTo(-s * 0.88, tailOffset * 0.4);
+      ctx.lineTo(-s * 0.82, s * 0.14 + tailOffset * 0.35);
+      ctx.quadraticCurveTo(s * 0.25, s * 0.52, s * 0.95, 0);
       ctx.closePath();
       ctx.fill();
 
-      // Specular lateral line shimmer
-      ctx.strokeStyle = `hsla(${f.primaryHue - 12}, 100%, 88%, ${0.42 + turnBank * 0.45})`;
-      ctx.lineWidth = 1.3;
+      // 4. Iridescent Lateral Stripe + Turn/Scatter Specular Flash
+      const flashIntensity = Math.min(1, Math.abs(f.turnRate) * 0.45 + f.scatterBoost * 0.8);
+      ctx.strokeStyle = flashIntensity > 0.35 ? '#ffffff' : pal.stripe;
+      ctx.globalAlpha = 0.65 + flashIntensity * 0.35;
+      ctx.lineWidth = (1.6 + flashIntensity * 1.4) * scale;
       ctx.beginPath();
-      ctx.moveTo(s * 0.55, -s * 0.08);
-      ctx.quadraticCurveTo(0, -s * 0.16, -s * 0.52, -s * 0.03);
+      ctx.moveTo(s * 0.55, -s * 0.05);
+      ctx.quadraticCurveTo(0, -s * 0.14, -s * 0.72, tailOffset * 0.3);
       ctx.stroke();
+      ctx.globalAlpha = 1;
 
-      // Eye
+      // 5. Pectoral Fin flutter
+      const pecFlutter = Math.sin(f.swimPhase * 1.3) * 0.25;
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+      ctx.beginPath();
+      ctx.moveTo(s * 0.22, s * 0.08);
+      ctx.lineTo(-s * 0.12, s * (0.28 + pecFlutter));
+      ctx.lineTo(s * 0.02, s * 0.05);
+      ctx.closePath();
+      ctx.fill();
+
+      // 6. Bright Eye with specular catchlight
       ctx.fillStyle = '#ffffff';
       ctx.beginPath();
-      ctx.arc(s * 0.52, -s * 0.08, s * 0.13, 0, Math.PI * 2);
+      ctx.arc(s * 0.58, -s * 0.08, s * 0.13, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = '#04101e';
+
+      ctx.fillStyle = '#040814';
       ctx.beginPath();
-      ctx.arc(s * 0.55, -s * 0.08, s * 0.07, 0, Math.PI * 2);
+      ctx.arc(s * 0.61, -s * 0.08, s * 0.075, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.restore();
@@ -1301,314 +1753,145 @@
     ctx.restore();
   }
 
-  function updateAndDrawReefFish(time) {
+  function updateAndDrawBubblesAndPlankton(dt, t) {
+    // 1. Glowing Plankton / Marine Snow
     ctx.save();
-    // Draw Prowler (Bluefin Trevally gliding in mid-background) if active
-    if (prowler && prowler.active) {
-      const p = prowler;
-      const ang = Math.atan2(p.vy, p.vx);
-      const left = Math.abs(ang) > Math.PI * 0.5;
-      const wag = Math.sin(p.tailPhase) * 8;
-      const s = p.size;
+    for (let i = 0; i < plankton.length; i++) {
+      const p = plankton[i];
+      p.x += (p.vx + Math.sin(t * 1.2 + p.phase) * 9 * scale) * dt;
+      p.y += p.vy * dt;
 
-      ctx.save();
-      ctx.translate(p.x, p.y);
-      ctx.rotate(ang);
-      if (left) ctx.scale(1, -1);
+      if (p.y < -10) p.y = height + 10;
+      if (p.x < -10) p.x = width + 10;
+      if (p.x > width + 10) p.x = -10;
 
-      // Crescent tail
-      ctx.fillStyle = '#0e4c75';
-      ctx.beginPath();
-      ctx.moveTo(-s * 0.72, 0);
-      ctx.lineTo(-s * 1.32, -s * 0.55 + wag * 0.5);
-      ctx.quadraticCurveTo(-s * 1.0, wag * 0.2, -s * 1.32, s * 0.55 + wag * 0.5);
-      ctx.closePath();
-      ctx.fill();
-
-      // Dorsal & Pectoral fins
-      ctx.fillStyle = '#146194';
-      ctx.beginPath();
-      ctx.moveTo(s * 0.05, -s * 0.34);
-      ctx.lineTo(-s * 0.45, -s * 0.68);
-      ctx.lineTo(-s * 0.55, -s * 0.22);
-      ctx.closePath();
-      ctx.fill();
-
-      // Sleek silvery-blue body
-      const grad = ctx.createLinearGradient(0, -s * 0.4, 0, s * 0.4);
-      grad.addColorStop(0, '#0a3b5c');
-      grad.addColorStop(0.5, '#2b8cbe');
-      grad.addColorStop(1, '#a6bddb');
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.moveTo(s * 0.92, 0);
-      ctx.bezierCurveTo(s * 0.4, -s * 0.45, -s * 0.35, -s * 0.4, -s * 0.8, 0);
-      ctx.bezierCurveTo(-s * 0.35, s * 0.4, s * 0.4, s * 0.45, s * 0.92, 0);
-      ctx.closePath();
-      ctx.fill();
-
-      // Eye
-      ctx.fillStyle = '#ffd166';
-      ctx.beginPath();
-      ctx.arc(s * 0.58, -s * 0.08, s * 0.08, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#020b18';
-      ctx.beginPath();
-      ctx.arc(s * 0.60, -s * 0.08, s * 0.045, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.restore();
-    }
-
-    // Resident Coral Reef Fish (Clownfish, Angelfish, Yellow Tang)
-    for (const rf of reefFish) {
-      rf.phase += 0.045;
-      const targetX = rf.homeX + Math.sin(time * 0.65 + rf.phase) * (rf.type === 'c2' ? 38 : 95);
-      const targetY = rf.homeY + Math.cos(time * 0.9 + rf.phase) * (rf.type === 'c2' ? 18 : 28);
-
-      rf.vx += (targetX - rf.x) * 0.003;
-      rf.vy += (targetY - rf.y) * 0.003;
-      rf.vx *= 0.96;
-      rf.vy *= 0.96;
-      rf.x += rf.vx;
-      rf.y += rf.vy;
-
-      const ang = Math.atan2(rf.vy, rf.vx * (Math.abs(rf.vx) < 0.15 ? 1 : 1));
-      const facingLeft = rf.vx < 0;
-      const s = rf.size;
-      const wag = Math.sin(time * 8 + rf.phase * 4) * 0.25;
-
-      ctx.save();
-      ctx.translate(rf.x, rf.y);
-      if (facingLeft) ctx.scale(-1, 1);
-      ctx.rotate(rf.vy * 0.15);
-
-      if (rf.type === 'c2') {
-        // Clownfish (Orange with white bands & black trim)
-        ctx.fillStyle = '#ff6d00';
-        ctx.beginPath();
-        ctx.moveTo(-s * 0.6, 0);
-        ctx.lineTo(-s * 1.15, -s * 0.38 + wag * s);
-        ctx.quadraticCurveTo(-s * 1.25, wag * s, -s * 1.15, s * 0.38 + wag * s);
-        ctx.closePath();
-        ctx.fill();
-
-        ctx.beginPath();
-        ctx.ellipse(0, 0, s * 0.78, s * 0.45, 0, 0, Math.PI * 2);
-        ctx.fill();
-
-        // White stripes
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = s * 0.22;
-        ctx.beginPath();
-        ctx.moveTo(s * 0.22, -s * 0.38);
-        ctx.quadraticCurveTo(s * 0.12, 0, s * 0.22, s * 0.38);
-        ctx.moveTo(-s * 0.22, -s * 0.36);
-        ctx.quadraticCurveTo(-s * 0.32, 0, -s * 0.22, s * 0.36);
-        ctx.stroke();
-
-        ctx.fillStyle = '#000';
-        ctx.beginPath();
-        ctx.arc(s * 0.48, -s * 0.1, s * 0.09, 0, Math.PI * 2);
-        ctx.fill();
-      } else if (rf.type === 'tang') {
-        // Brilliant Yellow Tang
-        ctx.fillStyle = '#ffea00';
-        ctx.beginPath();
-        ctx.moveTo(-s * 0.55, 0);
-        ctx.lineTo(-s * 1.0, -s * 0.35 + wag * s);
-        ctx.lineTo(-s * 1.0, s * 0.35 + wag * s);
-        ctx.closePath();
-        ctx.fill();
-
-        ctx.beginPath();
-        ctx.moveTo(s * 0.85, 0.05 * s);
-        ctx.quadraticCurveTo(s * 0.1, -s * 0.85, -s * 0.65, 0);
-        ctx.quadraticCurveTo(s * 0.1, s * 0.85, s * 0.85, 0.05 * s);
-        ctx.fill();
-
-        ctx.fillStyle = '#0c1821';
-        ctx.beginPath();
-        ctx.arc(s * 0.45, -s * 0.12, s * 0.08, 0, Math.PI * 2);
-        ctx.fill();
-      } else if (rf.type === 'angelfish') {
-        // Regal Angelfish with trailing dorsal streamer
-        ctx.fillStyle = '#ffbe0b';
-        ctx.beginPath();
-        ctx.moveTo(-s * 0.6, 0);
-        ctx.lineTo(-s * 1.05, -s * 0.32 + wag * s);
-        ctx.lineTo(-s * 1.05, s * 0.32 + wag * s);
-        ctx.closePath();
-        ctx.fill();
-
-        // Trailing dorsal filament
-        ctx.strokeStyle = '#00f5d4';
-        ctx.lineWidth = 2.4;
-        ctx.beginPath();
-        ctx.moveTo(-s * 0.1, -s * 0.55);
-        ctx.quadraticCurveTo(-s * 0.7, -s * 0.9, -s * 1.35, -s * 0.65 + wag * s * 1.5);
-        ctx.stroke();
-
-        // Striped body
-        const aGrad = ctx.createLinearGradient(-s * 0.6, -s * 0.6, s * 0.6, s * 0.6);
-        aGrad.addColorStop(0, '#3a86ff');
-        aGrad.addColorStop(0.5, '#ffbe0b');
-        aGrad.addColorStop(1, '#8338ec');
-        ctx.fillStyle = aGrad;
-        ctx.beginPath();
-        ctx.ellipse(0, 0, s * 0.75, s * 0.58, 0, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.fillStyle = '#000814';
-        ctx.beginPath();
-        ctx.arc(s * 0.46, -s * 0.12, s * 0.08, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      ctx.restore();
-    }
-    ctx.restore();
-  }
-
-  function updateAndDrawParticles(time) {
-    // Emit new bubbles occasionally
-    for (const em of bubbleEmitters) {
-      if (Math.random() < em.rate) {
-        bubbles.push({
-          x: em.x + (Math.random() - 0.5) * 18,
-          y: em.y,
-          r: 1.5 + Math.random() * 4.5,
-          vy: 0.9 + Math.random() * 1.8,
-          wobbleFreq: 2.0 + Math.random() * 2.0,
-          wobbleAmp: 0.5 + Math.random() * 1.1,
-          phase: Math.random() * Math.PI * 2
-        });
-      }
-    }
-
-    // Update & Draw Bubbles
-    ctx.save();
-    for (let i = bubbles.length - 1; i >= 0; i--) {
-      const b = bubbles[i];
-      b.y -= b.vy;
-      b.x += Math.sin(time * b.wobbleFreq + b.phase) * b.wobbleAmp;
-
-      if (b.y < -20) {
-        bubbles.splice(i, 1);
-        continue;
-      }
-
-      ctx.strokeStyle = 'rgba(190, 248, 255, 0.48)';
-      ctx.lineWidth = 1.1;
-      ctx.beginPath();
-      ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
-      ctx.stroke();
-
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.65)';
-      ctx.beginPath();
-      ctx.arc(b.x - b.r * 0.32, b.y - b.r * 0.32, b.r * 0.28, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // Update & Draw Marine Snow / Drifting Plankton
-    for (const p of marineSnow) {
-      p.x += p.vx + Math.sin(time * 0.8 + p.phase) * 0.18;
-      p.y += p.vy + Math.cos(time * 0.6 + p.phase) * 0.12;
-
-      if (p.x < 0) p.x = width;
-      if (p.x > width) p.x = 0;
-      if (p.y < 0) p.y = height;
-      if (p.y > height) p.y = 0;
-
-      const twinkle = 0.6 + 0.4 * Math.sin(time * 2.4 + p.phase);
-      ctx.fillStyle = `hsla(${p.hue}, 90%, 82%, ${(p.alpha * twinkle).toFixed(3)})`;
+      const twinkle = 0.4 + 0.6 * Math.abs(Math.sin(t * 2.4 + p.phase));
+      ctx.fillStyle = p.color;
+      ctx.globalAlpha = p.alpha * twinkle;
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.restore();
-  }
 
-  function drawCausticsAndSurface(time) {
-    // Shimmering water surface ripples at the very top
+    // 2. Rising Shimmering Bubbles
     ctx.save();
-    ctx.globalCompositeOperation = 'screen';
-    for (let i = 0; i < 3; i++) {
-      const yBase = 14 + i * 12;
-      ctx.strokeStyle = `rgba(165, 250, 255, ${0.22 - i * 0.05})`;
-      ctx.lineWidth = 3 - i * 0.6;
-      ctx.beginPath();
-      for (let x = 0; x <= width; x += 24) {
-        const y = yBase + Math.sin(x * 0.018 + time * (1.8 + i * 0.4) + i) * 6;
-        if (x === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+    for (let i = 0; i < bubbles.length; i++) {
+      const b = bubbles[i];
+      b.y -= b.speed * dt;
+      const bx = b.x + Math.sin(t * b.wobbleFreq + b.phase) * b.wobbleAmp;
+
+      if (b.y < -20) {
+        b.y = height * randRange(0.84, 0.96);
+        b.x = (b.ventX + randRange(-0.035, 0.035)) * width;
       }
-      ctx.stroke();
-    }
 
-    // Subtle dancing caustic highlights along the sandy seafloor
-    for (let i = 0; i < 16; i++) {
-      const cx = (width * ((i + 0.5) / 16)) + Math.sin(time * 1.4 + i) * 28;
-      const cy = height * 0.88 + Math.cos(time * 1.1 + i * 1.7) * 35;
-      const rx = 36 + Math.sin(time * 2.1 + i) * 14;
-      const ry = 8 + Math.cos(time * 1.9 + i) * 3;
-
-      const cGrad = ctx.createRadialGradient(cx, cy, 1, cx, cy, rx);
-      cGrad.addColorStop(0, 'rgba(130, 245, 255, 0.11)');
-      cGrad.addColorStop(1, 'rgba(130, 245, 255, 0)');
-      ctx.fillStyle = cGrad;
+      // Bubble rim
+      ctx.strokeStyle = 'rgba(160, 250, 255, 0.58)';
+      ctx.lineWidth = 1.3 * scale;
       ctx.beginPath();
-      ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+      ctx.arc(bx, b.y, b.r, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Bubble specular highlight
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+      ctx.beginPath();
+      ctx.arc(bx - b.r * 0.35, b.y - b.r * 0.35, b.r * 0.28, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.restore();
-
-    // Subtle aquarium edge vignette for lush depth
-    const vig = ctx.createRadialGradient(
-      width * 0.5,
-      height * 0.48,
-      Math.min(width, height) * 0.36,
-      width * 0.5,
-      height * 0.5,
-      Math.max(width, height) * 0.74
-    );
-    vig.addColorStop(0, 'rgba(0, 0, 0, 0)');
-    vig.addColorStop(1, 'rgba(1, 8, 20, 0.42)');
-    ctx.fillStyle = vig;
-    ctx.fillRect(0, 0, width, height);
   }
 
-  // Main 60fps Animation Loop
-  let startTime = performance.now();
-  function animate(now) {
-    const time = (now - startTime) * 0.001;
+  function drawVignetteAndDepthGlow() {
+    // Subtle cinematic edge depth framing so vivid colors pop on phone and square displays
+    ctx.save();
+    const grad = ctx.createRadialGradient(
+      width * 0.5, height * 0.48, Math.min(width, height) * 0.38,
+      width * 0.5, height * 0.5, Math.max(width, height) * 0.74
+    );
+    grad.addColorStop(0, 'rgba(0, 0, 0, 0)');
+    grad.addColorStop(1, 'rgba(1, 4, 18, 0.42)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, width, height);
+    ctx.restore();
+  }
 
-    // 1. Static deep ocean & midground coral reef layer
+  function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // Normalize scale relative to a 1080x1080 target canvas
+    scale = Math.min(width, height) / 1080;
+    initScene();
+  }
+
+  window.addEventListener('resize', resize);
+
+  // Optional subtle pointer interaction if someone taps/drags (requires zero interaction by default)
+  window.addEventListener('pointerdown', (e) => {
+    pointer.active = true;
+    pointer.x = e.clientX;
+    pointer.y = e.clientY;
+    pointer.timer = 1.2;
+  });
+  window.addEventListener('pointermove', (e) => {
+    if (e.buttons > 0 || e.pointerType === 'touch') {
+      pointer.active = true;
+      pointer.x = e.clientX;
+      pointer.y = e.clientY;
+      pointer.timer = 0.8;
+    }
+  });
+
+  // Initialize and start immediate animation loop
+  resize();
+
+  let lastTime = performance.now();
+  function animate(now) {
+    const dt = Math.min(0.05, Math.max(0.001, (now - lastTime) * 0.001));
+    lastTime = now;
+    const t = now * 0.001;
+
+    if (pointer.active) {
+      pointer.timer -= dt;
+      if (pointer.timer <= 0) pointer.active = false;
+    }
+
+    // 1. Draw pre-rendered multi-layered coral reef backdrop
     ctx.drawImage(bgCanvas, 0, 0, width, height);
 
-    // 2. Background swaying kelp & volumetric god rays
-    drawKelpLayer('back', time);
-    drawSunRays(time);
+    // 2. Draw shimmering caustic light web on reef & sand
+    drawAnimatedCaustics(t);
 
-    // 3. Midground swaying sea fans, kelp & anemones
-    drawSeaFans('mid', time);
-    drawKelpLayer('mid', time);
-    drawAnemones('mid', time);
+    // 3. Draw background gliding Eagle Ray cruiser
+    updateAndDrawCruiser(dt, t);
 
-    // 4. Reef dwellers & cohesive schooling fish (turns, swirls, and scatters)
-    updateSchoolChoreography(time);
-    updateAndDrawReefFish(time);
-    drawSchool(time);
+    // 4. Draw swaying sea fans & ribbon kelp
+    drawKelpAndSeaFans(t);
 
-    // 5. Foreground framing coral ledges, swaying anemones, kelp & bubbles
-    ctx.drawImage(fgRockCanvas, 0, 0, width, height);
-    drawSeaFans('front', time);
-    drawAnemones('front', time);
-    drawKelpLayer('front', time);
+    // 5. Draw iridescent giant clams on the reef floor
+    drawGiantClams(t);
 
-    // 6. Bubbles, marine snow & caustic light shimmer
-    updateAndDrawParticles(time);
-    drawCausticsAndSurface(time);
+    // 6. Update & draw the main school of fish (swimming together, banking turns, scattering)
+    updateSchool(dt, t);
+    drawSchool(t);
+
+    // 7. Draw glowing swaying sea anemones & resident clownfish/tangs
+    drawAnemones(t);
+    updateAndDrawAccentFish(dt, t);
+
+    // 8. Draw rising bubble streams & bioluminescent plankton
+    updateAndDrawBubblesAndPlankton(dt, t);
+
+    // 9. Draw volumetric sunbeams slicing through the water
+    drawSunbeams(t);
+
+    // 10. Subtle depth vignette
+    drawVignetteAndDepthGlow();
 
     requestAnimationFrame(animate);
   }

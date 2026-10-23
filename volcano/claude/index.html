@@ -2,499 +2,487 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Night Eruption</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Volcano</title>
 <style>
-  html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#04040c}
-  canvas{display:block;width:100vw;height:100vh}
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #050210; }
+  canvas { display: block; width: 100vw; height: 100vh; }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <script>
-(() => {
-  const cv = document.getElementById('c');
-  const g = cv.getContext('2d');
-  const R = Math.random;
+(function () {
+  'use strict';
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+
+  let W = 0, H = 0, DPR = 1;
+  // Scene is designed in a 1080x1080 reference space, scaled to cover the window.
+  const REF = 1080;
+  let S = 1, OX = 0, OY = 0;
+
+  // Random helpers
+  const rand = (a, b) => a + Math.random() * (b - a);
   const TAU = Math.PI * 2;
 
-  let W = 0, H = 0, S = 0, DPR = 1;
-  let cx = 0, cy = 0, craterW = 0;
-  let profile = [], PN = 400;
-  let mountain = null;
-  let stars = [], flows = [], sparks = [], bombs = [], ash = [];
-  let bolt = null, ashAcc = 0, wind = 0;
-  let time = 0, lastT = 0;
+  // Scene geometry (reference coords)
+  const VENT = { x: 540, y: 470 };      // crater center
+  const BASE_Y = 900;                   // volcano base
+  const SLOPE_L = 60, SLOPE_R = 1020;   // base extents
 
-  // deterministic noise for static scenery
-  let seed = 987654321;
-  const rnd = () => { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; };
-
-  const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
-  const px = i => -0.1 * W + 1.2 * W * i / PN;
-
-  function surfY(x) {
-    const t = (x + 0.1 * W) / (1.2 * W) * PN;
-    const i = clamp(Math.floor(t), 0, PN - 1);
-    const f = t - i;
-    return profile[i] * (1 - f) + profile[i + 1] * f;
+  // Pseudo-noise for ridge detail (deterministic)
+  function ridge(t) {
+    return Math.sin(t * 13.1) * 6 + Math.sin(t * 29.7 + 1.3) * 3 + Math.sin(t * 61.3 + 2.1) * 1.5;
   }
 
-  function buildProfile() {
-    profile = [];
-    const half = craterW * 0.5;
-    const d0 = half / (0.62 * W);
-    for (let i = 0; i <= PN; i++) {
-      const x = px(i);
-      const dx = Math.abs(x - cx);
-      let y;
-      if (dx < half) {
-        const u = dx / half;
-        y = cy + H * 0.03 * (1 - u * u);
-      } else {
-        const d = clamp((dx / (0.62 * W) - d0) / (1 - d0), 0, 1);
-        y = cy + H * 0.52 * Math.pow(d, 0.72);
-        const k = clamp(d * 6, 0, 1);
-        y += k * (H * 0.014 * Math.sin(i * 0.37 + 1.3) + H * 0.007 * Math.sin(i * 1.31) + H * 0.004 * Math.sin(i * 3.7));
-      }
-      profile.push(y);
+  // Volcano outline points (left base -> crater -> right base)
+  const outline = [];
+  (function buildOutline() {
+    const craterHalf = 55;
+    const N = 60;
+    for (let i = 0; i <= N; i++) {
+      const t = i / N;
+      const x = SLOPE_L + (VENT.x - craterHalf - SLOPE_L) * t;
+      // concave-up slope profile
+      const y = BASE_Y - (BASE_Y - (VENT.y + 10)) * Math.pow(t, 1.6) + ridge(t * 7) * (1 - t);
+      outline.push({ x, y });
+    }
+    outline.push({ x: VENT.x - craterHalf, y: VENT.y + 8 });
+    outline.push({ x: VENT.x - 30, y: VENT.y + 24 });
+    outline.push({ x: VENT.x + 30, y: VENT.y + 24 });
+    outline.push({ x: VENT.x + craterHalf, y: VENT.y + 6 });
+    for (let i = N; i >= 0; i--) {
+      const t = i / N;
+      const x = SLOPE_R - (SLOPE_R - (VENT.x + craterHalf)) * t;
+      const y = BASE_Y - (BASE_Y - (VENT.y + 8)) * Math.pow(t, 1.6) + ridge(t * 7 + 3) * (1 - t);
+      outline.push({ x, y });
+    }
+  })();
+
+  // Function: slope surface height at x (approximate via outline lookup)
+  function surfaceY(x) {
+    const craterHalf = 55;
+    if (x < SLOPE_L || x > SLOPE_R) return BASE_Y;
+    if (x <= VENT.x) {
+      const t = (x - SLOPE_L) / (VENT.x - craterHalf - SLOPE_L);
+      if (t >= 1) return VENT.y + 10 + (x - (VENT.x - craterHalf)) * 0.25;
+      return BASE_Y - (BASE_Y - (VENT.y + 10)) * Math.pow(t, 1.6) + ridge(t * 7) * (1 - t);
+    } else {
+      const t = (SLOPE_R - x) / (SLOPE_R - (VENT.x + craterHalf));
+      if (t >= 1) return VENT.y + 8 + ((VENT.x + craterHalf) - x) * 0.25;
+      return BASE_Y - (BASE_Y - (VENT.y + 8)) * Math.pow(t, 1.6) + ridge(t * 7 + 3) * (1 - t);
     }
   }
 
-  function buildMountain() {
-    mountain = document.createElement('canvas');
-    mountain.width = W * DPR; mountain.height = H * DPR;
-    const m = mountain.getContext('2d');
-    m.setTransform(DPR, 0, 0, DPR, 0, 0);
-    m.beginPath();
-    m.moveTo(-0.1 * W, H + 20);
-    for (let i = 0; i <= PN; i++) m.lineTo(px(i), profile[i]);
-    m.lineTo(1.1 * W, H + 20);
-    m.closePath();
-    const lg = m.createLinearGradient(0, cy, 0, H);
-    lg.addColorStop(0, '#2c1b1e');
-    lg.addColorStop(0.45, '#150e12');
-    lg.addColorStop(1, '#06050a');
-    m.fillStyle = lg;
-    m.fill();
-    m.save();
-    m.clip();
-    // rocky streaks down the slopes
-    for (let i = 0; i < 320; i++) {
-      const x0 = cx + (rnd() - 0.5) * W * 1.1;
-      const y0 = surfY(x0) + rnd() * H * 0.45;
-      const dir = x0 < cx ? -1 : 1;
-      const len = S * (0.04 + rnd() * 0.22);
-      const dark = rnd() < 0.6;
-      m.strokeStyle = dark
-        ? `rgba(0,0,5,${0.18 + rnd() * 0.4})`
-        : `rgba(70,40,45,${0.1 + rnd() * 0.25})`;
-      m.lineWidth = 1 + rnd() * 3;
-      m.beginPath();
-      m.moveTo(x0, y0);
-      m.lineTo(x0 + dir * len * 0.75, y0 + len * 0.66);
-      m.stroke();
-    }
-    // warm light on the summit from the crater
-    const rg = m.createRadialGradient(cx, cy, 0, cx, cy, S * 0.38);
-    rg.addColorStop(0, 'rgba(255,120,40,0.6)');
-    rg.addColorStop(0.3, 'rgba(210,70,15,0.28)');
-    rg.addColorStop(1, 'rgba(0,0,0,0)');
-    m.fillStyle = rg;
-    m.fillRect(0, 0, W, H);
-    m.restore();
+  // Stars
+  const stars = [];
+  for (let i = 0; i < 260; i++) {
+    stars.push({ x: rand(0, REF), y: rand(0, 620), r: rand(0.4, 1.8), p: rand(0, TAU), s: rand(0.5, 2.5) });
   }
 
-  function buildStars() {
-    stars = [];
-    for (let i = 0; i < 360; i++) {
-      stars.push({ x: rnd() * W, y: rnd() * H * 0.75, s: 0.5 + rnd() * 1.6, ph: rnd() * TAU, sp: 0.5 + rnd() * 2 });
+  // Lava flow channels: each a polyline down a slope, with a pulsing glow
+  const flows = [];
+  function makeFlow(side, offset, width, speed) {
+    const pts = [];
+    let x = VENT.x + side * 30;
+    let y = VENT.y + 20;
+    pts.push({ x, y });
+    let wander = offset;
+    while (y < BASE_Y - 10 && x > SLOPE_L + 10 && x < SLOPE_R - 10) {
+      x += side * rand(6, 14) + Math.sin(wander) * 4;
+      wander += rand(0.2, 0.6);
+      y = surfaceY(x) + rand(-2, 2);
+      pts.push({ x, y });
     }
+    return { pts, width, phase: rand(0, TAU), speed, side };
   }
+  flows.push(makeFlow(-1, 0.0, 16, 1.0));
+  flows.push(makeFlow(-1, 2.2, 9, 1.6));
+  flows.push(makeFlow(1, 1.0, 18, 0.8));
+  flows.push(makeFlow(1, 3.1, 8, 1.4));
+  flows.push(makeFlow(1, 4.6, 6, 2.0));
 
-  function buildFlows() {
-    flows = [];
-    const n = 7;
-    for (let k = 0; k < n; k++) {
-      const side = k % 2 ? 1 : -1;
-      let x = cx + side * craterW * 0.48;
-      const pts = [];
-      const wig = rnd() * 10;
-      let drift = (rnd() - 0.5) * 0.6;
-      const maxY = H * (0.66 + rnd() * 0.26);
-      for (let s = 0; s < 500; s++) {
-        const y = surfY(x);
-        pts.push({ x, y: y + 1.5 });
-        if (y > maxY || x < -0.05 * W || x > 1.05 * W) break;
-        drift += (rnd() - 0.5) * 0.3;
-        drift = clamp(drift, -0.9, 0.9);
-        x += side * S * 0.011 * (1 + Math.sin(s * 0.3 + wig) * 0.3) + drift * S * 0.005;
-      }
-      flows.push({
-        pts,
-        w: S * (0.005 + rnd() * 0.007),
-        len: 0.04 + rnd() * 0.3,
-        speed: 0.02 + rnd() * 0.035,
-        phase: rnd() * 10,
-        pulse: 0.15 + rnd() * 0.2
+  // Lava particles (fountain)
+  const lava = [];
+  const MAX_LAVA = 900;
+  function spawnLava(n, power) {
+    for (let i = 0; i < n && lava.length < MAX_LAVA; i++) {
+      const ang = -Math.PI / 2 + rand(-0.42, 0.42);
+      const sp = rand(5, 13) * power;
+      lava.push({
+        x: VENT.x + rand(-22, 22), y: VENT.y + 10,
+        vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
+        r: rand(1.5, 5.5), life: 1, decay: rand(0.006, 0.014),
+        trail: []
       });
     }
   }
+
+  // Embers / sparks (small, long-lived, drift with wind)
+  const embers = [];
+  function spawnEmber(x, y) {
+    if (embers.length > 400) return;
+    embers.push({ x, y, vx: rand(-1, 1), vy: rand(-3, -0.5), r: rand(0.6, 1.6), life: 1, decay: rand(0.004, 0.01) });
+  }
+
+  // Ash cloud puffs
+  const ash = [];
+  const MAX_ASH = 220;
+  function spawnAsh(n) {
+    for (let i = 0; i < n && ash.length < MAX_ASH; i++) {
+      ash.push({
+        x: VENT.x + rand(-30, 30), y: VENT.y - rand(0, 30),
+        vx: rand(-0.6, 0.6), vy: rand(-2.4, -1.2),
+        r: rand(18, 34), grow: rand(0.35, 0.7),
+        life: 1, decay: rand(0.0022, 0.0038),
+        rot: rand(0, TAU), rs: rand(-0.01, 0.01),
+        seed: Math.random()
+      });
+    }
+  }
+
+  // Pre-render an ash puff sprite (soft blob with lumps)
+  const puff = document.createElement('canvas');
+  puff.width = puff.height = 128;
+  (function drawPuff() {
+    const p = puff.getContext('2d');
+    const lumps = [[64, 64, 40], [44, 56, 30], [84, 58, 32], [60, 44, 28], [70, 80, 30], [48, 78, 24]];
+    for (const [x, y, r] of lumps) {
+      const g = p.createRadialGradient(x, y, 0, x, y, r);
+      g.addColorStop(0, 'rgba(255,255,255,0.55)');
+      g.addColorStop(0.6, 'rgba(255,255,255,0.22)');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      p.fillStyle = g;
+      p.fillRect(0, 0, 128, 128);
+    }
+  })();
+
+  // Glow sprite for lava blobs
+  const glow = document.createElement('canvas');
+  glow.width = glow.height = 64;
+  (function drawGlow() {
+    const g2 = glow.getContext('2d');
+    const g = g2.createRadialGradient(32, 32, 0, 32, 32, 32);
+    g.addColorStop(0, 'rgba(255,255,220,1)');
+    g.addColorStop(0.25, 'rgba(255,200,60,0.9)');
+    g.addColorStop(0.6, 'rgba(255,80,10,0.35)');
+    g.addColorStop(1, 'rgba(255,40,0,0)');
+    g2.fillStyle = g;
+    g2.fillRect(0, 0, 64, 64);
+  })();
 
   function resize() {
-    W = window.innerWidth; H = window.innerHeight;
-    S = Math.min(W, H);
     DPR = Math.min(window.devicePixelRatio || 1, 2);
-    cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
-    g.setTransform(DPR, 0, 0, DPR, 0, 0);
-    cx = W * 0.5; cy = H * 0.40; craterW = S * 0.08;
-    wind = S * 0.02;
-    seed = 987654321;
-    buildProfile();
-    buildMountain();
-    buildStars();
-    buildFlows();
-    sparks = []; bombs = []; ash = []; bolt = null;
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = Math.floor(W * DPR);
+    canvas.height = Math.floor(H * DPR);
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    // Cover-fit the 1080 reference into the window; anchor toward the bottom so the volcano stays grounded
+    S = Math.max(W / REF, H / REF);
+    OX = (W - REF * S) / 2;
+    OY = (H - REF * S);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Eruption intensity: slow rhythm with random bursts
+  let t0 = performance.now();
+  let burst = 0, nextBurst = 2.5;
+  let lastTime = t0;
+
+  function lavaColor(life) {
+    // 1 -> white-yellow, 0 -> dark red
+    if (life > 0.75) return `rgba(255,${Math.floor(230 - (1 - life) * 400)},${Math.floor(120 - (1 - life) * 400)},1)`;
+    if (life > 0.4) return `rgba(255,${Math.floor(40 + (life - 0.4) * 280)},0,1)`;
+    return `rgba(${Math.floor(120 + life * 330)},${Math.floor(life * 60)},0,${0.4 + life * 1.5})`;
   }
 
-  // ---------- sky ----------
-  function drawSky(inten) {
-    const lg = g.createLinearGradient(0, 0, 0, H);
-    lg.addColorStop(0, '#02020a');
-    lg.addColorStop(0.55, '#090818');
-    lg.addColorStop(1, '#16101c');
-    g.fillStyle = lg;
-    g.fillRect(0, 0, W, H);
+  function frame(now) {
+    const dt = Math.min((now - lastTime) / 16.667, 3); // in 60fps frames
+    lastTime = now;
+    const time = (now - t0) / 1000;
 
-    // stars
+    // Intensity envelope
+    nextBurst -= dt / 60;
+    if (nextBurst <= 0) { burst = rand(0.8, 1.6); nextBurst = rand(2.5, 6); }
+    burst = Math.max(0, burst - dt * 0.012);
+    const intensity = 0.55 + 0.25 * Math.sin(time * 0.9) + burst;
+
+    // Spawn
+    spawnLava(Math.round((3 + intensity * 5) * dt), 0.9 + intensity * 0.45);
+    if (Math.random() < 0.9 * dt) spawnAsh(Math.round(1 + intensity * 1.5));
+
+    // Canvas setup
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
+
+    // ---- Sky ----
+    const sky = ctx.createLinearGradient(0, 0, 0, H);
+    sky.addColorStop(0, '#07031c');
+    sky.addColorStop(0.45, '#160a3a');
+    sky.addColorStop(0.8, '#3a0d2e');
+    sky.addColorStop(1, '#5a1515');
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, W, H);
+
+    // Transform to reference space
+    ctx.setTransform(DPR * S, 0, 0, DPR * S, DPR * OX, DPR * OY);
+
+    // Stars
     for (const s of stars) {
-      const tw = 0.55 + 0.45 * Math.sin(time * s.sp + s.ph);
-      g.fillStyle = `rgba(220,225,255,${tw * 0.9})`;
-      g.fillRect(s.x, s.y, s.s, s.s);
+      const tw = 0.55 + 0.45 * Math.sin(time * s.s + s.p);
+      ctx.fillStyle = `rgba(255,245,230,${tw})`;
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, TAU); ctx.fill();
     }
 
-    // moon
-    const mx = W * 0.2, my = H * 0.17, mr = S * 0.035;
-    g.globalCompositeOperation = 'lighter';
-    let rg = g.createRadialGradient(mx, my, mr * 0.5, mx, my, mr * 5);
-    rg.addColorStop(0, 'rgba(180,190,220,0.22)');
-    rg.addColorStop(1, 'rgba(0,0,0,0)');
-    g.fillStyle = rg;
-    g.fillRect(mx - mr * 5, my - mr * 5, mr * 10, mr * 10);
-    g.globalCompositeOperation = 'source-over';
-    g.fillStyle = '#e8e9f0';
-    g.beginPath(); g.arc(mx, my, mr, 0, TAU); g.fill();
-    g.fillStyle = '#05050f';
-    g.beginPath(); g.arc(mx + mr * 0.45, my - mr * 0.25, mr * 0.9, 0, TAU); g.fill();
+    // Moon (small, low left)
+    (function moon() {
+      const mx = 170, my = 150;
+      const g = ctx.createRadialGradient(mx, my, 20, mx, my, 120);
+      g.addColorStop(0, 'rgba(200,210,255,0.35)');
+      g.addColorStop(1, 'rgba(200,210,255,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(mx, my, 120, 0, TAU); ctx.fill();
+      ctx.fillStyle = '#e8ecff'; ctx.beginPath(); ctx.arc(mx, my, 26, 0, TAU); ctx.fill();
+      ctx.fillStyle = '#c9cfee';
+      ctx.beginPath(); ctx.arc(mx - 8, my - 6, 5, 0, TAU); ctx.fill();
+      ctx.beginPath(); ctx.arc(mx + 9, my + 8, 4, 0, TAU); ctx.fill();
+      ctx.beginPath(); ctx.arc(mx + 3, my - 12, 3, 0, TAU); ctx.fill();
+    })();
 
-    // eruption glow in the sky
-    const fl = 0.85 + 0.15 * Math.sin(time * 11) * Math.sin(time * 3.7);
-    g.globalCompositeOperation = 'lighter';
-    rg = g.createRadialGradient(cx, cy, 0, cx, cy, S * 0.6);
-    rg.addColorStop(0, `rgba(255,100,25,${(0.3 + 0.2 * inten) * fl})`);
-    rg.addColorStop(0.4, `rgba(200,50,10,${(0.14 + 0.1 * inten) * fl})`);
-    rg.addColorStop(1, 'rgba(0,0,0,0)');
-    g.fillStyle = rg;
-    g.fillRect(0, 0, W, H);
-    g.globalCompositeOperation = 'source-over';
-  }
+    // Big crater glow lighting the sky and underside of ash
+    ctx.globalCompositeOperation = 'lighter';
+    (function craterSkyGlow() {
+      const r = 420 + intensity * 120;
+      const g = ctx.createRadialGradient(VENT.x, VENT.y, 10, VENT.x, VENT.y, r);
+      g.addColorStop(0, `rgba(255,120,30,${0.45 + intensity * 0.15})`);
+      g.addColorStop(0.3, `rgba(255,60,20,${0.22 + intensity * 0.08})`);
+      g.addColorStop(1, 'rgba(255,30,30,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(VENT.x, VENT.y, r, 0, TAU); ctx.fill();
+    })();
+    ctx.globalCompositeOperation = 'source-over';
 
-  // ---------- ash ----------
-  function updateAsh(dt, inten) {
-    ashAcc += dt * (16 + 18 * inten);
-    while (ashAcc > 1) {
-      ashAcc -= 1;
-      if (ash.length > 340) break;
-      ash.push({
-        x: cx + (R() - 0.5) * craterW * 0.8,
-        y: cy + S * 0.005,
-        vx: (R() - 0.5) * S * 0.06,
-        vy: -S * (0.11 + R() * 0.12) * (0.7 + 0.6 * inten),
-        r: S * (0.014 + R() * 0.016),
-        age: 0,
-        life: 10 + R() * 7,
-        ph: R() * TAU
-      });
-    }
+    // ---- Ash clouds (behind the fountain, above volcano) ----
     for (let i = ash.length - 1; i >= 0; i--) {
-      const p = ash[i];
-      p.age += dt;
-      if (p.age > p.life) { ash[i] = ash[ash.length - 1]; ash.pop(); continue; }
-      p.vy += (-S * 0.02 - p.vy) * 0.28 * dt;
-      p.vx += (wind - p.vx) * 0.25 * dt + (R() - 0.5) * S * 0.05 * dt;
-      // mushroom spread once high up
-      const h = clamp((cy - p.y) / (S * 0.3), 0, 1);
-      p.vx += (p.x - cx) / S * S * 0.03 * h * dt;
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      p.r += S * 0.011 * dt;
-    }
-  }
+      const a = ash[i];
+      a.life -= a.decay * dt;
+      if (a.life <= 0) { ash.splice(i, 1); continue; }
+      const age = 1 - a.life;
+      // Rise fast then slow, drift right with wind, expand
+      a.vy += 0.012 * dt;
+      if (a.vy > -0.25) a.vy = -0.25;
+      a.vx += (0.9 - a.vx) * 0.004 * dt + Math.sin(time * 0.7 + a.seed * 10) * 0.01;
+      a.x += a.vx * dt; a.y += a.vy * dt;
+      a.r += a.grow * dt;
+      a.rot += a.rs * dt;
 
-  function drawAsh(inten, flash) {
-    for (const p of ash) {
-      const a = 0.55 * clamp(p.age * 2, 0, 1) * (1 - p.age / p.life);
-      const dx = p.x - cx, dy = p.y - cy;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      const lit = clamp(1 - dist / (S * 0.36), 0, 1) * (0.75 + 0.25 * Math.sin(time * 9 + p.ph)) * (0.7 + 0.5 * inten);
-      let r = 40 + (255 - 40) * lit + 140 * flash;
-      let gg = 36 + (120 - 36) * lit + 140 * flash;
-      let b = 46 + (30 - 46) * lit + 170 * flash;
-      r = Math.min(255, r) | 0; gg = Math.min(255, gg) | 0; b = Math.min(255, b) | 0;
-      const rg = g.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r);
-      rg.addColorStop(0, `rgba(${r},${gg},${b},${a})`);
-      rg.addColorStop(0.55, `rgba(${r},${gg},${b},${a * 0.55})`);
-      rg.addColorStop(1, `rgba(${r},${gg},${b},0)`);
-      g.fillStyle = rg;
-      g.beginPath(); g.arc(p.x, p.y, p.r, 0, TAU); g.fill();
+      // Color: lit red-orange from below when low/young, fading to dark purple-grey as it rises
+      const heat = Math.max(0, 1 - (VENT.y - a.y) / 260) * (0.6 + intensity * 0.4);
+      const alpha = Math.min(1, a.life * 2.2) * 0.85;
+      const rC = Math.floor(70 + heat * 185), gC = Math.floor(40 + heat * 60), bC = Math.floor(70 - heat * 40);
+      ctx.save();
+      ctx.translate(a.x, a.y);
+      ctx.rotate(a.rot);
+      ctx.globalAlpha = alpha;
+      // Colored radial body, then a soft white sprite overlay for texture
+      const g = ctx.createRadialGradient(0, 0, 0, 0, 0, a.r);
+      g.addColorStop(0, `rgba(${rC},${gC},${bC},0.9)`);
+      g.addColorStop(0.55, `rgba(${Math.floor(rC * 0.6)},${Math.floor(gC * 0.6)},${Math.floor(bC * 0.9)},0.6)`);
+      g.addColorStop(1, `rgba(30,15,40,0)`);
+      ctx.fillStyle = g;
+      // Lumpy silhouette
+      ctx.beginPath();
+      const lumps = 7;
+      for (let k = 0; k <= lumps; k++) {
+        const ang = (k / lumps) * TAU;
+        const rr = a.r * (0.8 + 0.25 * Math.sin(ang * 3 + a.seed * 20) + 0.12 * Math.sin(ang * 5 + a.seed * 7));
+        const px = Math.cos(ang) * rr, py = Math.sin(ang) * rr;
+        if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fill();
+      // Soft sprite overlay for texture
+      ctx.globalAlpha = alpha * 0.5;
+      ctx.drawImage(puff, -a.r, -a.r, a.r * 2, a.r * 2);
+      ctx.restore();
     }
-  }
+    ctx.globalAlpha = 1;
 
-  // ---------- lightning ----------
-  function updateLightning(dt) {
-    if (bolt) {
-      bolt.age += dt;
-      if (bolt.age > bolt.life) bolt = null;
-      return;
-    }
-    if (ash.length > 80 && R() < dt * 0.22) {
-      const cand = ash.filter(p => p.age > 2.5 && p.y < cy - S * 0.12);
-      if (!cand.length) return;
-      const o = cand[(R() * cand.length) | 0];
-      const lines = [];
-      const trace = (x, y, n, w) => {
-        const pts = [{ x, y }];
-        for (let i = 0; i < n; i++) {
-          x += (R() - 0.5) * S * 0.045;
-          y += S * 0.012 + R() * S * 0.02;
-          pts.push({ x, y });
-          if (w > 0.4 && R() < 0.18) trace(x, y, (n * 0.5) | 0, w * 0.5);
-        }
-        lines.push({ pts, w });
-      };
-      trace(o.x, o.y, 10 + (R() * 10) | 0, 1);
-      bolt = { lines, age: 0, life: 0.22 + R() * 0.15, x: o.x, y: o.y };
-    }
-  }
+    // ---- Volcano body ----
+    ctx.beginPath();
+    ctx.moveTo(-200, BASE_Y + 200);
+    ctx.lineTo(-200, BASE_Y);
+    for (const p of outline) ctx.lineTo(p.x, p.y);
+    ctx.lineTo(REF + 200, BASE_Y);
+    ctx.lineTo(REF + 200, BASE_Y + 200);
+    ctx.closePath();
+    const body = ctx.createLinearGradient(0, VENT.y, 0, BASE_Y);
+    body.addColorStop(0, '#2a0a12');
+    body.addColorStop(0.5, '#180612');
+    body.addColorStop(1, '#09030c');
+    ctx.fillStyle = body;
+    ctx.fill();
 
-  function drawLightning() {
-    if (!bolt) return;
-    const k = 1 - bolt.age / bolt.life;
-    const a = k * (R() < 0.75 ? 1 : 0.35);
-    g.globalCompositeOperation = 'lighter';
-    const rg = g.createRadialGradient(bolt.x, bolt.y, 0, bolt.x, bolt.y, S * 0.25);
-    rg.addColorStop(0, `rgba(190,180,255,${0.35 * a})`);
-    rg.addColorStop(1, 'rgba(0,0,0,0)');
-    g.fillStyle = rg;
-    g.fillRect(bolt.x - S * 0.25, bolt.y - S * 0.25, S * 0.5, S * 0.5);
-    g.lineCap = 'round'; g.lineJoin = 'round';
-    for (const l of bolt.lines) {
-      g.beginPath();
-      g.moveTo(l.pts[0].x, l.pts[0].y);
-      for (let i = 1; i < l.pts.length; i++) g.lineTo(l.pts[i].x, l.pts[i].y);
-      g.strokeStyle = `rgba(170,150,255,${0.35 * a * l.w})`;
-      g.lineWidth = 7 * l.w;
-      g.stroke();
-      g.strokeStyle = `rgba(240,235,255,${a * l.w})`;
-      g.lineWidth = 1.8 * l.w;
-      g.stroke();
-    }
-    g.globalCompositeOperation = 'source-over';
-  }
+    // Crater rim glow lighting the upper slopes
+    ctx.save();
+    ctx.clip();
+    ctx.globalCompositeOperation = 'lighter';
+    const rimG = ctx.createRadialGradient(VENT.x, VENT.y + 20, 5, VENT.x, VENT.y + 20, 260);
+    rimG.addColorStop(0, `rgba(255,110,20,${0.55 + intensity * 0.2})`);
+    rimG.addColorStop(0.4, `rgba(200,40,10,${0.18 + intensity * 0.08})`);
+    rimG.addColorStop(1, 'rgba(120,10,0,0)');
+    ctx.fillStyle = rimG;
+    ctx.fillRect(0, 0, REF, REF);
 
-  // ---------- lava flows ----------
-  function drawFlows(dt) {
-    g.lineCap = 'round'; g.lineJoin = 'round';
+    // ---- Lava flows ----
     for (const f of flows) {
-      f.len = Math.min(1, f.len + dt * f.speed * 0.4);
-      const n = f.pts.length;
-      const m = Math.max(2, Math.floor(f.len * n));
-      const fl = 0.85 + 0.15 * Math.sin(time * 7 + f.phase);
-
-      // outer glow lighting the slope
-      g.globalCompositeOperation = 'lighter';
-      g.beginPath();
-      g.moveTo(f.pts[0].x, f.pts[0].y);
-      for (let i = 1; i < m; i++) g.lineTo(f.pts[i].x, f.pts[i].y);
-      g.strokeStyle = `rgba(255,60,10,${0.08 * fl})`;
-      g.lineWidth = f.w * 7;
-      g.stroke();
-      g.strokeStyle = `rgba(255,110,25,${0.16 * fl})`;
-      g.lineWidth = f.w * 3;
-      g.stroke();
-      g.globalCompositeOperation = 'source-over';
-
-      // molten body, cooling toward the toe
-      for (let i = 1; i < m; i++) {
-        const t = i / n;
-        const r = (255 - 90 * t) | 0;
-        const gg = (200 - 180 * t) | 0;
-        const b = (70 - 70 * t) | 0;
-        const a = 1 - t * 0.3;
-        const wv = 0.9 + 0.1 * Math.sin(i * 0.7 + time * 3 + f.phase);
-        g.strokeStyle = `rgba(${r},${gg},${b},${a})`;
-        g.lineWidth = f.w * (1.35 - 0.75 * t) * wv;
-        g.beginPath();
-        g.moveTo(f.pts[i - 1].x, f.pts[i - 1].y);
-        g.lineTo(f.pts[i].x, f.pts[i].y);
-        g.stroke();
+      const pulse = 0.7 + 0.3 * Math.sin(time * f.speed + f.phase);
+      // outer glow
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.strokeStyle = `rgba(255,60,0,${0.22 * pulse})`;
+      ctx.lineWidth = f.width * 3.2;
+      strokePath(f.pts);
+      ctx.strokeStyle = `rgba(255,110,10,${0.55 * pulse})`;
+      ctx.lineWidth = f.width * 1.5;
+      strokePath(f.pts);
+      // core
+      ctx.strokeStyle = `rgba(255,200,40,${0.9})`;
+      ctx.lineWidth = f.width * 0.7;
+      strokePath(f.pts);
+      // moving bright segments (flowing)
+      const L = f.pts.length;
+      for (let k = 0; k < 4; k++) {
+        const u = ((time * 0.12 * f.speed + k / 4 + f.phase / TAU) % 1);
+        const idx = Math.floor(u * (L - 1));
+        const p = f.pts[idx];
+        const sz = f.width * 1.6;
+        ctx.globalAlpha = 0.8;
+        ctx.drawImage(glow, p.x - sz, p.y - sz, sz * 2, sz * 2);
+        ctx.globalAlpha = 1;
       }
-
-      // dark crust patches
-      for (let k = 0; k < 6; k++) {
-        const p = ((k / 6) + f.phase * 0.1 + time * 0.004) % 1;
-        if (p > f.len || p < 0.35) continue;
-        const q = f.pts[Math.floor(p * n)];
-        g.fillStyle = `rgba(30,10,8,${0.5 * p})`;
-        g.beginPath(); g.arc(q.x, q.y, f.w * 0.5, 0, TAU); g.fill();
+      // spawn embers off flows occasionally
+      if (Math.random() < 0.08 * dt) {
+        const p = f.pts[Math.floor(Math.random() * L)];
+        spawnEmber(p.x, p.y);
       }
+    }
+    ctx.restore();
 
-      // bright pulses travelling downslope
-      g.globalCompositeOperation = 'lighter';
-      const np = 9;
-      for (let k = 0; k < np; k++) {
-        const p = ((k / np) + time * f.pulse * 0.3 + f.phase) % 1;
-        if (p > f.len) continue;
-        const q = f.pts[Math.floor(p * n)];
-        const rg = g.createRadialGradient(q.x, q.y, 0, q.x, q.y, f.w * 2.2);
-        rg.addColorStop(0, `rgba(255,230,140,${0.5 * (1 - p)})`);
-        rg.addColorStop(1, 'rgba(255,120,30,0)');
-        g.fillStyle = rg;
-        g.beginPath(); g.arc(q.x, q.y, f.w * 2.2, 0, TAU); g.fill();
+    // Crater opening (lava pool)
+    ctx.globalCompositeOperation = 'lighter';
+    (function pool() {
+      const g = ctx.createRadialGradient(VENT.x, VENT.y + 16, 2, VENT.x, VENT.y + 16, 60);
+      g.addColorStop(0, `rgba(255,255,200,${0.9})`);
+      g.addColorStop(0.3, `rgba(255,190,40,${0.8})`);
+      g.addColorStop(0.7, `rgba(255,70,0,${0.4})`);
+      g.addColorStop(1, 'rgba(255,40,0,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.ellipse(VENT.x, VENT.y + 16, 60, 26, 0, 0, TAU); ctx.fill();
+    })();
+
+    // ---- Lava fountain particles ----
+    for (let i = lava.length - 1; i >= 0; i--) {
+      const p = lava[i];
+      p.trail.push(p.x, p.y);
+      if (p.trail.length > 12) p.trail.splice(0, 2);
+      p.vy += 0.22 * dt;
+      p.vx += 0.01 * dt; // slight wind
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.life -= p.decay * dt;
+      // land on slope
+      const sy = surfaceY(p.x);
+      if (p.y > sy && p.vy > 0) {
+        if (Math.random() < 0.4) spawnEmber(p.x, sy - 2);
+        // splat: slide downslope briefly
+        p.y = sy; p.vy = 0; p.vx *= 0.3; p.life -= 0.08;
+        p.decay = 0.03;
       }
-      g.globalCompositeOperation = 'source-over';
-    }
-  }
+      if (p.life <= 0 || p.y > BASE_Y + 40) { lava.splice(i, 1); continue; }
 
-  // ---------- fountain ----------
-  function updateSparks(dt, inten) {
-    const n = Math.round(dt * (220 + 900 * inten));
-    for (let i = 0; i < n; i++) {
-      if (sparks.length > 3200) break;
-      const spread = 0.5 + inten * 0.6;
-      const ang = -Math.PI / 2 + (R() - 0.5) * 0.6 * spread;
-      const sp = S * (0.25 + R() * 0.32) * (0.65 + 0.45 * inten);
-      sparks.push({
-        x: cx + (R() - 0.5) * craterW * 0.5,
-        y: cy + H * 0.015,
-        vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
-        px: 0, py: 0, age: 0,
-        life: 1.2 + R() * 2.2,
-        sz: S * (0.0014 + R() * 0.0026),
-        big: R() < 0.05
-      });
-    }
-    const grav = S * 0.6;
-    for (let i = sparks.length - 1; i >= 0; i--) {
-      const p = sparks[i];
-      p.px = p.x; p.py = p.y;
-      p.vy += grav * dt;
-      p.vx += wind * 0.25 * dt;
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      p.age += dt;
-      let dead = p.age > p.life;
-      if (!dead && p.vy > 0 && p.age > 0.15 && p.y > surfY(p.x)) {
-        dead = true;
-        if (p.big || R() < 0.08) {
-          bombs.push({ x: p.x, y: surfY(p.x), age: 0, life: 2 + R() * 4, r: p.sz * (p.big ? 5 : 3) });
-        }
+      // Trail
+      if (p.trail.length >= 4) {
+        ctx.strokeStyle = `rgba(255,${Math.floor(90 + p.life * 120)},0,${0.35 * p.life})`;
+        ctx.lineWidth = p.r * 0.9;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(p.trail[0], p.trail[1]);
+        for (let k = 2; k < p.trail.length; k += 2) ctx.lineTo(p.trail[k], p.trail[k + 1]);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
       }
-      if (dead) { sparks[i] = sparks[sparks.length - 1]; sparks.pop(); }
+      // Glow halo
+      const gs = p.r * 4;
+      ctx.globalAlpha = 0.55 * p.life;
+      ctx.drawImage(glow, p.x - gs, p.y - gs, gs * 2, gs * 2);
+      ctx.globalAlpha = 1;
+      // Core
+      ctx.fillStyle = lavaColor(p.life);
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, TAU); ctx.fill();
     }
-    for (let i = bombs.length - 1; i >= 0; i--) {
-      const b = bombs[i];
-      b.age += dt;
-      if (b.age > b.life) { bombs[i] = bombs[bombs.length - 1]; bombs.pop(); }
+
+    // ---- Embers ----
+    for (let i = embers.length - 1; i >= 0; i--) {
+      const e = embers[i];
+      e.vy -= 0.01 * dt;
+      e.vx += (0.6 - e.vx) * 0.01 * dt + (Math.random() - 0.5) * 0.15;
+      e.x += e.vx * dt; e.y += e.vy * dt;
+      e.life -= e.decay * dt;
+      if (e.life <= 0 || e.y < -20) { embers.splice(i, 1); continue; }
+      const fl = 0.6 + 0.4 * Math.sin(time * 20 + e.x);
+      ctx.fillStyle = `rgba(255,${Math.floor(120 + e.life * 120)},${Math.floor(e.life * 60)},${e.life * fl})`;
+      ctx.beginPath(); ctx.arc(e.x, e.y, e.r, 0, TAU); ctx.fill();
     }
-  }
 
-  function drawCraterPool(inten) {
-    const fl = 0.8 + 0.2 * Math.sin(time * 13) * Math.sin(time * 5.1);
-    g.globalCompositeOperation = 'lighter';
-    const rg = g.createRadialGradient(cx, cy + H * 0.02, 0, cx, cy + H * 0.02, craterW * 1.4);
-    rg.addColorStop(0, `rgba(255,160,50,${0.6 * fl})`);
-    rg.addColorStop(1, 'rgba(255,60,0,0)');
-    g.fillStyle = rg;
-    g.fillRect(cx - craterW * 1.5, cy - craterW, craterW * 3, craterW * 2);
-    g.globalCompositeOperation = 'source-over';
-    g.fillStyle = `rgba(255,${(170 + 40 * inten) | 0},60,${0.85 + 0.15 * fl})`;
-    g.beginPath();
-    g.ellipse(cx, cy + H * 0.022, craterW * 0.42, S * 0.011, 0, 0, TAU);
-    g.fill();
-  }
+    // Heat shimmer / fountain column glow
+    (function column() {
+      const g = ctx.createLinearGradient(0, VENT.y - 260 * intensity, 0, VENT.y + 20);
+      g.addColorStop(0, 'rgba(255,120,30,0)');
+      g.addColorStop(1, `rgba(255,120,30,${0.18 + intensity * 0.1})`);
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.moveTo(VENT.x - 30, VENT.y + 20);
+      ctx.lineTo(VENT.x - 110, VENT.y - 260 * intensity);
+      ctx.lineTo(VENT.x + 110, VENT.y - 260 * intensity);
+      ctx.lineTo(VENT.x + 30, VENT.y + 20);
+      ctx.closePath(); ctx.fill();
+    })();
 
-  function drawBombs() {
-    g.globalCompositeOperation = 'lighter';
-    for (const b of bombs) {
-      const k = 1 - b.age / b.life;
-      const rr = b.r * (2 + 2 * k);
-      const rg = g.createRadialGradient(b.x, b.y, 0, b.x, b.y, rr);
-      rg.addColorStop(0, `rgba(255,${(90 + 130 * k) | 0},30,${0.9 * k})`);
-      rg.addColorStop(0.4, `rgba(255,70,10,${0.35 * k})`);
-      rg.addColorStop(1, 'rgba(255,40,0,0)');
-      g.fillStyle = rg;
-      g.beginPath(); g.arc(b.x, b.y, rr, 0, TAU); g.fill();
-    }
-    g.globalCompositeOperation = 'source-over';
-  }
+    ctx.globalCompositeOperation = 'source-over';
 
-  function drawSparks() {
-    g.globalCompositeOperation = 'lighter';
-    g.lineCap = 'round';
-    for (const p of sparks) {
-      const t = p.age / p.life;
-      let col;
-      if (t < 0.22) col = `rgba(255,245,200,${1 - t * 0.5})`;
-      else if (t < 0.6) col = `rgba(255,${(190 - 160 * (t - 0.22) / 0.38) | 0},25,${1 - t * 0.5})`;
-      else col = `rgba(${(255 - 160 * (t - 0.6) / 0.4) | 0},25,0,${(1 - t) * 1.2})`;
-      g.strokeStyle = col;
-      g.lineWidth = p.sz * (p.big ? 2.6 : 1) * (1.3 - t * 0.7);
-      g.beginPath();
-      g.moveTo(p.px, p.py);
-      g.lineTo(p.x, p.y);
-      g.stroke();
-    }
-    g.globalCompositeOperation = 'source-over';
-  }
+    // ---- Foreground: ground haze lit by lava ----
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    const haze = ctx.createLinearGradient(0, H * 0.78, 0, H);
+    haze.addColorStop(0, 'rgba(90,20,10,0)');
+    haze.addColorStop(1, 'rgba(120,30,10,0.55)');
+    ctx.fillStyle = haze;
+    ctx.fillRect(0, H * 0.78, W, H * 0.22);
 
-  function drawVignette() {
-    const rg = g.createRadialGradient(cx, H * 0.5, S * 0.3, cx, H * 0.5, Math.max(W, H) * 0.78);
-    rg.addColorStop(0, 'rgba(0,0,0,0)');
-    rg.addColorStop(1, 'rgba(0,0,0,0.55)');
-    g.fillStyle = rg;
-    g.fillRect(0, 0, W, H);
-  }
-
-  function frame(ts) {
-    const t = ts / 1000;
-    let dt = t - lastT;
-    if (!(dt > 0) || dt > 0.05) dt = 0.016;
-    lastT = t;
-    time += dt;
-
-    const inten = clamp(0.45 + 0.33 * Math.sin(time * 0.37) + 0.2 * Math.sin(time * 1.9 + 1) + 0.1 * Math.sin(time * 5.3), 0.05, 1);
-    const flash = bolt ? 0.35 * (1 - bolt.age / bolt.life) : 0;
-
-    updateAsh(dt, inten);
-    updateLightning(dt);
-    updateSparks(dt, inten);
-
-    drawSky(inten);
-    drawAsh(inten, flash);
-    drawLightning();
-    g.drawImage(mountain, 0, 0, W, H);
-    drawCraterPool(inten);
-    drawFlows(dt);
-    drawBombs();
-    drawSparks();
-    drawVignette();
+    // Vignette
+    const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.max(W, H) * 0.75);
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, 'rgba(0,0,0,0.55)');
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, W, H);
 
     requestAnimationFrame(frame);
   }
 
-  window.addEventListener('resize', resize);
-  resize();
+  function strokePath(pts) {
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.stroke();
+  }
+
+  // Seed some ash so the sky isn't empty at start
+  for (let i = 0; i < 40; i++) {
+    spawnAsh(1);
+    const a = ash[ash.length - 1];
+    if (a) { const k = Math.random(); a.y -= k * 380; a.x += k * 220 * Math.random(); a.r += k * 60; a.life -= k * 0.6; }
+  }
+  spawnLava(120, 1.2);
+
   requestAnimationFrame(frame);
 })();
 </script>

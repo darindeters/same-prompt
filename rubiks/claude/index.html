@@ -2,10 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rubik's Cube</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cube</title>
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0d12; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #070812; }
   canvas { display: block; width: 100vw; height: 100vh; }
 </style>
 </head>
@@ -13,301 +13,267 @@
 <canvas id="c"></canvas>
 <script>
 (() => {
-'use strict';
+  'use strict';
 
-/* ------------------------------------------------------------------ */
-/* Canvas setup                                                        */
-/* ------------------------------------------------------------------ */
-const canvas = document.getElementById('c');
-const ctx = canvas.getContext('2d');
-let W = 1, H = 1, DPR = 1;
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  let W = 0, H = 0, DPR = 1;
 
-function resize() {
-  DPR = Math.min(window.devicePixelRatio || 1, 2);
-  W = window.innerWidth;
-  H = window.innerHeight;
-  canvas.width = Math.round(W * DPR);
-  canvas.height = Math.round(H * DPR);
-}
-window.addEventListener('resize', resize);
-resize();
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = Math.round(W * DPR);
+    canvas.height = Math.round(H * DPR);
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+  }
+  window.addEventListener('resize', resize);
+  resize();
 
-/* ------------------------------------------------------------------ */
-/* Tiny linear algebra: 3x3 row-major matrices, column vectors         */
-/* ------------------------------------------------------------------ */
-const I3 = [1, 0, 0, 0, 1, 0, 0, 0, 1];
-
-function rot(axis, a) {
-  const c = Math.cos(a), s = Math.sin(a);
-  if (axis === 0) return [1, 0, 0, 0, c, -s, 0, s, c];
-  if (axis === 1) return [c, 0, s, 0, 1, 0, -s, 0, c];
-  return [c, -s, 0, s, c, 0, 0, 0, 1];
-}
-function mv(m, v) {
-  return [
-    m[0] * v[0] + m[1] * v[1] + m[2] * v[2],
-    m[3] * v[0] + m[4] * v[1] + m[5] * v[2],
-    m[6] * v[0] + m[7] * v[1] + m[8] * v[2]
+  // ---------- small vector / matrix helpers ----------
+  const mulMV = (m, p) => [
+    m[0] * p[0] + m[1] * p[1] + m[2] * p[2],
+    m[3] * p[0] + m[4] * p[1] + m[5] * p[2],
+    m[6] * p[0] + m[7] * p[1] + m[8] * p[2]
   ];
-}
-function mm(a, b) {
-  const r = new Array(9);
-  for (let i = 0; i < 3; i++)
-    for (let j = 0; j < 3; j++)
-      r[i * 3 + j] = a[i * 3] * b[j] + a[i * 3 + 1] * b[3 + j] + a[i * 3 + 2] * b[6 + j];
-  return r;
-}
-function roundA(a) { return a.map(x => Math.round(x) || 0); }
-function norm(v) {
-  const l = Math.hypot(v[0], v[1], v[2]) || 1;
-  return [v[0] / l, v[1] / l, v[2] / l];
-}
-function dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
-
-/* ------------------------------------------------------------------ */
-/* Cube geometry                                                       */
-/* ------------------------------------------------------------------ */
-const FACES = [
-  { n: [ 1, 0, 0], u: [0, 1, 0], v: [0, 0, 1], color: [196, 30, 58]  }, // R  red
-  { n: [-1, 0, 0], u: [0, 1, 0], v: [0, 0, 1], color: [255, 112, 20] }, // L  orange
-  { n: [ 0, 1, 0], u: [1, 0, 0], v: [0, 0, 1], color: [245, 245, 240]}, // U  white
-  { n: [ 0,-1, 0], u: [1, 0, 0], v: [0, 0, 1], color: [255, 214, 10] }, // D  yellow
-  { n: [ 0, 0, 1], u: [1, 0, 0], v: [0, 1, 0], color: [16, 160, 80]  }, // F  green
-  { n: [ 0, 0,-1], u: [1, 0, 0], v: [0, 1, 0], color: [20, 90, 200]  }  // B  blue
-];
-const PLASTIC = [24, 26, 32];
-
-const BODY_HALF = 0.475;      // cubie half size (leaves a small gap between cubies)
-const STICKER_HALF = 0.385;   // sticker half size
-const STICKER_RADIUS = 0.07;  // sticker corner radius
-const STICKER_LIFT = 0.012;   // sticker sits slightly above the plastic
-
-function planePoint(f, a, b, off) {
-  return [
-    f.n[0] * off + f.u[0] * a + f.v[0] * b,
-    f.n[1] * off + f.u[1] * a + f.v[1] * b,
-    f.n[2] * off + f.u[2] * a + f.v[2] * b
-  ];
-}
-function quadPoints(f, h, off) {
-  return [[1, 1], [-1, 1], [-1, -1], [1, -1]].map(([su, sv]) => planePoint(f, su * h, sv * h, off));
-}
-function roundedRectPoints(f, h, r, off, segs) {
-  const pts = [];
-  const corners = [[1, 1, 0], [-1, 1, Math.PI / 2], [-1, -1, Math.PI], [1, -1, Math.PI * 1.5]];
-  for (const [su, sv, a0] of corners) {
-    const ca = su * (h - r), cb = sv * (h - r);
-    for (let i = 0; i <= segs; i++) {
-      const t = a0 + (i / segs) * (Math.PI / 2);
-      pts.push(planePoint(f, ca + r * Math.cos(t), cb + r * Math.sin(t), off));
-    }
-  }
-  return pts;
-}
-
-// Precomputed local-space geometry per face.
-const FACE_GEO = FACES.map(f => ({
-  body: quadPoints(f, BODY_HALF, BODY_HALF),
-  sticker: roundedRectPoints(f, STICKER_HALF, STICKER_RADIUS, BODY_HALF + STICKER_LIFT, 5)
-}));
-
-// The 26 cubies. Each keeps an integer position and an integer orientation matrix.
-const cubies = [];
-for (let x = -1; x <= 1; x++)
-  for (let y = -1; y <= 1; y++)
-    for (let z = -1; z <= 1; z++) {
-      if (x === 0 && y === 0 && z === 0) continue;
-      const stickers = FACES.map(f => (f.n[0] * x + f.n[1] * y + f.n[2] * z === 1) ? f.color : null);
-      cubies.push({ p: [x, y, z], o: I3.slice(), stickers });
-    }
-
-function applyMove(m) {
-  const R = roundA(rot(m.axis, m.dir * Math.PI / 2));
-  for (const c of cubies) {
-    if (c.p[m.axis] !== m.slice) continue;
-    c.p = roundA(mv(R, c.p));
-    c.o = roundA(mm(R, c.o));
-  }
-}
-
-/* ------------------------------------------------------------------ */
-/* Timeline: pause -> scramble -> pause -> solve -> pause -> repeat     */
-/* ------------------------------------------------------------------ */
-const SCRAMBLE_LEN = 22;
-const queue = [];
-
-function makeCycle() {
-  const seq = [];
-  let lastAxis = -1;
-  for (let i = 0; i < SCRAMBLE_LEN; i++) {
-    let axis;
-    do { axis = Math.floor(Math.random() * 3); } while (axis === lastAxis);
-    lastAxis = axis;
-    seq.push({
-      axis,
-      slice: Math.random() < 0.5 ? -1 : 1,
-      dir: Math.random() < 0.5 ? -1 : 1
-    });
-  }
-  queue.push({ type: 'pause', dur: 1100 });
-  for (const m of seq) queue.push({ type: 'move', axis: m.axis, slice: m.slice, dir: m.dir, dur: 240, ease: easeScramble });
-  queue.push({ type: 'pause', dur: 1700 });
-  for (let i = seq.length - 1; i >= 0; i--) {
-    const m = seq[i];
-    queue.push({ type: 'move', axis: m.axis, slice: m.slice, dir: -m.dir, dur: 440, ease: easeSolve });
-  }
-  queue.push({ type: 'pause', dur: 2800 });
-}
-
-function easeScramble(t) { return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; }
-function easeSolve(t)    { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
-
-let step = null;
-let stepStart = 0;
-
-function advance(now) {
-  if (!step) {
-    if (!queue.length) makeCycle();
-    step = queue.shift();
-    stepStart = now;
-  }
-  let progress = (now - stepStart) / step.dur;
-  while (progress >= 1) {
-    if (step.type === 'move') applyMove(step);
-    stepStart += step.dur;
-    if (!queue.length) makeCycle();
-    step = queue.shift();
-    progress = (now - stepStart) / step.dur;
-  }
-  return progress;
-}
-
-/* ------------------------------------------------------------------ */
-/* Rendering                                                           */
-/* ------------------------------------------------------------------ */
-const LIGHT = norm([-0.45, 0.75, -0.6]);
-
-function shadeColor(rgb, n, center, spec) {
-  const diffuse = Math.max(0, dot(n, LIGHT));
-  const toCam = norm([-center[0], -center[1], -center[2]]);
-  const h = norm([LIGHT[0] + toCam[0], LIGHT[1] + toCam[1], LIGHT[2] + toCam[2]]);
-  const s = Math.pow(Math.max(0, dot(n, h)), 48) * spec;
-  const k = 0.42 + 0.62 * diffuse;
-  const r = Math.min(255, rgb[0] * k + 255 * s);
-  const g = Math.min(255, rgb[1] * k + 255 * s);
-  const b = Math.min(255, rgb[2] * k + 255 * s);
-  return `rgb(${r | 0},${g | 0},${b | 0})`;
-}
-
-function drawPoly(pts) {
-  ctx.beginPath();
-  ctx.moveTo(pts[0][0], pts[0][1]);
-  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
-  ctx.closePath();
-}
-
-function drawBackground(minDim, cx, cy) {
-  const g = ctx.createRadialGradient(cx, cy * 0.9, minDim * 0.05, cx, cy, minDim * 0.9);
-  g.addColorStop(0, '#20242f');
-  g.addColorStop(0.6, '#10131a');
-  g.addColorStop(1, '#07080b');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, W, H);
-
-  // Soft ground shadow beneath the cube.
-  const sy = cy + minDim * 0.36;
-  ctx.save();
-  ctx.translate(cx, sy);
-  ctx.scale(1, 0.26);
-  const sg = ctx.createRadialGradient(0, 0, 0, 0, 0, minDim * 0.3);
-  sg.addColorStop(0, 'rgba(0,0,0,0.6)');
-  sg.addColorStop(0.55, 'rgba(0,0,0,0.28)');
-  sg.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = sg;
-  ctx.beginPath();
-  ctx.arc(0, 0, minDim * 0.3, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-}
-
-function render(now, move, progress) {
-  const t = now / 1000;
-  const minDim = Math.min(W, H);
-  const cx = W / 2, cy = H / 2;
-  const f = minDim * 1.42;   // focal length
-  const D = 9.5;             // camera distance
-
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  drawBackground(minDim, cx, cy);
-
-  // Slowly tumbling view.
-  const rx = 0.46 + 0.22 * Math.sin(t * 0.23);
-  const ry = t * 0.33;
-  const rz = 0.07 * Math.sin(t * 0.17);
-  const V = mm(rot(2, rz), mm(rot(0, rx), rot(1, ry)));
-
-  // Rotation of the layer currently being turned.
-  let L = null;
-  if (move) L = rot(move.axis, move.dir * move.ease(Math.min(1, progress)) * Math.PI / 2);
-
-  const items = [];
-  for (const c of cubies) {
-    let M = c.o, P = c.p;
-    if (L && c.p[move.axis] === move.slice) {
-      M = mm(L, c.o);
-      P = mv(L, c.p);
-    }
-    const Mv = mm(V, M);
-    const Pv = mv(V, P);
-    Pv[2] += D;
-    items.push({ c, Mv, Pv, depth: dot(Pv, Pv) });
-  }
-  items.sort((a, b) => b.depth - a.depth);
-
-  const project = (Mv, Pv, local) => {
-    const p = mv(Mv, local);
-    const z = p[2] + Pv[2];
-    return [cx + f * (p[0] + Pv[0]) / z, cy - f * (p[1] + Pv[1]) / z];
+  const mulMM = (a, b) => {
+    const r = new Array(9);
+    for (let i = 0; i < 3; i++)
+      for (let j = 0; j < 3; j++)
+        r[i * 3 + j] = a[i * 3] * b[j] + a[i * 3 + 1] * b[3 + j] + a[i * 3 + 2] * b[6 + j];
+    return r;
   };
+  const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const norm = (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 
-  ctx.lineJoin = 'round';
-  for (const { c, Mv, Pv } of items) {
-    for (let i = 0; i < 6; i++) {
-      const n = mv(Mv, FACES[i].n);
-      const center = [Pv[0] + n[0] * BODY_HALF, Pv[1] + n[1] * BODY_HALF, Pv[2] + n[2] * BODY_HALF];
-      if (dot(n, center) >= 0) continue; // back-facing
+  // Right-handed rotation about axis a (0=x, 1=y, 2=z) by angle th.
+  function rotMat(a, th) {
+    const c = Math.cos(th), s = Math.sin(th);
+    const u = (a + 1) % 3, v = (a + 2) % 3;
+    const m = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+    m[a * 3 + a] = 1;
+    m[u * 3 + u] = c; m[u * 3 + v] = -s;
+    m[v * 3 + u] = s; m[v * 3 + v] = c;
+    return m;
+  }
 
-      const geo = FACE_GEO[i];
-      const body = geo.body.map(pt => project(Mv, Pv, pt));
-      const bodyColor = shadeColor(PLASTIC, n, center, 0.12);
-      drawPoly(body);
-      ctx.fillStyle = bodyColor;
-      ctx.strokeStyle = bodyColor;
-      ctx.lineWidth = 1;
-      ctx.fill();
-      ctx.stroke();
+  // ---------- cube model ----------
+  // Sticker colours for faces +x, -x, +y, -y, +z, -z
+  const HEX = ['#ff2d2d', '#ff8c00', '#ffffff', '#ffe600', '#1f6fff', '#12d957'];
+  const COLORS = HEX.map(h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]);
+  const BODY = [16, 17, 26];
 
-      const sticker = c.stickers[i];
-      if (sticker) {
-        const pts = geo.sticker.map(pt => project(Mv, Pv, pt));
-        drawPoly(pts);
-        ctx.fillStyle = shadeColor(sticker, n, center, 0.55);
-        ctx.fill();
+  // Local face geometry, corners wound counter-clockwise seen from outside.
+  const HALF = 0.47;
+  const FACES = [];
+  for (let f = 0; f < 6; f++) {
+    const a = f >> 1, s = (f & 1) ? -1 : 1;
+    let u = (a + 1) % 3, v = (a + 2) % 3;
+    if (s < 0) { const t = u; u = v; v = t; }
+    const corners = [];
+    for (const [su, sv] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+      const c = [0, 0, 0];
+      c[a] = s * HALF; c[u] = su * HALF; c[v] = sv * HALF;
+      corners.push(c);
+    }
+    FACES.push(corners);
+  }
+
+  const cubies = [];
+  for (let x = -1; x <= 1; x++)
+    for (let y = -1; y <= 1; y++)
+      for (let z = -1; z <= 1; z++)
+        cubies.push({
+          p: [x, y, z],
+          m: [1, 0, 0, 0, 1, 0, 0, 0, 1],
+          st: [x > 0 ? 0 : -1, x < 0 ? 1 : -1, y > 0 ? 2 : -1, y < 0 ? 3 : -1, z > 0 ? 4 : -1, z < 0 ? 5 : -1]
+        });
+
+  // ---------- move sequencing ----------
+  const easeInOutQuad = t => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+  const easeInOutCubic = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+  function genScramble() {
+    const n = 20 + Math.floor(Math.random() * 6);
+    const moves = [];
+    let prevAxis = -1;
+    for (let i = 0; i < n; i++) {
+      let axis;
+      do { axis = Math.floor(Math.random() * 3); } while (axis === prevAxis);
+      prevAxis = axis;
+      moves.push({ axis, layer: Math.floor(Math.random() * 3) - 1, dir: Math.random() < 0.5 ? 1 : -1 });
+    }
+    return moves;
+  }
+
+  let anim = null;
+  let scramble = genScramble();
+  let idx = 0;
+  let mode = 'scramble';
+  let pause = 1.2;
+
+  function startMove(mv, dur, ease) {
+    anim = { axis: mv.axis, layer: mv.layer, dir: mv.dir, t: 0, dur, ease };
+  }
+
+  function finishMove(a) {
+    const R = rotMat(a.axis, a.dir * Math.PI / 2).map(v => Math.round(v));
+    for (const c of cubies) {
+      if (c.p[a.axis] === a.layer) {
+        c.p = mulMV(R, c.p).map(v => Math.round(v));
+        c.m = mulMM(R, c.m).map(v => Math.round(v));
       }
     }
   }
-}
 
-/* ------------------------------------------------------------------ */
-/* Main loop                                                           */
-/* ------------------------------------------------------------------ */
-function frame(now) {
-  const progress = advance(now);
-  render(now, step.type === 'move' ? step : null, progress);
+  function update(dt) {
+    if (anim) {
+      anim.t += dt / anim.dur;
+      if (anim.t >= 1) { finishMove(anim); anim = null; }
+      return;
+    }
+    if (pause > 0) { pause -= dt; return; }
+    if (mode === 'scramble') {
+      if (idx < scramble.length) {
+        startMove(scramble[idx++], 0.21, easeInOutQuad);
+      } else {
+        mode = 'solve';
+        idx = scramble.length - 1;
+        pause = 1.5;
+      }
+    } else {
+      if (idx >= 0) {
+        const m = scramble[idx--];
+        const progress = 1 - (idx + 1) / scramble.length;
+        const dur = 0.5 - 0.18 * progress; // speeds up as it nears solved
+        startMove({ axis: m.axis, layer: m.layer, dir: -m.dir }, dur, easeInOutCubic);
+      } else {
+        mode = 'scramble';
+        scramble = genScramble();
+        idx = 0;
+        pause = 2.6;
+      }
+    }
+  }
+
+  // ---------- rendering ----------
+  const LIGHT = norm([-0.5, 0.85, 1.0]);
+  const HALFV = norm([LIGHT[0], LIGHT[1], LIGHT[2] + 1]);
+  const D = 7.5; // camera distance
+
+  function rgb(c) { return 'rgb(' + (c[0] | 0) + ',' + (c[1] | 0) + ',' + (c[2] | 0) + ')'; }
+  function shade(base, n, isSticker) {
+    const diff = Math.max(0, dot(n, LIGHT));
+    const k = isSticker ? 0.58 + 0.42 * diff : 0.45 + 0.55 * diff;
+    const spec = isSticker ? Math.pow(Math.max(0, dot(n, HALFV)), 36) * 70 : 0;
+    return [Math.min(255, base[0] * k + spec), Math.min(255, base[1] * k + spec), Math.min(255, base[2] * k + spec)];
+  }
+
+  function render(t) {
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    const md = Math.min(W, H), cx = W / 2, cy = H / 2;
+
+    // background
+    const g = ctx.createRadialGradient(cx, cy * 0.75, 0, cx, cy, Math.max(W, H) * 0.8);
+    g.addColorStop(0, '#1b2047');
+    g.addColorStop(0.55, '#0b0e22');
+    g.addColorStop(1, '#03040c');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    const bob = Math.sin(t * 1.1) * md * 0.012;
+
+    // soft floor shadow
+    ctx.save();
+    ctx.translate(cx, cy + md * 0.43 + bob * 0.35);
+    ctx.scale(1, 0.26);
+    const sg = ctx.createRadialGradient(0, 0, 0, 0, 0, md * 0.4);
+    sg.addColorStop(0, 'rgba(0,0,0,0.6)');
+    sg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = sg;
+    ctx.fillRect(-md, -md, md * 2, md * 2);
+    ctx.restore();
+
+    // view matrix
+    const yaw = t * 0.42;
+    const tilt = 0.5 + 0.14 * Math.sin(t * 0.47);
+    const roll = 0.07 * Math.sin(t * 0.31);
+    const V = mulMM(rotMat(2, roll), mulMM(rotMat(0, tilt), rotMat(1, yaw)));
+    const S = md * 0.165;
+
+    const proj = (p) => {
+      const k = S * D / (D - p[2]);
+      return [cx + p[0] * k, cy - p[1] * k + bob];
+    };
+
+    const polys = [];
+    let VR = null;
+    if (anim) {
+      const R = rotMat(anim.axis, anim.dir * Math.PI / 2 * anim.ease(Math.min(anim.t, 1)));
+      VR = mulMM(V, R);
+    }
+    for (const c of cubies) {
+      const turning = anim && c.p[anim.axis] === anim.layer;
+      const T = mulMM(turning ? VR : V, c.m);
+      const o = mulMV(turning ? VR : V, c.p);
+      for (let f = 0; f < 6; f++) {
+        const cs = FACES[f].map(q => add(mulMV(T, q), o));
+        const n = cross(sub(cs[1], cs[0]), sub(cs[3], cs[0]));
+        if (dot(n, [-cs[0][0], -cs[0][1], D - cs[0][2]]) <= 0) continue; // back face
+        const cen = [(cs[0][0] + cs[2][0]) / 2, (cs[0][1] + cs[2][1]) / 2, (cs[0][2] + cs[2][2]) / 2];
+        const depth = cen[0] * cen[0] + cen[1] * cen[1] + (D - cen[2]) * (D - cen[2]);
+        polys.push({ cs, n: norm(n), cen, depth, st: c.st[f] });
+      }
+    }
+    polys.sort((a, b) => b.depth - a.depth);
+
+    ctx.lineJoin = 'round';
+    for (const poly of polys) {
+      const pts = poly.cs.map(proj);
+      // cubie body
+      const bc = rgb(shade(BODY, poly.n, false));
+      ctx.fillStyle = bc;
+      ctx.strokeStyle = bc;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < 4; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      // sticker
+      if (poly.st >= 0) {
+        const ins = poly.cs.map(c => add(poly.cen, sub(c, poly.cen).map(v => v * 0.78))).map(proj);
+        const size = Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]);
+        const sc = rgb(shade(COLORS[poly.st], poly.n, true));
+        ctx.fillStyle = sc;
+        ctx.strokeStyle = sc;
+        ctx.lineWidth = Math.max(1, size * 0.11);
+        ctx.beginPath();
+        ctx.moveTo(ins[0][0], ins[0][1]);
+        for (let i = 1; i < 4; i++) ctx.lineTo(ins[i][0], ins[i][1]);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+  }
+
+  // ---------- main loop ----------
+  let last = performance.now();
+  const t0 = last;
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    update(dt);
+    render((now - t0) / 1000);
+    requestAnimationFrame(frame);
+  }
   requestAnimationFrame(frame);
-}
-requestAnimationFrame(frame);
-
 })();
 </script>
 </body>

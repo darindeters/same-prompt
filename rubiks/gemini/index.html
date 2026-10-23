@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>3D Rubik's Cube</title>
 <style>
   * {
@@ -14,7 +14,7 @@
     width: 100%;
     height: 100%;
     overflow: hidden;
-    background: #0b0e14;
+    background: #0b0d14;
   }
   canvas {
     display: block;
@@ -24,604 +24,126 @@
 </style>
 </head>
 <body>
-<canvas id="glcanvas"></canvas>
+<canvas id="c"></canvas>
 <script>
 (() => {
-  'use strict';
-
-  const canvas = document.getElementById('glcanvas');
-  const gl = canvas.getContext('webgl2', { antialias: true, alpha: false, depth: true }) ||
-             canvas.getContext('webgl', { antialias: true, alpha: false, depth: true });
-
-  if (!gl) return;
-
-  // ============================================================================
-  // SHADERS (PBR Studio Lighting + Procedural HDRI Reflections + Crevice AO)
-  // ============================================================================
-  const vsSource = `
-    attribute vec3 aPosition;
-    attribute vec3 aNormal;
-    attribute vec3 aColor;
-    attribute float aMaterial; // 0.0 = plastic body, 1.0 = glossy sticker
-    attribute vec3 aLocalPos;  // Unrotated cubie-local coordinates
-
-    uniform mat4 uViewProj;
-    uniform mat4 uCubeWorld;
-    uniform mat4 uCubieModel;
-
-    varying vec3 vWorldPos;
-    varying vec3 vWorldNormal;
-    varying vec3 vColor;
-    varying float vMaterial;
-    varying vec3 vLocalPos;
-    varying vec3 vCubieCenter;
-
-    void main() {
-      vec4 cubiePos = uCubieModel * vec4(aPosition, 1.0);
-      vec4 worldPos = uCubeWorld * cubiePos;
-      vWorldPos = worldPos.xyz;
-
-      mat3 normalMat = mat3(uCubeWorld) * mat3(uCubieModel);
-      vWorldNormal = normalize(normalMat * aNormal);
-
-      vColor = aColor;
-      vMaterial = aMaterial;
-      vLocalPos = aLocalPos;
-      vCubieCenter = (uCubieModel * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
-
-      gl_Position = uViewProj * worldPos;
-    }
-  `;
-
-  const fsSource = `
-    precision highp float;
-
-    varying vec3 vWorldPos;
-    varying vec3 vWorldNormal;
-    varying vec3 vColor;
-    varying float vMaterial;
-    varying vec3 vLocalPos;
-    varying vec3 vCubieCenter;
-
-    uniform vec3 uCameraPos;
-    uniform float uSolvedGlow;
-
-    const float PI = 3.14159265359;
-
-    // Procedural Studio Environment Map for crisp softbox reflections
-    vec3 sampleStudioEnv(vec3 dir, float roughness) {
-      vec3 d = normalize(dir);
-      float blur = roughness * roughness;
-
-      // Base gradient sky
-      float y = d.y * 0.5 + 0.5;
-      vec3 env = mix(vec3(0.03, 0.04, 0.06), vec3(0.14, 0.17, 0.24), smoothstep(0.0, 1.0, y));
-
-      // Main overhead key softbox
-      vec3 keyDir = normalize(vec3(0.45, 0.78, 0.42));
-      float keyDot = max(dot(d, keyDir), 0.0);
-      float keyPanel = smoothstep(0.82 - blur * 0.45, 0.96 + blur * 0.02, keyDot);
-      env += vec3(3.4, 3.3, 3.1) * keyPanel * (1.0 - blur * 0.65);
-      env += vec3(0.85, 0.82, 0.78) * pow(keyDot, mix(14.0, 3.0, blur));
-
-      // Cool left rim softbox
-      vec3 fillDir = normalize(vec3(-0.78, 0.28, 0.55));
-      float fillDot = max(dot(d, fillDir), 0.0);
-      float fillPanel = smoothstep(0.86 - blur * 0.4, 0.97, fillDot);
-      env += vec3(1.1, 1.45, 2.1) * fillPanel * (1.0 - blur * 0.6);
-      env += vec3(0.35, 0.5, 0.8) * pow(fillDot, mix(10.0, 2.5, blur));
-
-      // Warm back-bottom accent bounce
-      vec3 rimDir = normalize(vec3(0.15, -0.75, -0.64));
-      float rimDot = max(dot(d, rimDir), 0.0);
-      env += vec3(0.55, 0.38, 0.25) * pow(rimDot, mix(8.0, 2.0, blur));
-
-      // Horizon studio strip reflection
-      float horizon = exp(-abs(d.y + 0.05) * mix(18.0, 4.0, blur)) * smoothstep(-0.2, 0.8, d.z);
-      env += vec3(0.35, 0.42, 0.55) * horizon;
-
-      return env;
-    }
-
-    float distributionGGX(vec3 N, vec3 H, float roughness) {
-      float a = roughness * roughness;
-      float a2 = a * a;
-      float NdotH = max(dot(N, H), 0.0);
-      float NdotH2 = NdotH * NdotH;
-      float denom = (NdotH2 * (a2 - 1.0) + 1.0);
-      return a2 / max(PI * denom * denom, 0.0001);
-    }
-
-    float geometrySchlickGGX(float NdotV, float roughness) {
-      float r = roughness + 1.0;
-      float k = (r * r) / 8.0;
-      return NdotV / (NdotV * (1.0 - k) + k);
-    }
-
-    float geometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
-      float NdotV = max(dot(N, V), 0.001);
-      float NdotL = max(dot(N, L), 0.001);
-      return geometrySchlickGGX(NdotV, roughness) * geometrySchlickGGX(NdotL, roughness);
-    }
-
-    vec3 fresnelSchlick(float cosTheta, vec3 F0) {
-      return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
-    }
-
-    void main() {
-      vec3 N = normalize(vWorldNormal);
-      vec3 V = normalize(uCameraPos - vWorldPos);
-      vec3 R = reflect(-V, N);
-
-      float isSticker = vMaterial;
-
-      // Roughness & base reflectance: glossy stickers vs satin ABS plastic
-      float roughness = mix(0.24, 0.065, isSticker);
-      vec3 F0 = mix(vec3(0.042), vec3(0.058), isSticker);
-
-      // Subtle celebration sheen when solved
-      vec3 baseAlbedo = vColor * (1.0 + uSolvedGlow * 0.12 * isSticker);
-
-      // Crevice & Interior Ambient Occlusion
-      // Faces pointing toward the center of the 3x3 cube are occluded inside the mechanism
-      float radialDist = length(vCubieCenter + vLocalPos);
-      float interiorAO = smoothstep(0.55, 1.55, radialDist);
-      // Edge bevel crevice darkening between adjacent cubies
-      vec3 absLocal = abs(vLocalPos);
-      float maxCoord = max(absLocal.x, max(absLocal.y, absLocal.z));
-      float edgeProximity = smoothstep(0.49, 0.41, maxCoord);
-      float ao = mix(0.22, 1.0, interiorAO) * mix(0.72, 1.0, edgeProximity);
-
-      // Direct analytical studio lights (3-point setup)
-      vec3 L1 = normalize(vec3(0.45, 0.78, 0.42));
-      vec3 L1Color = vec3(2.55, 2.48, 2.38);
-
-      vec3 L2 = normalize(vec3(-0.78, 0.28, 0.55));
-      vec3 L2Color = vec3(0.95, 1.18, 1.55);
-
-      vec3 L3 = normalize(vec3(0.15, -0.78, 0.58));
-      vec3 L3Color = vec3(0.48, 0.45, 0.52);
-
-      vec3 directLo = vec3(0.0);
-
-      for (int i = 0; i < 3; i++) {
-        vec3 L = (i == 0) ? L1 : ((i == 1) ? L2 : L3);
-        vec3 Lrad = (i == 0) ? L1Color : ((i == 1) ? L2Color : L3Color);
-
-        vec3 H = normalize(V + L);
-        float NdotL = max(dot(N, L), 0.0);
-        if (NdotL > 0.0) {
-          float NDF = distributionGGX(N, H, roughness);
-          float G = geometrySmith(N, V, L, roughness);
-          vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
-
-          vec3 spec = (NDF * G * F) / max(4.0 * max(dot(N, V), 0.001) * NdotL, 0.001);
-          vec3 kD = (vec3(1.0) - F);
-
-          directLo += (kD * baseAlbedo / PI + spec) * Lrad * NdotL;
-        }
-      }
-
-      // Image-Based Lighting (Environment diffuse + specular reflection)
-      float NdotV = max(dot(N, V), 0.001);
-      vec3 F_ibl = F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(1.0 - NdotV, 5.0);
-      vec3 envSpec = sampleStudioEnv(R, roughness) * F_ibl;
-      vec3 envDiff = sampleStudioEnv(N, 0.92) * baseAlbedo * (1.0 - F_ibl) * 0.55;
-
-      // Clearcoat layer on stickers for authentic glossy lacquer depth
-      float clearcoatF = 0.04 + 0.96 * pow(1.0 - NdotV, 5.0);
-      vec3 clearcoat = sampleStudioEnv(R, 0.02) * clearcoatF * isSticker * 0.48;
-
-      vec3 color = (directLo + envDiff) * ao + (envSpec + clearcoat) * mix(0.45, 1.0, ao);
-
-      // Subtle rim glow during solved celebration
-      float rim = pow(1.0 - NdotV, 3.5);
-      color += vec3(0.45, 0.65, 1.0) * rim * uSolvedGlow * 0.28;
-
-      // ACES Filmic Tone Mapping
-      const float a = 2.51;
-      const float b = 0.03;
-      const float c = 2.43;
-      const float d = 0.59;
-      const float e = 0.14;
-      color = clamp((color * (a * color + b)) / (color * (c * color + d) + e), 0.0, 1.0);
-
-      // Gamma correction (sRGB)
-      color = pow(color, vec3(1.0 / 2.2));
-
-      gl_FragColor = vec4(color, 1.0);
-    }
-  `;
-
-  // Background & Ground Shadow Shader (full-screen quad drawn behind the cube)
-  const bgVsSource = `
-    attribute vec2 aPos;
-    varying vec2 vUv;
-    void main() {
-      vUv = aPos * 0.5 + 0.5;
-      gl_Position = vec4(aPos, 0.9999, 1.0);
-    }
-  `;
-
-  const bgFsSource = `
-    precision highp float;
-    varying vec2 vUv;
-    uniform float uTime;
-    uniform float uSolvedGlow;
-
-    void main() {
-      vec2 p = vUv * 2.0 - 1.0;
-      float r2 = dot(p, p);
-
-      // Rich dark studio radial backdrop
-      vec3 centerCol = vec3(0.11, 0.14, 0.20) + vec3(0.03, 0.05, 0.09) * uSolvedGlow;
-      vec3 edgeCol = vec3(0.025, 0.032, 0.05);
-      vec3 col = mix(centerCol, edgeCol, smoothstep(0.0, 1.65, r2));
-
-      // Subtle ambient floor glow & soft drop shadow below the floating cube
-      vec2 shadowUv = (p - vec2(0.0, -0.62)) * vec2(1.15, 3.8);
-      float shadowDist = dot(shadowUv, shadowUv);
-      float softShadow = exp(-shadowDist * 2.4);
-      col *= (1.0 - 0.52 * softShadow);
-
-      // Subtle studio light halo behind the cube
-      vec2 haloUv = (p - vec2(0.0, 0.06)) * vec2(1.0, 1.0);
-      float halo = exp(-dot(haloUv, haloUv) * 2.8);
-      col += vec3(0.045, 0.06, 0.095) * halo;
-
-      // Dither to prevent 8-bit banding on smooth dark gradients
-      float noise = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
-      col += (noise - 0.5) / 255.0;
-
-      gl_FragColor = vec4(col, 1.0);
-    }
-  `;
-
-  function compileShader(type, source) {
-    const shader = gl.createShader(type);
-    gl.shaderSource(shader, source);
-    gl.compileShader(shader);
-    return shader;
-  }
-
-  function createProgram(vs, fs) {
-    const prog = gl.createProgram();
-    gl.attachShader(prog, compileShader(gl.VERTEX_SHADER, vs));
-    gl.attachShader(prog, compileShader(gl.FRAGMENT_SHADER, fs));
-    gl.linkProgram(prog);
-    return prog;
-  }
-
-  const cubeProg = createProgram(vsSource, fsSource);
-  const bgProg = createProgram(bgVsSource, bgFsSource);
-
-  // ============================================================================
-  // PROCEDURAL HIGH-RES ROUNDED CUBIE + BEVELED STICKER GEOMETRY
-  // ============================================================================
-  // Evaluates point and analytical smooth normal on a rounded box of half-extents B and bevel radius R
-  function evalRoundedBox(u, v, w, bx, by, bz, r) {
-    // Map u, v, w in [-1, 1] with cosine clustering near edges so bevels get dense tessellation
-    const ix = bx - r;
-    const iy = by - r;
-    const iz = bz - r;
-
-    // Point on surface of box of size (bx, by, bz) mapped to inner core + rounded normal offset
-    const px = u * bx;
-    const py = v * by;
-    const pz = w * bz;
-
-    const cx = Math.max(-ix, Math.min(ix, px));
-    const cy = Math.max(-iy, Math.min(iy, py));
-    const cz = Math.max(-iz, Math.min(iz, pz));
-
-    let dx = px - cx;
-    let dy = py - cy;
-    let dz = pz - cz;
-    const len = Math.hypot(dx, dy, dz);
-
-    if (len > 1e-6) {
-      dx /= len;
-      dy /= len;
-      dz /= len;
-    } else {
-      dx = Math.abs(u) >= Math.abs(v) && Math.abs(u) >= Math.abs(w) ? Math.sign(u) : 0;
-      dy = Math.abs(v) > Math.abs(u) && Math.abs(v) >= Math.abs(w) ? Math.sign(v) : 0;
-      dz = dx === 0 && dy === 0 ? Math.sign(w) : 0;
-    }
-
-    return {
-      x: cx + dx * r,
-      y: cy + dy * r,
-      z: cz + dz * r,
-      nx: dx,
-      ny: dy,
-      nz: dz
-    };
-  }
-
-  // Non-uniform parameter spacing that concentrates vertices along the rounded bevels
-  function bevelGridCoords(steps, halfExtent, radius) {
-    const innerRatio = (halfExtent - radius) / halfExtent;
-    const bevelSteps = Math.max(4, Math.floor(steps * 0.4));
-    const flatSteps = Math.max(2, steps - 2 * bevelSteps);
-    const coords = [];
-
-    for (let i = 0; i < bevelSteps; i++) {
-      const t = i / bevelSteps;
-      const s = 0.5 * (1 - Math.cos(t * Math.PI * 0.5));
-      coords.push(-1 + s * (1 - innerRatio));
-    }
-    for (let i = 0; i <= flatSteps; i++) {
-      const t = i / flatSteps;
-      coords.push(-innerRatio + t * (2 * innerRatio));
-    }
-    for (let i = 1; i <= bevelSteps; i++) {
-      const t = i / bevelSteps;
-      const s = Math.sin(t * Math.PI * 0.5);
-      coords.push(innerRatio + s * (1 - innerRatio));
-    }
-    return coords;
-  }
-
-  // Build a template mesh for a cubie given its 6 sticker flags
-  // Sticker colors (linear RGB for physically-based shading):
+  const canvas = document.getElementById('c');
+  const gl = canvas.getContext('webgl', { antialias: true, alpha: false, depth: true, powerPreference: 'high-performance' })
+          || canvas.getContext('experimental-webgl', { antialias: true, alpha: false, depth: true });
+
+  // Vivid, saturated phone-screen-friendly palette
   // +X: Red, -X: Orange, +Y: White, -Y: Yellow, +Z: Green, -Z: Blue
   const FACE_COLORS = [
-    [0.82, 0.035, 0.055], // +X Right: Red
-    [0.95, 0.24,  0.012], // -X Left: Orange
-    [0.93, 0.95,  0.97],  // +Y Up: White
-    [0.95, 0.76,  0.015], // -Y Down: Yellow
-    [0.015, 0.58, 0.14],  // +Z Front: Green
-    [0.015, 0.16, 0.78]   // -Z Back: Blue
+    [1.00, 0.08, 0.20], // +X Right: Vivid Crimson Red
+    [1.00, 0.44, 0.00], // -X Left:  Electric Tangerine Orange
+    [0.98, 0.99, 1.00], // +Y Up:    Pure Crisp White
+    [1.00, 0.87, 0.00], // -Y Down:  Saturated Solar Yellow
+    [0.00, 0.89, 0.36], // +Z Front: Vivid Emerald Green
+    [0.04, 0.45, 1.00]  // -Z Back:  Vivid Cobalt Blue
   ];
-  const PLASTIC_COLOR = [0.018, 0.020, 0.024];
 
-  function buildCubieGeometry(stickerMask) {
-    const vertices = []; // interleaved: pos(3), normal(3), color(3), material(1), localPos(3) -> 13 floats
-    const indices = [];
-    let vertexCount = 0;
-
-    function pushVertex(x, y, z, nx, ny, nz, r, g, b, mat) {
-      vertices.push(x, y, z, nx, ny, nz, r, g, b, mat, x, y, z);
-      return vertexCount++;
-    }
-
-    // 1. Rounded plastic body
-    const bodyHalf = 0.486;
-    const bodyRadius = 0.072;
-    const grid = bevelGridCoords(14, bodyHalf, bodyRadius);
-    const N = grid.length;
-
-    const faceDefs = [
-      // dir, uAxis, vAxis (right-handed so u x v = dir)
-      { dir: [ 1,  0,  0], u: [0, 1, 0], v: [0, 0, 1] }, // +X
-      { dir: [-1,  0,  0], u: [0, 0, 1], v: [0, 1, 0] }, // -X
-      { dir: [ 0,  1,  0], u: [0, 0, 1], v: [1, 0, 0] }, // +Y
-      { dir: [ 0, -1,  0], u: [1, 0, 0], v: [0, 0, 1] }, // -Y
-      { dir: [ 0,  0,  1], u: [1, 0, 0], v: [0, 1, 0] }, // +Z
-      { dir: [ 0,  0, -1], u: [0, 1, 0], v: [1, 0, 0] }  // -Z
-    ];
-
-    for (let f = 0; f < 6; f++) {
-      const fd = faceDefs[f];
-      const baseIdx = vertexCount;
-
-      for (let iu = 0; iu < N; iu++) {
-        const gu = grid[iu];
-        for (let iv = 0; iv < N; iv++) {
-          const gv = grid[iv];
-          const ux = fd.dir[0] + gu * fd.u[0] + gv * fd.v[0];
-          const uy = fd.dir[1] + gu * fd.u[1] + gv * fd.v[1];
-          const uz = fd.dir[2] + gu * fd.u[2] + gv * fd.v[2];
-
-          const p = evalRoundedBox(ux, uy, uz, bodyHalf, bodyHalf, bodyHalf, bodyRadius);
-          pushVertex(
-            p.x, p.y, p.z,
-            p.nx, p.ny, p.nz,
-            PLASTIC_COLOR[0], PLASTIC_COLOR[1], PLASTIC_COLOR[2],
-            0.0
-          );
-        }
-      }
-
-      for (let iu = 0; iu < N - 1; iu++) {
-        for (let iv = 0; iv < N - 1; iv++) {
-          const i00 = baseIdx + iu * N + iv;
-          const i10 = baseIdx + (iu + 1) * N + iv;
-          const i01 = baseIdx + iu * N + (iv + 1);
-          const i11 = baseIdx + (iu + 1) * N + (iv + 1);
-          indices.push(i00, i10, i11, i00, i11, i01);
-        }
-      }
-    }
-
-    // 2. Raised, beveled, rounded-corner stickers on active exterior faces
-    const stickerHalf = 0.402;
-    const stickerCornerR = 0.068;
-    const stickerHeight = 0.011;
-    const stickerBevel = 0.012;
-
-    const ringSteps = 32; // around the rounded rectangle perimeter
-
-    for (let f = 0; f < 6; f++) {
-      if (!(stickerMask & (1 << f))) continue;
-
-      const fd = faceDefs[f];
-      const col = FACE_COLORS[f];
-      const innerFlat = stickerHalf - stickerCornerR;
-
-      // Center vertex of the sticker
-      const cx = fd.dir[0] * (bodyHalf + stickerHeight);
-      const cy = fd.dir[1] * (bodyHalf + stickerHeight);
-      const cz = fd.dir[2] * (bodyHalf + stickerHeight);
-      const centerVert = pushVertex(
-        cx, cy, cz,
-        fd.dir[0], fd.dir[1], fd.dir[2],
-        col[0], col[1], col[2],
-        1.0
-      );
-
-      // 3 concentric rings for smooth beveled sticker edge:
-      // Ring 0: top inner flat boundary
-      // Ring 1: mid bevel curve
-      // Ring 2: base meeting the cubie face
-      const rings = [
-        { inset: -stickerBevel, h: stickerHeight, tilt: 0.0 },
-        { inset: -stickerBevel * 0.35, h: stickerHeight * 0.65, tilt: 0.45 },
-        { inset: 0.0, h: 0.001, tilt: 0.82 }
-      ];
-
-      const ringBaseIndices = [];
-
-      for (let rIdx = 0; rIdx < rings.length; rIdx++) {
-        const rg = rings[rIdx];
-        const rad = Math.max(0.005, stickerCornerR + rg.inset);
-        const startIdx = vertexCount;
-        ringBaseIndices.push(startIdx);
-
-        for (let s = 0; s < ringSteps; s++) {
-          const theta = (s / ringSteps) * Math.PI * 2;
-          const cosT = Math.cos(theta);
-          const sinT = Math.sin(theta);
-
-          // Quadrant offset for rounded-square corner center
-          const qx = (cosT >= 0 ? 1 : -1) * innerFlat;
-          const qy = (sinT >= 0 ? 1 : -1) * innerFlat;
-
-          const uCoord = qx + cosT * rad;
-          const vCoord = qy + sinT * rad;
-          const distToPlastic = bodyHalf + rg.h;
-
-          const vx = fd.dir[0] * distToPlastic + uCoord * fd.u[0] + vCoord * fd.v[0];
-          const vy = fd.dir[1] * distToPlastic + uCoord * fd.u[1] + vCoord * fd.v[1];
-          const vz = fd.dir[2] * distToPlastic + uCoord * fd.u[2] + vCoord * fd.v[2];
-
-          // Smooth beveled normal blending face normal with outward perimeter normal
-          const nOut = rg.tilt;
-          const nUp = Math.sqrt(Math.max(0.0, 1.0 - nOut * nOut));
-          const nx = fd.dir[0] * nUp + (cosT * fd.u[0] + sinT * fd.v[0]) * nOut;
-          const ny = fd.dir[1] * nUp + (cosT * fd.u[1] + sinT * fd.v[1]) * nOut;
-          const nz = fd.dir[2] * nUp + (cosT * fd.u[2] + sinT * fd.v[2]) * nOut;
-
-          pushVertex(vx, vy, vz, nx, ny, nz, col[0], col[1], col[2], 1.0);
-        }
-      }
-
-      // Connect center fan to Ring 0
-      const r0 = ringBaseIndices[0];
-      for (let s = 0; s < ringSteps; s++) {
-        const next = (s + 1) % ringSteps;
-        indices.push(centerVert, r0 + s, r0 + next);
-      }
-
-      // Connect Ring 0 -> Ring 1 -> Ring 2
-      for (let rIdx = 0; rIdx < rings.length - 1; rIdx++) {
-        const ra = ringBaseIndices[rIdx];
-        const rb = ringBaseIndices[rIdx + 1];
-        for (let s = 0; s < ringSteps; s++) {
-          const next = (s + 1) % ringSteps;
-          indices.push(ra + s, rb + s, rb + next, ra + s, rb + next, ra + next);
-        }
-      }
-    }
-
-    const vbo = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
-
-    const ibo = gl.createBuffer();
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices), gl.STATIC_DRAW);
-
-    return { vbo, ibo, indexCount: indices.length };
-  }
-
-  // Fullscreen background quad
-  const bgVbo = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, bgVbo);
-  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-    -1, -1,  1, -1, -1,  1,
-    -1,  1,  1, -1,  1,  1
-  ]), gl.STATIC_DRAW);
-
-  // ============================================================================
-  // 27 CUBIES & EXACT INTEGER ORIENTATION TRACKING
-  // ============================================================================
+  // Build 27 cubies with exact integer coordinates and integer rotation matrices
   const cubies = [];
-  const meshCache = new Map();
-
   for (let x = -1; x <= 1; x++) {
     for (let y = -1; y <= 1; y++) {
       for (let z = -1; z <= 1; z++) {
-        let mask = 0;
-        if (x ===  1) mask |= (1 << 0);
-        if (x === -1) mask |= (1 << 1);
-        if (y ===  1) mask |= (1 << 2);
-        if (y === -1) mask |= (1 << 3);
-        if (z ===  1) mask |= (1 << 4);
-        if (z === -1) mask |= (1 << 5);
-
-        if (!meshCache.has(mask)) {
-          meshCache.set(mask, buildCubieGeometry(mask));
-        }
-
         cubies.push({
-          pos: [x, y, z], // Current integer grid coordinates in {-1, 0, 1}
-          rot: [          // Exact 3x3 integer rotation matrix (column-major)
-            1, 0, 0,
-            0, 1, 0,
-            0, 0, 1
-          ],
-          mesh: meshCache.get(mask)
+          home: [x, y, z],
+          pos: [x, y, z],
+          // 3x3 column-major integer rotation matrix (initially identity)
+          rot: [1, 0, 0,  0, 1, 0,  0, 0, 1]
         });
       }
     }
   }
 
-  // Exact integer 90-degree rotation around axis (0=X, 1=Y, 2=Z) by dir (+1 or -1)
-  function applyDiscreteTurn(axis, layer, dir) {
-    // Integer rotation matrix for dir * 90 deg around axis
-    // Right-handed:
-    // rotX(dir*90): (y, z) -> (-dir*z, dir*y)
-    // rotY(dir*90): (x, z) -> (dir*z, -dir*x)
-    // rotZ(dir*90): (x, y) -> (-dir*y, dir*x)
-    let rMat;
-    if (axis === 0) {
-      rMat = [1, 0, 0,  0, 0, dir,  0, -dir, 0];
-    } else if (axis === 1) {
-      rMat = [0, 0, -dir,  0, 1, 0,  dir, 0, 0];
-    } else {
-      rMat = [0, dir, 0,  -dir, 0, 0,  0, 0, 1];
-    }
+  // Rotate integer 3D vector around axis (0=X, 1=Y, 2=Z) by dir * 90 deg (+1 or -1)
+  function rotateVec90(v, axis, dir) {
+    const [x, y, z] = v;
+    if (axis === 0) return dir > 0 ? [x, -z, y] : [x, z, -y];
+    if (axis === 1) return dir > 0 ? [z, y, -x] : [-z, y, x];
+    return dir > 0 ? [-y, x, z] : [y, -x, z];
+  }
 
+  function applyTurnToCubies(axis, layer, dir) {
     for (let i = 0; i < cubies.length; i++) {
       const c = cubies[i];
-      if (c.pos[axis] !== layer) continue;
-
-      const x = c.pos[0], y = c.pos[1], z = c.pos[2];
-      c.pos[0] = Math.round(rMat[0] * x + rMat[3] * y + rMat[6] * z);
-      c.pos[1] = Math.round(rMat[1] * x + rMat[4] * y + rMat[7] * z);
-      c.pos[2] = Math.round(rMat[2] * x + rMat[5] * y + rMat[8] * z);
-
-      // c.rot = rMat * c.rot (3x3 column-major integer multiplication)
-      const old = c.rot;
-      const next = new Array(9);
-      for (let col = 0; col < 3; col++) {
-        for (let row = 0; row < 3; row++) {
-          next[col * 3 + row] = Math.round(
-            rMat[0 * 3 + row] * old[col * 3 + 0] +
-            rMat[1 * 3 + row] * old[col * 3 + 1] +
-            rMat[2 * 3 + row] * old[col * 3 + 2]
-          );
-        }
+      if (c.pos[axis] === layer) {
+        c.pos = rotateVec90(c.pos, axis, dir);
+        const c0 = rotateVec90([c.rot[0], c.rot[1], c.rot[2]], axis, dir);
+        const c1 = rotateVec90([c.rot[3], c.rot[4], c.rot[5]], axis, dir);
+        const c2 = rotateVec90([c.rot[6], c.rot[7], c.rot[8]], axis, dir);
+        c.rot = [c0[0], c0[1], c0[2], c1[0], c1[1], c1[2], c2[0], c2[1], c2[2]];
       }
-      c.rot = next;
     }
   }
 
-  // ============================================================================
-  // MATRIX MATH HELPERS (Column-major 4x4)
-  // ============================================================================
+  // Scramble & solve state machine: 14 non-redundant face turns per cycle
+  const SCRAMBLE_LENGTH = 14;
+  let scrambleMoves = [];
+  let moveQueue = [];
+  let currentMove = null;
+  let phase = 'SCRAMBLE'; // 'SCRAMBLE' | 'PAUSE_SCRAMBLED' | 'SOLVE' | 'PAUSE_SOLVED'
+  let phaseTimer = 0;
+
+  // Seeded PRNG so the initial scramble is energetic and balanced across all 3 axes
+  let rngState = 0x6D2B79F5;
+  function nextRand() {
+    rngState = (rngState + 0x6D2B79F5) | 0;
+    let t = Math.imul(rngState ^ (rngState >>> 15), 1 | rngState);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+
+  function generateScrambleCycle() {
+    scrambleMoves = [];
+    let lastAxis = -1;
+    let secondLastAxis = -1;
+    let lastLayer = 0;
+
+    for (let i = 0; i < SCRAMBLE_LENGTH; i++) {
+      let axis, layer, dir;
+      do {
+        axis = Math.floor(nextRand() * 3);
+        layer = nextRand() < 0.5 ? -1 : 1;
+        dir = nextRand() < 0.5 ? -1 : 1;
+      } while (
+        (axis === lastAxis && layer === lastLayer) ||
+        (axis === lastAxis && axis === secondLastAxis)
+      );
+      secondLastAxis = lastAxis;
+      lastAxis = axis;
+      lastLayer = layer;
+      scrambleMoves.push({ axis, layer, dir, duration: 0.34 });
+    }
+    moveQueue = scrambleMoves.map(m => ({ ...m }));
+    phase = 'SCRAMBLE';
+  }
+
+  function startSolveCycle() {
+    moveQueue = [];
+    for (let i = scrambleMoves.length - 1; i >= 0; i--) {
+      const m = scrambleMoves[i];
+      moveQueue.push({
+        axis: m.axis,
+        layer: m.layer,
+        dir: -m.dir,
+        duration: 0.36
+      });
+    }
+    phase = 'SOLVE';
+  }
+
+  // Start animating immediately on frame 0
+  generateScrambleCycle();
+  currentMove = { ...moveQueue.shift(), elapsed: 0.06 };
+
+  function easeInOutCubic(t) {
+    return t < 0.5
+      ? 4 * t * t * t
+      : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  }
+
   function mat4Identity() {
     return new Float32Array([
       1, 0, 0, 0,
@@ -646,8 +168,8 @@
   }
 
   function mat4Perspective(fovy, aspect, near, far) {
-    const f = 1.0 / Math.tan(fovy * 0.5);
-    const nf = 1.0 / (near - far);
+    const f = 1.0 / Math.tan(fovy / 2);
+    const nf = 1 / (near - far);
     return new Float32Array([
       f / aspect, 0, 0, 0,
       0, f, 0, 0,
@@ -658,14 +180,14 @@
 
   function mat4LookAt(eye, center, up) {
     let zx = eye[0] - center[0], zy = eye[1] - center[1], zz = eye[2] - center[2];
-    let len = 1 / Math.hypot(zx, zy, zz);
-    zx *= len; zy *= len; zz *= len;
+    let len = Math.hypot(zx, zy, zz);
+    zx /= len; zy /= len; zz /= len;
 
     let xx = up[1] * zz - up[2] * zy;
     let xy = up[2] * zx - up[0] * zz;
     let xz = up[0] * zy - up[1] * zx;
     len = Math.hypot(xx, xy, xz);
-    if (len > 0) { len = 1 / len; xx *= len; xy *= len; xz *= len; }
+    xx /= len; xy /= len; xz /= len;
 
     const yx = zy * xz - zz * xy;
     const yy = zz * xx - zx * xz;
@@ -682,318 +204,586 @@
     ]);
   }
 
-  function mat4AxisRotation(axis, angleRad) {
+  function mat4FromRotationAxis(axis, angleRad) {
     const c = Math.cos(angleRad);
     const s = Math.sin(angleRad);
+    const out = mat4Identity();
     if (axis === 0) {
-      return new Float32Array([
-        1, 0, 0, 0,
-        0, c, s, 0,
-        0, -s, c, 0,
-        0, 0, 0, 1
-      ]);
+      out[5] = c;  out[6] = s;
+      out[9] = -s; out[10] = c;
     } else if (axis === 1) {
-      return new Float32Array([
-        c, 0, -s, 0,
-        0, 1, 0, 0,
-        s, 0, c, 0,
-        0, 0, 0, 1
-      ]);
+      out[0] = c;  out[2] = -s;
+      out[8] = s;  out[10] = c;
     } else {
-      return new Float32Array([
-        c, s, 0, 0,
-        -s, c, 0, 0,
-        0, 0, 1, 0,
-        0, 0, 0, 1
-      ]);
+      out[0] = c;  out[1] = s;
+      out[4] = -s; out[5] = c;
     }
+    return out;
   }
 
-  function cubieToMat4(cubie, spacing) {
-    const r = cubie.rot;
+  function mat4FromCubie(pos, rot, spacing) {
     return new Float32Array([
-      r[0], r[1], r[2], 0,
-      r[3], r[4], r[5], 0,
-      r[6], r[7], r[8], 0,
-      cubie.pos[0] * spacing,
-      cubie.pos[1] * spacing,
-      cubie.pos[2] * spacing,
-      1
+      rot[0], rot[1], rot[2], 0,
+      rot[3], rot[4], rot[5], 0,
+      rot[6], rot[7], rot[8], 0,
+      pos[0] * spacing, pos[1] * spacing, pos[2] * spacing, 1
     ]);
   }
 
-  // ============================================================================
-  // SCRAMBLE & SOLVE CHOREOGRAPHY (One Turn at a Time)
-  // ============================================================================
-  const SCRAMBLE_LENGTH = 20;
-  const SCRAMBLE_TURN_DURATION = 0.27; // crisp, energetic scramble turns
-  const SOLVE_TURN_DURATION = 0.36;    // deliberate, smooth solve turns
-  const PAUSE_AFTER_SCRAMBLE = 0.70;
-  const PAUSE_AFTER_SOLVE = 1.35;
-
-  // Generates a natural 20-move outer-face scramble with zero redundant or cancelling moves
-  function generateScrambleSequence(count) {
-    const moves = [];
-    let lastAxis = -1;
-    let secondLastAxis = -1;
-    let lastLayer = 0;
-
-    for (let i = 0; i < count; i++) {
-      let axis, layer;
-      do {
-        axis = Math.floor(Math.random() * 3);
-        layer = Math.random() < 0.5 ? -1 : 1; // Classic outer face turns (U, D, L, R, F, B)
-      } while (
-        (axis === lastAxis && layer === lastLayer) ||
-        (axis === lastAxis && axis === secondLastAxis)
-      );
-
-      const dir = Math.random() < 0.5 ? 1 : -1;
-      moves.push({ axis, layer, dir });
-
-      secondLastAxis = lastAxis;
-      lastAxis = axis;
-      lastLayer = layer;
-    }
-    return moves;
-  }
-
-  let scrambleQueue = [];
-  let solveQueue = [];
-  let currentMove = null;
-  let moveElapsed = 0;
-  let moveDuration = SCRAMBLE_TURN_DURATION;
-  let phase = 'INITIAL_GLIDE'; // 'INITIAL_GLIDE' -> 'SCRAMBLING' -> 'SCRAMBLED_PAUSE' -> 'SOLVING' -> 'SOLVED_PAUSE'
-  let phaseTimer = 0.45;
-  let solvedGlow = 0.8;
-
-  function startNewCycle() {
-    scrambleQueue = generateScrambleSequence(SCRAMBLE_LENGTH);
-    // Exact inverse sequence in reverse order guarantees solving one turn at a time
-    solveQueue = scrambleQueue.slice().reverse().map(m => ({
-      axis: m.axis,
-      layer: m.layer,
-      dir: -m.dir
-    }));
-    phase = 'SCRAMBLING';
-    popNextMove();
-  }
-
-  function popNextMove() {
-    if (phase === 'SCRAMBLING') {
-      if (scrambleQueue.length > 0) {
-        currentMove = scrambleQueue.shift();
-        moveElapsed = 0;
-        moveDuration = SCRAMBLE_TURN_DURATION;
-      } else {
+  function stepStateMachine(dt) {
+    if (currentMove) {
+      currentMove.elapsed += dt;
+      if (currentMove.elapsed >= currentMove.duration) {
+        applyTurnToCubies(currentMove.axis, currentMove.layer, currentMove.dir);
         currentMove = null;
-        phase = 'SCRAMBLED_PAUSE';
-        phaseTimer = PAUSE_AFTER_SCRAMBLE;
-      }
-    } else if (phase === 'SOLVING') {
-      if (solveQueue.length > 0) {
-        currentMove = solveQueue.shift();
-        moveElapsed = 0;
-        moveDuration = SOLVE_TURN_DURATION;
-      } else {
-        currentMove = null;
-        phase = 'SOLVED_PAUSE';
-        phaseTimer = PAUSE_AFTER_SOLVE;
-        solvedGlow = 1.0;
       }
     }
-  }
 
-  // Smooth quintic ease-in-out with a subtle mechanical settle
-  function easeTurn(t) {
-    if (t <= 0) return 0;
-    if (t >= 1) return 1;
-    // Quintic smoothstep
-    const s = t * t * t * (t * (t * 6 - 15) + 10);
-    // Very slight tactile magnetic detent feel near completion
-    const snap = Math.sin(s * Math.PI) * (1 - s) * 0.035;
-    return Math.min(1, s + snap);
-  }
-
-  // ============================================================================
-  // RENDER LOOP & RESIZE HANDLING
-  // ============================================================================
-  function resize() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const w = Math.floor(window.innerWidth * dpr);
-    const h = Math.floor(window.innerHeight * dpr);
-    if (canvas.width !== w || canvas.height !== h) {
-      canvas.width = w;
-      canvas.height = h;
-      gl.viewport(0, 0, w, h);
-    }
-  }
-  window.addEventListener('resize', resize);
-  resize();
-
-  gl.enable(gl.CULL_FACE);
-  gl.cullFace(gl.BACK);
-
-  // Uniform & attribute locations
-  const bgLocs = {
-    aPos: gl.getAttribLocation(bgProg, 'aPos'),
-    uTime: gl.getUniformLocation(bgProg, 'uTime'),
-    uSolvedGlow: gl.getUniformLocation(bgProg, 'uSolvedGlow')
-  };
-
-  const cubeLocs = {
-    aPosition: gl.getAttribLocation(cubeProg, 'aPosition'),
-    aNormal: gl.getAttribLocation(cubeProg, 'aNormal'),
-    aColor: gl.getAttribLocation(cubeProg, 'aColor'),
-    aMaterial: gl.getAttribLocation(cubeProg, 'aMaterial'),
-    aLocalPos: gl.getAttribLocation(cubeProg, 'aLocalPos'),
-    uViewProj: gl.getUniformLocation(cubeProg, 'uViewProj'),
-    uCubeWorld: gl.getUniformLocation(cubeProg, 'uCubeWorld'),
-    uCubieModel: gl.getUniformLocation(cubeProg, 'uCubieModel'),
-    uCameraPos: gl.getUniformLocation(cubeProg, 'uCameraPos'),
-    uSolvedGlow: gl.getUniformLocation(cubeProg, 'uSolvedGlow')
-  };
-
-  let lastTime = performance.now();
-  let totalTime = 0;
-
-  function frame(now) {
-    const dt = Math.min((now - lastTime) * 0.001, 0.05);
-    lastTime = now;
-    totalTime += dt;
-
-    resize();
-
-    // Update state machine
-    solvedGlow = Math.max(0, solvedGlow - dt * 0.85);
-
-    if (phase === 'INITIAL_GLIDE') {
-      phaseTimer -= dt;
-      if (phaseTimer <= 0) {
-        startNewCycle();
-      }
-    } else if (phase === 'SCRAMBLING' || phase === 'SOLVING') {
-      if (currentMove) {
-        moveElapsed += dt;
-        if (moveElapsed >= moveDuration) {
-          applyDiscreteTurn(currentMove.axis, currentMove.layer, currentMove.dir);
-          currentMove = null;
-          popNextMove();
+    if (!currentMove) {
+      if (moveQueue.length > 0) {
+        currentMove = { ...moveQueue.shift(), elapsed: 0 };
+      } else if (phase === 'SCRAMBLE') {
+        phase = 'PAUSE_SCRAMBLED';
+        phaseTimer = 0.6;
+      } else if (phase === 'PAUSE_SCRAMBLED') {
+        phaseTimer -= dt;
+        if (phaseTimer <= 0) {
+          startSolveCycle();
+        }
+      } else if (phase === 'SOLVE') {
+        phase = 'PAUSE_SOLVED';
+        phaseTimer = 1.25;
+      } else if (phase === 'PAUSE_SOLVED') {
+        phaseTimer -= dt;
+        if (phaseTimer <= 0) {
+          generateScrambleCycle();
         }
       }
-    } else if (phase === 'SCRAMBLED_PAUSE') {
-      phaseTimer -= dt;
-      if (phaseTimer <= 0) {
-        phase = 'SOLVING';
-        popNextMove();
-      }
-    } else if (phase === 'SOLVED_PAUSE') {
-      phaseTimer -= dt;
-      if (phaseTimer <= 0) {
-        startNewCycle();
-      }
     }
-
-    // ------------------------------------------------------------------------
-    // 1. Draw Studio Backdrop & Soft Ground Shadow
-    // ------------------------------------------------------------------------
-    gl.disable(gl.DEPTH_TEST);
-    gl.useProgram(bgProg);
-    gl.bindBuffer(gl.ARRAY_BUFFER, bgVbo);
-    gl.enableVertexAttribArray(bgLocs.aPos);
-    gl.vertexAttribPointer(bgLocs.aPos, 2, gl.FLOAT, false, 0, 0);
-    gl.uniform1f(bgLocs.uTime, totalTime);
-    gl.uniform1f(bgLocs.uSolvedGlow, solvedGlow);
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
-    gl.disableVertexAttribArray(bgLocs.aPos);
-
-    // ------------------------------------------------------------------------
-    // 2. Camera & Whole-Cube Floating / Orbiting Transform
-    // ------------------------------------------------------------------------
-    gl.enable(gl.DEPTH_TEST);
-    gl.clear(gl.DEPTH_BUFFER_BIT);
-
-    const aspect = canvas.width / Math.max(1, canvas.height);
-    // Adjust FOV automatically if window is narrower than 1:1 so the cube always fits comfortably
-    const baseFov = 36 * (Math.PI / 180);
-    const fovy = aspect < 1.0 ? 2 * Math.atan(Math.tan(baseFov * 0.5) / aspect) : baseFov;
-
-    const cameraPos = [0.0, 3.35, 6.85];
-    const proj = mat4Perspective(fovy, aspect, 0.5, 30.0);
-    const view = mat4LookAt(cameraPos, [0.0, -0.06, 0.0], [0.0, 1.0, 0.0]);
-    const viewProj = mat4Multiply(proj, view);
-
-    // Continuous graceful 3D rotation of the whole cube so all 6 faces are showcased
-    const rotY = totalTime * 0.42 + 0.65;
-    const rotX = Math.sin(totalTime * 0.31) * 0.34 + 0.12;
-    const rotZ = Math.cos(totalTime * 0.23) * 0.14;
-    const bobY = Math.sin(totalTime * 1.65) * 0.065;
-
-    let cubeWorld = mat4Multiply(
-      mat4AxisRotation(1, rotY),
-      mat4Multiply(mat4AxisRotation(0, rotX), mat4AxisRotation(2, rotZ))
-    );
-    cubeWorld[13] = bobY;
-
-    // Active slice rotation matrix
-    let activeSliceMat = null;
-    if (currentMove) {
-      const progress = easeTurn(moveElapsed / moveDuration);
-      const angle = progress * currentMove.dir * (Math.PI * 0.5);
-      activeSliceMat = mat4AxisRotation(currentMove.axis, angle);
-    }
-
-    // ------------------------------------------------------------------------
-    // 3. Render All 27 Cubies
-    // ------------------------------------------------------------------------
-    gl.useProgram(cubeProg);
-    gl.uniformMatrix4fv(cubeLocs.uViewProj, false, viewProj);
-    gl.uniformMatrix4fv(cubeLocs.uCubeWorld, false, cubeWorld);
-    gl.uniform3fv(cubeLocs.uCameraPos, cameraPos);
-    gl.uniform1f(cubeLocs.uSolvedGlow, solvedGlow);
-
-    const stride = 13 * 4;
-    const cubieSpacing = 0.985; // Tight authentic tolerance between cubies
-
-    let boundMesh = null;
-
-    for (let i = 0; i < cubies.length; i++) {
-      const c = cubies[i];
-
-      if (c.mesh !== boundMesh) {
-        boundMesh = c.mesh;
-        gl.bindBuffer(gl.ARRAY_BUFFER, boundMesh.vbo);
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, boundMesh.ibo);
-
-        gl.enableVertexAttribArray(cubeLocs.aPosition);
-        gl.vertexAttribPointer(cubeLocs.aPosition, 3, gl.FLOAT, false, stride, 0);
-
-        gl.enableVertexAttribArray(cubeLocs.aNormal);
-        gl.vertexAttribPointer(cubeLocs.aNormal, 3, gl.FLOAT, false, stride, 3 * 4);
-
-        gl.enableVertexAttribArray(cubeLocs.aColor);
-        gl.vertexAttribPointer(cubeLocs.aColor, 3, gl.FLOAT, false, stride, 6 * 4);
-
-        gl.enableVertexAttribArray(cubeLocs.aMaterial);
-        gl.vertexAttribPointer(cubeLocs.aMaterial, 1, gl.FLOAT, false, stride, 9 * 4);
-
-        gl.enableVertexAttribArray(cubeLocs.aLocalPos);
-        gl.vertexAttribPointer(cubeLocs.aLocalPos, 3, gl.FLOAT, false, stride, 10 * 4);
-      }
-
-      let modelMat = cubieToMat4(c, cubieSpacing);
-      if (currentMove && c.pos[currentMove.axis] === currentMove.layer) {
-        modelMat = mat4Multiply(activeSliceMat, modelMat);
-      }
-
-      gl.uniformMatrix4fv(cubeLocs.uCubieModel, false, modelMat);
-      gl.drawElements(gl.TRIANGLES, boundMesh.indexCount, gl.UNSIGNED_SHORT, 0);
-    }
-
-    requestAnimationFrame(frame);
   }
 
-  requestAnimationFrame(frame);
+  if (gl) {
+    const bgVertSrc = `
+      attribute vec2 aPos;
+      varying vec2 vUv;
+      void main() {
+        vUv = aPos * 0.5 + 0.5;
+        gl_Position = vec4(aPos, 0.999, 1.0);
+      }
+    `;
+    const bgFragSrc = `
+      precision highp float;
+      varying vec2 vUv;
+      uniform float uTime;
+      void main() {
+        vec2 p = vUv - 0.5;
+        float r = length(p);
+        vec3 centerCol = vec3(0.14, 0.17, 0.27);
+        vec3 edgeCol = vec3(0.035, 0.042, 0.075);
+        float glow = exp(-r * r * 3.5);
+        vec3 col = mix(edgeCol, centerCol, glow);
+
+        // Soft studio ambient floor shadow beneath the floating cube
+        vec2 shadowP = (vUv - vec2(0.5, 0.14)) * vec2(1.0, 3.6);
+        float shadow = exp(-dot(shadowP, shadowP) * 14.0);
+        col *= (1.0 - 0.45 * shadow);
+
+        // Subtle studio rim accents
+        col += vec3(0.025, 0.035, 0.065) * smoothstep(0.65, 0.0, length(p - vec2(-0.18, 0.22)));
+        col += vec3(0.03, 0.015, 0.045) * smoothstep(0.65, 0.0, length(p - vec2(0.22, -0.20)));
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `;
+
+    const cubeVertSrc = `
+      attribute vec3 aPosition;
+      attribute vec3 aNormal;
+      uniform mat4 uProj;
+      uniform mat4 uView;
+      uniform mat4 uWorld;
+      varying vec3 vLocalPos;
+      varying vec3 vWorldPos;
+      void main() {
+        vLocalPos = aPosition;
+        vec4 wp = uWorld * vec4(aPosition, 1.0);
+        vWorldPos = wp.xyz;
+        gl_Position = uProj * uView * wp;
+      }
+    `;
+
+    const cubeFragSrc = `
+      precision highp float;
+      varying vec3 vLocalPos;
+      varying vec3 vWorldPos;
+
+      uniform mat4 uWorld;
+      uniform vec3 uCameraPos;
+      uniform vec3 uHome;
+      uniform vec3 uFaceColors[6];
+
+      float sdRoundBox2D(vec2 p, vec2 b, float r) {
+        vec2 q = abs(p) - b + r;
+        return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+      }
+
+      void main() {
+        vec3 halfSize = vec3(0.478);
+        float bevelR = 0.072;
+        vec3 q = max(abs(vLocalPos) - (halfSize - bevelR), 0.0);
+        vec3 localRoundN = normalize(sign(vLocalPos) * (q + 1e-4));
+
+        vec3 absPos = abs(vLocalPos);
+        vec2 faceUV = vec2(0.0);
+        vec3 uAxis = vec3(0.0, 1.0, 0.0);
+        vec3 vAxis = vec3(0.0, 0.0, 1.0);
+        bool hasSticker = false;
+        vec3 stickerColor = vec3(0.0);
+
+        if (absPos.x >= absPos.y && absPos.x >= absPos.z) {
+          faceUV = vLocalPos.yz / 0.478;
+          if (vLocalPos.x > 0.0) {
+            uAxis = vec3(0.0, 1.0, 0.0);
+            vAxis = vec3(0.0, 0.0, 1.0);
+            hasSticker = (uHome.x > 0.5);
+            stickerColor = uFaceColors[0];
+          } else {
+            uAxis = vec3(0.0, 1.0, 0.0);
+            vAxis = vec3(0.0, 0.0, -1.0);
+            hasSticker = (uHome.x < -0.5);
+            stickerColor = uFaceColors[1];
+          }
+        } else if (absPos.y >= absPos.x && absPos.y >= absPos.z) {
+          faceUV = vLocalPos.xz / 0.478;
+          if (vLocalPos.y > 0.0) {
+            uAxis = vec3(1.0, 0.0, 0.0);
+            vAxis = vec3(0.0, 0.0, 1.0);
+            hasSticker = (uHome.y > 0.5);
+            stickerColor = uFaceColors[2];
+          } else {
+            uAxis = vec3(1.0, 0.0, 0.0);
+            vAxis = vec3(0.0, 0.0, -1.0);
+            hasSticker = (uHome.y < -0.5);
+            stickerColor = uFaceColors[3];
+          }
+        } else {
+          faceUV = vLocalPos.xy / 0.478;
+          if (vLocalPos.z > 0.0) {
+            uAxis = vec3(1.0, 0.0, 0.0);
+            vAxis = vec3(0.0, 1.0, 0.0);
+            hasSticker = (uHome.z > 0.5);
+            stickerColor = uFaceColors[4];
+          } else {
+            uAxis = vec3(-1.0, 0.0, 0.0);
+            vAxis = vec3(0.0, 1.0, 0.0);
+            hasSticker = (uHome.z < -0.5);
+            stickerColor = uFaceColors[5];
+          }
+        }
+
+        // Crisp rounded-square sticker tile with raised micro-bevel
+        float dSticker = sdRoundBox2D(faceUV, vec2(0.835), 0.17);
+        float stickerMask = hasSticker ? (1.0 - smoothstep(-0.018, 0.012, dSticker)) : 0.0;
+
+        if (stickerMask > 0.001) {
+          float edgeBand = smoothstep(-0.11, 0.0, dSticker) * stickerMask;
+          vec2 grad2D = normalize(faceUV + vec2(1e-5));
+          localRoundN = normalize(localRoundN + (uAxis * grad2D.x + vAxis * grad2D.y) * edgeBand * 0.26);
+        }
+
+        mat3 rotMat = mat3(uWorld[0].xyz, uWorld[1].xyz, uWorld[2].xyz);
+        vec3 N = normalize(rotMat * localRoundN);
+        vec3 V = normalize(uCameraPos - vWorldPos);
+
+        vec3 plasticColor = vec3(0.055, 0.062, 0.085);
+        vec3 baseColor = mix(plasticColor, stickerColor, stickerMask);
+
+        float groove = hasSticker ? exp(-pow((dSticker - 0.02) / 0.035, 2.0)) : 0.0;
+        baseColor *= (1.0 - 0.35 * groove * (1.0 - stickerMask));
+
+        vec3 L1 = normalize(vec3(0.55, 0.78, 0.65));
+        vec3 L2 = normalize(vec3(-0.75, 0.35, 0.45));
+        vec3 L3 = normalize(vec3(0.15, -0.85, -0.55));
+
+        float diff3 = max(dot(N, L3), 0.0);
+        float wrap1 = max((dot(N, L1) + 0.35) / 1.35, 0.0);
+        float wrap2 = max((dot(N, L2) + 0.40) / 1.40, 0.0);
+
+        vec3 H1 = normalize(L1 + V);
+        vec3 H2 = normalize(L2 + V);
+        float spec1Sharp = pow(max(dot(N, H1), 0.0), mix(42.0, 96.0, stickerMask));
+        float spec1Broad = pow(max(dot(N, H1), 0.0), 14.0);
+        float spec2Sharp = pow(max(dot(N, H2), 0.0), 56.0);
+
+        float fresnel = pow(1.0 - max(dot(N, V), 0.0), 4.0);
+        float seamAO = smoothstep(0.55, 1.05, length(vWorldPos));
+        float bevelHighlight = smoothstep(0.01, 0.07, length(q));
+
+        vec3 color = baseColor * (
+          0.34 +
+          0.68 * wrap1 * vec3(1.0, 0.99, 0.97) +
+          0.28 * wrap2 * vec3(0.82, 0.90, 1.0) +
+          0.16 * diff3 * vec3(0.75, 0.80, 1.0)
+        );
+
+        color = mix(color, stickerColor * (0.54 + 0.62 * wrap1 + 0.22 * wrap2), stickerMask * 0.55);
+
+        float specStrength = mix(0.28, 0.52, stickerMask);
+        color += vec3(1.0, 0.99, 0.97) * spec1Sharp * specStrength;
+        color += vec3(0.95, 0.97, 1.0) * spec1Broad * mix(0.14, 0.10, stickerMask);
+        color += vec3(0.70, 0.84, 1.0) * spec2Sharp * 0.22;
+        color += vec3(0.45, 0.56, 0.78) * fresnel * mix(0.26, 0.34, stickerMask);
+        color += vec3(0.10, 0.12, 0.17) * bevelHighlight * (1.0 - stickerMask);
+
+        color *= mix(0.42, 1.0, seamAO);
+        color = clamp(color, 0.0, 1.0);
+        color = pow(color, vec3(0.95));
+
+        gl_FragColor = vec4(color, 1.0);
+      }
+    `;
+
+    function compileShader(type, src) {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src);
+      gl.compileShader(s);
+      return s;
+    }
+
+    function createProgram(vsSrc, fsSrc) {
+      const p = gl.createProgram();
+      gl.attachShader(p, compileShader(gl.VERTEX_SHADER, vsSrc));
+      gl.attachShader(p, compileShader(gl.FRAGMENT_SHADER, fsSrc));
+      gl.linkProgram(p);
+      return p;
+    }
+
+    const bgProg = createProgram(bgVertSrc, bgFragSrc);
+    const cubeProg = createProgram(cubeVertSrc, cubeFragSrc);
+
+    const bgBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, bgBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      -1, -1,  1, -1, -1,  1,
+      -1,  1,  1, -1,  1,  1
+    ]), gl.STATIC_DRAW);
+
+    function createRoundedCubeGeometry(halfExtent, bevelRadius, segs) {
+      const positions = [];
+      const normals = [];
+      const indices = [];
+
+      const inner = halfExtent - bevelRadius;
+      const N = segs;
+
+      const faces = [
+        { u: [0, 1, 0], v: [0, 0, 1], w: [ 1, 0, 0] },
+        { u: [0, 1, 0], v: [0, 0,-1], w: [-1, 0, 0] },
+        { u: [1, 0, 0], v: [0, 0, 1], w: [ 0, 1, 0] },
+        { u: [1, 0, 0], v: [0, 0,-1], w: [ 0,-1, 0] },
+        { u: [-1,0, 0], v: [0, 1, 0], w: [ 0, 0, 1] },
+        { u: [ 1,0, 0], v: [0, 1, 0], w: [ 0, 0,-1] }
+      ];
+
+      let vertOffset = 0;
+      for (let f = 0; f < 6; f++) {
+        const { u, v, w } = faces[f];
+        for (let iy = 0; iy <= N; iy++) {
+          const ty = (iy / N) * 2 - 1;
+          for (let ix = 0; ix <= N; ix++) {
+            const tx = (ix / N) * 2 - 1;
+            const px = (u[0] * tx + v[0] * ty + w[0]) * halfExtent;
+            const py = (u[1] * tx + v[1] * ty + w[1]) * halfExtent;
+            const pz = (u[2] * tx + v[2] * ty + w[2]) * halfExtent;
+
+            const cx = Math.max(-inner, Math.min(inner, px));
+            const cy = Math.max(-inner, Math.min(inner, py));
+            const cz = Math.max(-inner, Math.min(inner, pz));
+
+            let dx = px - cx;
+            let dy = py - cy;
+            let dz = pz - cz;
+            const len = Math.hypot(dx, dy, dz) || 1;
+            dx /= len; dy /= len; dz /= len;
+
+            positions.push(cx + dx * bevelRadius, cy + dy * bevelRadius, cz + dz * bevelRadius);
+            normals.push(dx, dy, dz);
+          }
+        }
+
+        const row = N + 1;
+        for (let iy = 0; iy < N; iy++) {
+          for (let ix = 0; ix < N; ix++) {
+            const a = vertOffset + iy * row + ix;
+            const b = a + 1;
+            const c = a + row;
+            const d = c + 1;
+            indices.push(a, c, b, b, c, d);
+          }
+        }
+        vertOffset += (N + 1) * (N + 1);
+      }
+
+      return {
+        positions: new Float32Array(positions),
+        normals: new Float32Array(normals),
+        indices: new Uint16Array(indices)
+      };
+    }
+
+    const geom = createRoundedCubeGeometry(0.478, 0.068, 12);
+
+    const posBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, geom.positions, gl.STATIC_DRAW);
+
+    const normBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, normBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, geom.normals, gl.STATIC_DRAW);
+
+    const idxBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, geom.indices, gl.STATIC_DRAW);
+
+    const bgAPos = gl.getAttribLocation(bgProg, 'aPos');
+    const bgUTime = gl.getUniformLocation(bgProg, 'uTime');
+
+    const cAPos = gl.getAttribLocation(cubeProg, 'aPosition');
+    const cANorm = gl.getAttribLocation(cubeProg, 'aNormal');
+    const cUProj = gl.getUniformLocation(cubeProg, 'uProj');
+    const cUView = gl.getUniformLocation(cubeProg, 'uView');
+    const cUWorld = gl.getUniformLocation(cubeProg, 'uWorld');
+    const cUCamPos = gl.getUniformLocation(cubeProg, 'uCameraPos');
+    const cUHome = gl.getUniformLocation(cubeProg, 'uHome');
+    const cUFaceColors = gl.getUniformLocation(cubeProg, 'uFaceColors[0]');
+
+    const flatFaceColors = new Float32Array(FACE_COLORS.flat());
+
+    function resize() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const w = Math.floor(window.innerWidth * dpr);
+      const h = Math.floor(window.innerHeight * dpr);
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+      }
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    let lastTime = performance.now();
+    let totalTime = 0;
+
+    function render(now) {
+      resize();
+      const dt = Math.min((now - lastTime) / 1000, 0.05);
+      lastTime = now;
+      totalTime += dt;
+
+      stepStateMachine(dt);
+
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+      gl.disable(gl.DEPTH_TEST);
+      gl.useProgram(bgProg);
+      gl.bindBuffer(gl.ARRAY_BUFFER, bgBuf);
+      gl.enableVertexAttribArray(bgAPos);
+      gl.vertexAttribPointer(bgAPos, 2, gl.FLOAT, false, 0, 0);
+      gl.uniform1f(bgUTime, totalTime);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LEQUAL);
+
+      const aspect = canvas.width / canvas.height;
+      const baseFov = aspect < 1.0 ? (37 * Math.PI / 180) / Math.max(aspect, 0.55) : (35 * Math.PI / 180);
+      const proj = mat4Perspective(baseFov, aspect, 0.1, 100.0);
+
+      const camPos = [0.0, 0.16, 7.45];
+      const view = mat4LookAt(camPos, [0, -0.04, 0], [0, 1, 0]);
+
+      const spinY = totalTime * 0.58 + 0.68;
+      const tiltX = 0.46 + 0.24 * Math.sin(totalTime * 0.43);
+      const rollZ = 0.12 * Math.cos(totalTime * 0.31);
+      const bobY = 0.06 * Math.sin(totalTime * 1.6);
+
+      const globalRot = mat4Multiply(
+        mat4FromRotationAxis(0, tiltX),
+        mat4Multiply(
+          mat4FromRotationAxis(1, spinY),
+          mat4FromRotationAxis(2, rollZ)
+        )
+      );
+      globalRot[13] = bobY;
+
+      gl.useProgram(cubeProg);
+      gl.uniformMatrix4fv(cUProj, false, proj);
+      gl.uniformMatrix4fv(cUView, false, view);
+      gl.uniform3fv(cUCamPos, camPos);
+      gl.uniform3fv(cUFaceColors, flatFaceColors);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+      gl.enableVertexAttribArray(cAPos);
+      gl.vertexAttribPointer(cAPos, 3, gl.FLOAT, false, 0, 0);
+
+      if (cANorm !== -1) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, normBuf);
+        gl.enableVertexAttribArray(cANorm);
+        gl.vertexAttribPointer(cANorm, 3, gl.FLOAT, false, 0, 0);
+      }
+
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
+
+      const spacing = 0.985;
+      let sliceRotMat = null;
+      if (currentMove) {
+        const progress = Math.min(currentMove.elapsed / currentMove.duration, 1.0);
+        const eased = easeInOutCubic(progress);
+        const angle = currentMove.dir * eased * (Math.PI / 2);
+        sliceRotMat = mat4FromRotationAxis(currentMove.axis, angle);
+      }
+
+      for (let i = 0; i < cubies.length; i++) {
+        const c = cubies[i];
+        let localMat = mat4FromCubie(c.pos, c.rot, spacing);
+        if (currentMove && c.pos[currentMove.axis] === currentMove.layer) {
+          localMat = mat4Multiply(sliceRotMat, localMat);
+        }
+        const worldMat = mat4Multiply(globalRot, localMat);
+        gl.uniformMatrix4fv(cUWorld, false, worldMat);
+        gl.uniform3fv(cUHome, c.home);
+        gl.drawElements(gl.TRIANGLES, geom.indices.length, gl.UNSIGNED_SHORT, 0);
+      }
+
+      requestAnimationFrame(render);
+    }
+
+    requestAnimationFrame(render);
+  } else {
+    // 2D Canvas fallback if WebGL is unavailable
+    const ctx = canvas.getContext('2d');
+    const HEX_COLORS = ['#FF1433', '#FF7000', '#FAFCFF', '#FFDE00', '#00E35C', '#0A73FF'];
+    const FACE_DEFS = [
+      { idx: 0, n: [ 1, 0, 0], u: [0, 1, 0], v: [0, 0, 1], check: h => h[0] ===  1 },
+      { idx: 1, n: [-1, 0, 0], u: [0, 1, 0], v: [0, 0,-1], check: h => h[0] === -1 },
+      { idx: 2, n: [ 0, 1, 0], u: [1, 0, 0], v: [0, 0, 1], check: h => h[1] ===  1 },
+      { idx: 3, n: [ 0,-1, 0], u: [1, 0, 0], v: [0, 0,-1], check: h => h[1] === -1 },
+      { idx: 4, n: [ 0, 0, 1], u: [1, 0, 0], v: [0, 1, 0], check: h => h[2] ===  1 },
+      { idx: 5, n: [ 0, 0,-1], u: [-1,0, 0], v: [0, 1, 0], check: h => h[2] === -1 }
+    ];
+
+    function transformPt(m, p) {
+      return [
+        m[0]*p[0] + m[4]*p[1] + m[8]*p[2] + m[12],
+        m[1]*p[0] + m[5]*p[1] + m[9]*p[2] + m[13],
+        m[2]*p[0] + m[6]*p[1] + m[10]*p[2] + m[14]
+      ];
+    }
+
+    let lastTime = performance.now();
+    let totalTime = 0;
+
+    function renderFallback(now) {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.floor(window.innerWidth * dpr);
+      canvas.height = Math.floor(window.innerHeight * dpr);
+      const w = canvas.width, h = canvas.height;
+
+      const dt = Math.min((now - lastTime) / 1000, 0.05);
+      lastTime = now;
+      totalTime += dt;
+      stepStateMachine(dt);
+
+      const grad = ctx.createRadialGradient(w * 0.5, h * 0.5, w * 0.05, w * 0.5, h * 0.5, Math.max(w, h) * 0.65);
+      grad.addColorStop(0, '#222a42');
+      grad.addColorStop(1, '#090b12');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, w, h);
+
+      const spinY = totalTime * 0.58 + 0.68;
+      const tiltX = 0.46 + 0.24 * Math.sin(totalTime * 0.43);
+      const rollZ = 0.12 * Math.cos(totalTime * 0.31);
+      const globalRot = mat4Multiply(
+        mat4FromRotationAxis(0, tiltX),
+        mat4Multiply(mat4FromRotationAxis(1, spinY), mat4FromRotationAxis(2, rollZ))
+      );
+
+      let sliceRotMat = null;
+      if (currentMove) {
+        const progress = Math.min(currentMove.elapsed / currentMove.duration, 1.0);
+        const angle = currentMove.dir * easeInOutCubic(progress) * (Math.PI / 2);
+        sliceRotMat = mat4FromRotationAxis(currentMove.axis, angle);
+      }
+
+      const quads = [];
+      const s = 0.47;
+      const st = 0.39;
+      for (let i = 0; i < cubies.length; i++) {
+        const c = cubies[i];
+        let localMat = mat4FromCubie(c.pos, c.rot, 0.985);
+        if (currentMove && c.pos[currentMove.axis] === currentMove.layer) {
+          localMat = mat4Multiply(sliceRotMat, localMat);
+        }
+        const worldMat = mat4Multiply(globalRot, localMat);
+        for (let f = 0; f < 6; f++) {
+          const fd = FACE_DEFS[f];
+          const center = transformPt(worldMat, [fd.n[0]*s, fd.n[1]*s, fd.n[2]*s]);
+          const wn = [
+            worldMat[0]*fd.n[0] + worldMat[4]*fd.n[1] + worldMat[8]*fd.n[2],
+            worldMat[1]*fd.n[0] + worldMat[5]*fd.n[1] + worldMat[9]*fd.n[2],
+            worldMat[2]*fd.n[0] + worldMat[6]*fd.n[1] + worldMat[10]*fd.n[2]
+          ];
+          if (wn[2] <= -0.15) continue;
+          const pts = [
+            [-s, -s], [s, -s], [s, s], [-s, s]
+          ].map(([u, v]) => transformPt(worldMat, [
+            fd.n[0]*s + fd.u[0]*u + fd.v[0]*v,
+            fd.n[1]*s + fd.u[1]*u + fd.v[1]*v,
+            fd.n[2]*s + fd.u[2]*u + fd.v[2]*v
+          ]));
+          const stickerPts = fd.check(c.home) ? [
+            [-st, -st], [st, -st], [st, st], [-st, st]
+          ].map(([u, v]) => transformPt(worldMat, [
+            fd.n[0]*(s+0.005) + fd.u[0]*u + fd.v[0]*v,
+            fd.n[1]*(s+0.005) + fd.u[1]*u + fd.v[1]*v,
+            fd.n[2]*(s+0.005) + fd.u[2]*u + fd.v[2]*v
+          ])) : null;
+          quads.push({ z: center[2], pts, stickerPts, color: HEX_COLORS[fd.idx] });
+        }
+      }
+
+      quads.sort((a, b) => a.z - b.z);
+      const scale = Math.min(w, h) * 1.18;
+      const camZ = 7.4;
+      const projPt = p => {
+        const d = camZ - p[2];
+        return [w * 0.5 + (p[0] / d) * scale, h * 0.5 - (p[1] / d) * scale];
+      };
+
+      for (const q of quads) {
+        ctx.beginPath();
+        q.pts.map(projPt).forEach((p, idx) => idx ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
+        ctx.closePath();
+        ctx.fillStyle = '#141720';
+        ctx.fill();
+        ctx.strokeStyle = '#090b10';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        if (q.stickerPts) {
+          ctx.beginPath();
+          q.stickerPts.map(projPt).forEach((p, idx) => idx ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
+          ctx.closePath();
+          ctx.fillStyle = q.color;
+          ctx.fill();
+        }
+      }
+
+      requestAnimationFrame(renderFallback);
+    }
+
+    requestAnimationFrame(renderFallback);
+  }
 })();
 </script>
 </body>

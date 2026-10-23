@@ -1,129 +1,170 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#02040b">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#030411">
 <title>Solar System</title>
 <style>
-*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#02040b}canvas{display:block;width:100%;height:100%}
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #030411; }
+  canvas { display: block; width: 100%; height: 100%; }
 </style>
 </head>
 <body>
-<canvas aria-label="An animated view of the Sun and all eight planets orbiting through space"></canvas>
+<canvas aria-label="An animated solar system with the Sun and all eight planets orbiting in a field of stars." role="img"></canvas>
 <script>
-'use strict';
 (() => {
-  const canvas=document.querySelector('canvas'),ctx=canvas.getContext('2d',{alpha:false});
-  const TAU=Math.PI*2,clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
-  let W,H,D,scale,focal,background,last=0,elapsed=0;
-  let seed=49173;
-  const rand=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296};
-  const mix=(a,b,t)=>a+(b-a)*t;
-  const norm=a=>{const l=Math.hypot(...a);return a.map(v=>v/l)};
-  const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
-  const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
-  function hash(x,y){let n=Math.imul(x,374761393)+Math.imul(y,668265263);n=Math.imul(n^(n>>>13),1274126177);return ((n^(n>>>16))>>>0)/4294967295}
-  function noise(x,y){const ix=Math.floor(x),iy=Math.floor(y);let u=x-ix,v=y-iy;u=u*u*(3-2*u);v=v*v*(3-2*v);return mix(mix(hash(ix,iy),hash(ix+1,iy),u),mix(hash(ix,iy+1),hash(ix+1,iy+1),u),v)}
-  function fbm(x,y){return noise(x,y)*.55+noise(x*2,y*2)*.27+noise(x*4,y*4)*.12+noise(x*8,y*8)*.06}
-  const planets=[
-    {name:'Mercury',orbit:116,r:6.2,speed:.24,phase:2.5,kind:0,color:[154,145,131]},
-    {name:'Venus',orbit:163,r:10.7,speed:.175,phase:4.2,kind:1,color:[220,178,110]},
-    {name:'Earth',orbit:215,r:11.5,speed:.13,phase:.8,kind:2,color:[53,128,215],atmos:[67,157,255]},
-    {name:'Mars',orbit:270,r:8.2,speed:.105,phase:3.65,kind:3,color:[204,91,54]},
-    {name:'Jupiter',orbit:354,r:32,speed:.057,phase:5.65,kind:4,color:[204,164,122]},
-    {name:'Saturn',orbit:449,r:26,speed:.043,phase:2.35,kind:5,color:[212,190,139],ring:true},
-    {name:'Uranus',orbit:550,r:18,speed:.03,phase:4.05,kind:6,color:[126,210,217],atmos:[112,218,235]},
-    {name:'Neptune',orbit:650,r:17.5,speed:.023,phase:.4,kind:7,color:[55,104,224],atmos:[64,119,255]}
+  'use strict';
+  const canvas = document.querySelector('canvas');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const TAU = Math.PI * 2;
+  let width, height, dpr, unit, sky;
+  let seed = 8217;
+  const random = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+  const stars = Array.from({length: 1000}, () => ({x: random(), y: random(), r: .25 + random() * 1.2, a: .2 + random() * .7, phase: random() * TAU}));
+  const planets = [
+    {name:'Mercury', orbit:88, size:4.5, speed:.36, phase:.5, color:'#b7a69d', type:0},
+    {name:'Venus', orbit:122, size:8.5, speed:.265, phase:2.6, color:'#ffcb70', type:1},
+    {name:'Earth', orbit:161, size:10, speed:.205, phase:4.1, color:'#339fff', type:2},
+    {name:'Mars', orbit:202, size:7, speed:.166, phase:5.7, color:'#ff683b', type:3},
+    {name:'Jupiter', orbit:264, size:25, speed:.094, phase:3.2, color:'#ffbd83', type:4},
+    {name:'Saturn', orbit:333, size:21, speed:.069, phase:.7, color:'#ffe0a2', type:5},
+    {name:'Uranus', orbit:401, size:14, speed:.048, phase:4.9, color:'#6af7eb', type:6},
+    {name:'Neptune', orbit:466, size:14, speed:.038, phase:2, color:'#447bff', type:7}
   ];
-  function texture(p){
-    const w=512,h=256,data=new Uint8ClampedArray(w*h*3);
-    for(let y=0;y<h;y++)for(let x=0;x<w;x++){
-      let u=x/w,v=y/h,n=fbm(u*15+31,v*11+12),c=p.color.slice();
-      if(p.kind===0||p.kind===3){let f=.67+n*.55;const crater=noise(u*105,v*60);f*=crater<.3?.77:1;c=c.map(z=>z*f);if(p.kind===3&&Math.abs(v-.5)>.43)c=[207,186,159]}
-      else if(p.kind===1){let f=.87+.13*Math.sin(v*46+n*9)+n*.14;c=c.map(z=>z*f)}
-      else if(p.kind===2){
-        const land=fbm(u*7+12,v*6+4)+.12*Math.sin(u*22+v*9);
-        if(land>.56){let f=fbm(u*28,v*24);c=f>.53?[134*f+38,126*f+53,57*f+25]:[39+f*35,80+f*54,40+f*26]}
-        else c=[12+n*16,47+n*47,92+n*80];
-        const ice=clamp((Math.abs(v-.5)-.39)*15,0,1);c=c.map(z=>mix(z,221,ice));
-        let cloud=clamp((fbm(u*22+noise(u*7,v*8)*2,v*18)-.56)*5,0,.86);c=c.map(z=>mix(z,242,cloud));
-      } else if(p.kind===4||p.kind===5){
-        let bands=Math.sin(v*95+noise(u*8,v*12)*2)*.5+Math.sin(v*180+n*3)*.23;
-        const f=.83+bands*.17+n*.23;c=c.map(z=>z*f);
-        if(p.kind===4){let dx=(u-.64)*7,dy=(v-.61)*24,storm=Math.exp(-(dx*dx+dy*dy)*2);c=c.map((z,i)=>mix(z,[165,82,50][i],storm*.85));if(Math.sin(v*51+n*2)>.6)c=c.map(z=>mix(z,238,.25))}
-      } else {let f=.85+n*.14+Math.sin(v*68+n*3)*.025;c=c.map(z=>z*f);if(p.kind===7){const s=Math.exp(-(((u-.3)*12)**2+((v-.59)*28)**2));c=c.map(z=>z*(1-s*.32))}}
-      const i=(y*w+x)*3;data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];
-    }return data;
+  // Distances and sizes are composed for visibility rather than to physical scale.
+  function noise(x,y,z=0) {
+    return (Math.sin(x*2.7 + Math.sin(y*3.4+z)*1.8) + Math.sin(y*5.1-z*2+Math.cos(x*3.2))* .5 + Math.sin(x*11.3+y*7.1+z)*.22)/1.72;
   }
-  planets.forEach(p=>{p.texture=texture(p);p.sprite=document.createElement('canvas');p.sc=p.sprite.getContext('2d');});
-  const stars=Array.from({length:1300},()=>({x:rand(),y:rand(),r:rand(),b:rand(),t:rand()*TAU}));
-  const dust=Array.from({length:780},()=>({a:rand()*TAU,r:299+rand()*22,y:(rand()-.5)*6,size:.3+rand()*.8}));
-  function resize(){W=innerWidth;H=innerHeight;D=Math.min(devicePixelRatio||1,2);canvas.width=Math.round(W*D);canvas.height=Math.round(H*D);ctx.setTransform(D,0,0,D,0,0);scale=Math.min(W,H)/1080;focal=Math.min(W,H)*1.24;
-    background=document.createElement('canvas');background.width=W*D;background.height=H*D;const b=background.getContext('2d');b.scale(D,D);b.fillStyle='#02040a';b.fillRect(0,0,W,H);
-    let g=b.createRadialGradient(W*.47,H*.46,0,W*.5,H*.5,Math.max(W,H)*.7);g.addColorStop(0,'#0b1424');g.addColorStop(.5,'#050a14');g.addColorStop(1,'#010208');b.fillStyle=g;b.fillRect(0,0,W,H);
-    // Faint interstellar clouds, created entirely from canvas gradients.
-    for(let i=0;i<21;i++){let x=W*(.1+i/24),y=H*(.87-i/31),r=Math.min(W,H)*.24;g=b.createRadialGradient(x,y,0,x,y,r);g.addColorStop(0,`rgba(${i%2?30:38},${i%2?43:30},70,.026)`);g.addColorStop(1,'rgba(0,0,0,0)');b.fillStyle=g;b.fillRect(x-r,y-r,r*2,r*2)}
+  function globe(p) {
+    const s = 128, c = document.createElement('canvas'); c.width=c.height=s;
+    const g=c.getContext('2d'), data=g.createImageData(s,s);
+    for (let y=0;y<s;y++) for(let x=0;x<s;x++) {
+      const nx=(x+.5-s/2)/(s/2), ny=(y+.5-s/2)/(s/2), rr=nx*nx+ny*ny;
+      if(rr>1) continue;
+      const nz=Math.sqrt(1-rr), lon=Math.atan2(nx,nz), lat=Math.asin(ny);
+      const n=noise(lon*2,lat*3,1.4), grain=noise(lon*19,lat*24,2);
+      let rgb;
+      if(p.type===0) { const v=137+n*43+grain*20; rgb=[v*1.08,v,v*.94]; }
+      if(p.type===1) { const v=noise(lon*2+lat*4,lat*9); rgb=[246+v*9,180+v*36,82+v*39]; }
+      if(p.type===2) {
+        const land=noise(lon*2.1+.7,lat*2.8,3.1)+noise(lon*5,lat*6,1)*.22;
+        rgb=land>.12 ? [37+land*50,133+land*55,73+land*18] : [12,83+n*24,193+n*40];
+        const cloud=noise(lon*3+lat*3,lat*8,5);
+        if(cloud>.43) {const a=(cloud-.43)*1.2; rgb=rgb.map(v=>v*(1-a)+255*a);}
+        if(Math.abs(lat)>1.15+n*.1) rgb=[220,246,255];
+      }
+      if(p.type===3) rgb=[215+n*42+grain*9,79+n*31,39+n*20];
+      if(p.type===4) {
+        const band=Math.sin(lat*37+Math.sin(lon*5+lat*9)*.6)+Math.sin(lat*73)*.3;
+        rgb=[222+band*21,161+band*36,110+band*35];
+        const spot=Math.pow((lon-.37)/.34,2)+Math.pow((lat-.32)/.15,2);
+        if(spot<1) rgb=[194+spot*25,77+spot*35,45+spot*25];
+      }
+      if(p.type===5) { const b=Math.sin(lat*43+Math.sin(lon*3)*.3); rgb=[230+b*14,194+b*17,131+b*24]; }
+      if(p.type===6) {const b=Math.sin(lat*24)*3; rgb=[84+b,219+b,223+b];}
+      if(p.type===7) {const b=Math.sin(lat*26+Math.sin(lon*4)*.3); rgb=[36+b*8,90+b*15,232+b*16];}
+      const limb=.65+.35*nz, i=(y*s+x)*4;
+      data.data[i]=rgb[0]*limb; data.data[i+1]=rgb[1]*limb; data.data[i+2]=rgb[2]*limb;
+      data.data[i+3]=Math.min(1,(1-Math.sqrt(rr))*s)*255;
+    }
+    g.putImageData(data,0,0); return c;
+  }
+  planets.forEach(p=>p.texture=globe(p));
+  const dust=Array.from({length:500},()=>({a:random()*TAU,r:222+random()*14,h:(random()-.5)*5,s:random()*.8+.25}));
+  function resize() {
+    width=innerWidth; height=innerHeight; dpr=Math.min(devicePixelRatio||1,2);
+    canvas.width=Math.round(width*dpr); canvas.height=Math.round(height*dpr);
+    unit=Math.min(width,height)/1080;
+    sky=document.createElement('canvas'); sky.width=canvas.width; sky.height=canvas.height;
+    const g=sky.getContext('2d'); g.scale(dpr,dpr); g.fillStyle='#030411';g.fillRect(0,0,width,height);
+    for(const neb of [[.2,.35,.5,'#181447'],[.78,.65,.42,'#072b3c'],[.55,.8,.3,'#171037']]) {
+      const r=Math.max(width,height)*neb[2], grad=g.createRadialGradient(width*neb[0],height*neb[1],0,width*neb[0],height*neb[1],r);
+      grad.addColorStop(0,neb[3]);grad.addColorStop(1,'#03041100');g.fillStyle=grad;g.fillRect(0,0,width,height);
+    }
+    for(const s of stars) {g.globalAlpha=s.a;g.fillStyle=s.phase>4?'#97caff':'#f4edff';g.beginPath();g.arc(s.x*width,s.y*height,s.r*Math.max(.65,unit),0,TAU);g.fill();}
+    g.globalAlpha=1;
   }
   addEventListener('resize',resize);resize();
-  let camera,right,up,forward;
-  function setupCamera(t){const az=.12+Math.sin(t*.018)*.18,el=.76+Math.sin(t*.027)*.065,dist=1760;camera=[Math.sin(az)*Math.cos(el)*dist,Math.sin(el)*dist,Math.cos(az)*Math.cos(el)*dist];forward=norm(camera.map(z=>-z));right=norm(cross(forward,[0,1,0]));up=cross(right,forward)}
-  function project(p){const v=[p[0]-camera[0],p[1]-camera[1],p[2]-camera[2]],z=dot(v,forward),k=focal/z;return {x:W*.5+dot(v,right)*k,y:H*.49-dot(v,up)*k,k,z}}
-  function orbitPath(radius){ctx.beginPath();for(let j=0;j<=180;j++){const a=j/180*TAU,p=project([Math.cos(a)*radius,0,Math.sin(a)*radius]);j?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y)}ctx.stroke()}
-  function glow(x,y,r,color,strength){let g=ctx.createRadialGradient(x,y,r*.65,x,y,r*4);g.addColorStop(0,`rgba(${color},${strength})`);g.addColorStop(.34,`rgba(${color},${strength*.23})`);g.addColorStop(1,`rgba(${color},0)`);ctx.fillStyle=g;ctx.fillRect(x-r*4,y-r*4,r*8,r*8)}
-  function drawPlanet(p,t){
-    const q=project(p.pos),r=p.r*q.k;
-    if(p.atmos)glow(q.x,q.y,r,p.atmos.join(','),.13);
-    if(p.ring)drawRings(p,false);
-    const size=Math.max(16,Math.ceil(r*D)*2+4),s=p.sprite;if(s.width!==size){s.width=s.height=size;p.image=p.sc.createImageData(size,size)}
-    const data=p.image.data,rr=(size-2)/2,light=norm(p.pos.map(v=>-v));
-    const lx=dot(light,right),ly=dot(light,up),lz=dot(light,forward)*-1;
-    const spin=t*(p.kind===2?.09:.055)+p.phase;
-    for(let y=0;y<size;y++)for(let x=0;x<size;x++){
-      const nx=(x-size/2+.5)/rr,ny=-(y-size/2+.5)/rr,r2=nx*nx+ny*ny,i=(y*size+x)*4;
-      if(r2>1){data[i+3]=0;continue}const nz=Math.sqrt(1-r2);
-      const wx=right[0]*nx+up[0]*ny-forward[0]*nz,wy=right[1]*nx+up[1]*ny-forward[1]*nz,wz=right[2]*nx+up[2]*ny-forward[2]*nz;
-      const u=((Math.atan2(wz,wx)/TAU+spin/TAU)%1+1)%1,v=Math.acos(clamp(wy,-1,1))/Math.PI;
-      const ti=(Math.min(255,Math.floor(v*256))*512+Math.floor(u*512))*3;
-      const diffuse=Math.max(0,nx*lx+ny*ly+nz*lz),lighting=.035+.965*Math.pow(diffuse,.68),rim=Math.pow(1-nz,3)*Math.pow(diffuse,.3);
-      for(let c=0;c<3;c++)data[i+c]=p.texture[ti+c]*lighting+(p.atmos?p.atmos[c]*rim*.23:0);
-      data[i+3]=clamp((1-r2)*rr*1.5,0,1)*255;
-    }
-    p.sc.putImageData(p.image,0,0);ctx.drawImage(s,q.x-r-1/D,q.y-r-1/D,r*2+2/D,r*2+2/D);
-    if(p.ring)drawRings(p,true);
+  let yaw, tilt;
+  function project(x,y,z=0) {
+    const xx=x*Math.cos(yaw)-y*Math.sin(yaw), yy=x*Math.sin(yaw)+y*Math.cos(yaw);
+    return {x:xx, y:yy*Math.sin(tilt)-z*Math.cos(tilt), z:yy*Math.cos(tilt)+z*Math.sin(tilt)};
   }
-  function drawRings(p,front){
-    // Ring particles lie in a tilted plane and share the planet's perspective.
-    const tilt=.38,segments=150;
-    for(let band=0;band<23;band++){
-      const rad=p.r*(1.33+band*.041),alpha=band===11||band===12?.035:.25+.2*Math.sin(band*1.9)**2;
-      ctx.beginPath();let started=false;
-      for(let j=0;j<=segments;j++){const a=j/segments*TAU,dx=Math.cos(a)*rad,dz=Math.sin(a)*rad,point=[p.pos[0]+dx,p.pos[1]+dz*Math.sin(tilt),p.pos[2]+dz*Math.cos(tilt)],near=dot([dx,dz*Math.sin(tilt),dz*Math.cos(tilt)],forward)<0;
-        if(near!==front){started=false;continue}const q=project(point);if(!started){ctx.moveTo(q.x,q.y);started=true}else ctx.lineTo(q.x,q.y)}
-      ctx.strokeStyle=`rgba(${band<9?'179,154,116':'216,198,157'},${alpha})`;ctx.lineWidth=Math.max(.6,project(p.pos).k*p.r*.039);ctx.stroke();
+  function orbit(p,t) {const a=p.phase+t*p.speed;return project(Math.cos(a)*p.orbit,Math.sin(a)*p.orbit,Math.sin(a*2+p.phase)*p.orbit*.015);}
+  function ring(p,pos,front) {
+    ctx.lineWidth=.65;
+    for(let r=p.size*1.36;r<p.size*2.19;r+=.64) {
+      const gap=r/p.size;
+      if(gap>1.85 && gap<1.96)continue;
+      const opacity=.38+.22*Math.sin(r*3.2);
+      ctx.strokeStyle=`rgba(245,211,154,${opacity})`;
+      ctx.beginPath();let pen=false;
+      for(let i=0;i<=160;i++) {
+        const a=i/160*TAU, v=project(Math.cos(a)*r,Math.sin(a)*r*.92,Math.sin(a)*r*.38);
+        if((v.z>0)===front) {if(!pen)ctx.moveTo(pos.x+v.x,pos.y+v.y);else ctx.lineTo(pos.x+v.x,pos.y+v.y);pen=true;}else pen=false;
+      }
+      ctx.stroke();
     }
   }
-  const sunSurface=document.createElement('canvas');sunSurface.width=sunSurface.height=200;const sunCtx=sunSurface.getContext('2d'),sunImage=sunCtx.createImageData(200,200);
-  function drawSun(t){
-    const q=project([0,0,0]),r=65*q.k;
-    ctx.save();ctx.globalCompositeOperation='screen';glow(q.x,q.y,r,'255,103,22',.32);glow(q.x,q.y,r*1.8,'255,151,49',.075);
-    let g=ctx.createRadialGradient(q.x,q.y,0,q.x,q.y,r*7);g.addColorStop(0,'rgba(255,167,64,.10)');g.addColorStop(.35,'rgba(205,89,20,.025)');g.addColorStop(1,'rgba(130,55,10,0)');ctx.fillStyle=g;ctx.fillRect(q.x-r*7,q.y-r*7,r*14,r*14);ctx.restore();
-    const d=sunImage.data;
-    for(let y=0;y<200;y++)for(let x=0;x<200;x++){const nx=(x-99.5)/98,ny=(y-99.5)/98,rs=nx*nx+ny*ny,i=(y*200+x)*4;if(rs>1){d[i+3]=0;continue}const z=Math.sqrt(1-rs),n=fbm(nx*15+t*.13,ny*15),fine=noise(nx*73+t*.15,ny*73),f=.78+z*.15+n*.14;d[i]=255;d[i+1]=(150+n*74+fine*12)*f;d[i+2]=(33+n*63)*f;d[i+3]=clamp((1-rs)*98,0,1)*255}
-    sunCtx.putImageData(sunImage,0,0);ctx.drawImage(sunSurface,q.x-r,q.y-r,r*2,r*2);
-    ctx.save();ctx.globalCompositeOperation='screen';ctx.strokeStyle='rgba(255,182,66,.28)';ctx.lineWidth=scale*1.2;
-    for(let j=0;j<9;j++){const a=j*2.399+t*.015,rr=r*(1.02+.018*Math.sin(t*.6+j));ctx.beginPath();ctx.ellipse(q.x+Math.cos(a)*rr,q.y+Math.sin(a)*rr,r*.13,r*.035,a+Math.PI/2,0,Math.PI);ctx.stroke()}ctx.restore();
+  function planet(p,pos) {
+    const r=p.size;
+    if(p.type===5)ring(p,pos,false);
+    ctx.save();ctx.translate(pos.x,pos.y);
+    if(p.type===2 || p.type>5) {
+      const halo=ctx.createRadialGradient(0,0,r*.85,0,0,r*1.24);
+      halo.addColorStop(0,p.color+'70');halo.addColorStop(1,p.color+'00');
+      ctx.fillStyle=halo;ctx.beginPath();ctx.arc(0,0,r*1.24,0,TAU);ctx.fill();
+    }
+    ctx.drawImage(p.texture,-r,-r,r*2,r*2);
+    const angle=Math.atan2(-pos.y,-pos.x), lx=Math.cos(angle),ly=Math.sin(angle);
+    ctx.save();ctx.beginPath();ctx.arc(0,0,r,0,TAU);ctx.clip();
+    const shade=ctx.createLinearGradient(lx*r,ly*r,-lx*r,-ly*r);
+    shade.addColorStop(0,'rgba(255,238,186,.13)');shade.addColorStop(.4,'rgba(0,2,18,.03)');shade.addColorStop(.72,'rgba(0,2,18,.45)');shade.addColorStop(1,'rgba(0,2,18,.91)');
+    ctx.fillStyle=shade;ctx.fillRect(-r,-r,r*2,r*2);ctx.restore();ctx.restore();
+    if(p.type===5)ring(p,pos,true);
   }
-  function frame(now){
-    if(last)elapsed+=Math.min((now-last)/1000,.05);last=now;const t=elapsed;setupCamera(t);
-    ctx.drawImage(background,0,0,W,H);
-    for(const s of stars){const x=((s.x*W+Math.sin(t*.018)*9*s.r)%W+W)%W,y=s.y*H+Math.cos(t*.015+s.t)*2;const b=(.22+s.b*.55)*(1+.12*Math.sin(t*.6+s.t));ctx.fillStyle=s.b>.88?`rgba(180,207,255,${b})`:`rgba(225,230,241,${b})`;ctx.beginPath();ctx.arc(x,y,(s.r>.98?1.45:.35+s.r*.62)*Math.max(.7,scale),0,TAU);ctx.fill();if(s.r>.996){ctx.fillStyle=`rgba(176,205,255,${b*.13})`;ctx.fillRect(x-4*scale,y-.4,8*scale,.8);ctx.fillRect(x-.4,y-4*scale,.8,8*scale)}}
-    ctx.lineWidth=Math.max(.5,scale*.7);ctx.strokeStyle='rgba(142,164,196,.14)';planets.forEach(p=>orbitPath(p.orbit));
-    for(const d of dust){const a=d.a+t*.019,q=project([Math.cos(a)*d.r,d.y,Math.sin(a)*d.r]);ctx.fillStyle='rgba(164,152,128,.28)';ctx.fillRect(q.x,q.y,d.size*q.k,d.size*q.k)}
-    const bodies=planets.map(p=>{const a=p.phase+t*p.speed;p.pos=[Math.cos(a)*p.orbit,Math.sin(a*2+p.phase)*p.orbit*.012,Math.sin(a)*p.orbit];return {p,z:project(p.pos).z}});bodies.push({p:null,z:project([0,0,0]).z});bodies.sort((a,b)=>b.z-a.z);for(const body of bodies)body.p?drawPlanet(body.p,t):drawSun(t);
-    // Subtle optical falloff keeps the eye on the warm central light.
-    const vignette=ctx.createRadialGradient(W*.5,H*.49,Math.min(W,H)*.29,W*.5,H*.5,Math.max(W,H)*.73);vignette.addColorStop(0,'rgba(0,0,0,0)');vignette.addColorStop(1,'rgba(0,0,4,.48)');ctx.fillStyle=vignette;ctx.fillRect(0,0,W,H);
-    requestAnimationFrame(frame);
+  function sun(t) {
+    const r=40;
+    ctx.globalCompositeOperation='screen';
+    const glow=ctx.createRadialGradient(0,0,r*.6,0,0,140);
+    glow.addColorStop(0,'#ffcf69a0');glow.addColorStop(.25,'#ff871b50');glow.addColorStop(.55,'#ff4d1415');glow.addColorStop(1,'#ff440000');
+    ctx.fillStyle=glow;ctx.beginPath();ctx.arc(0,0,140,0,TAU);ctx.fill();
+    for(let i=0;i<65;i++) {
+      const a=i/65*TAU+t*.025, inner=r-3, outer=r+5+Math.sin(i*7.3+t*1.1)*3;
+      ctx.strokeStyle='rgba(255,155,26,.22)';ctx.lineWidth=1.6;ctx.beginPath();ctx.moveTo(Math.cos(a)*inner,Math.sin(a)*inner);ctx.quadraticCurveTo(Math.cos(a+.04)*(outer+5),Math.sin(a+.04)*(outer+5),Math.cos(a+.09)*inner,Math.sin(a+.09)*inner);ctx.stroke();
+    }
+    ctx.globalCompositeOperation='source-over';
+    const body=ctx.createRadialGradient(-12,-14,1,0,0,r);
+    body.addColorStop(0,'#ffffdf');body.addColorStop(.42,'#fff18a');body.addColorStop(.8,'#ffc12b');body.addColorStop(1,'#ff8e13');
+    ctx.fillStyle=body;ctx.beginPath();ctx.arc(0,0,r,0,TAU);ctx.fill();
+    ctx.save();ctx.beginPath();ctx.arc(0,0,r-1,0,TAU);ctx.clip();
+    for(let i=0;i<95;i++) {
+      const a=i*2.39996, rad=Math.sqrt(i/95)*r, x=Math.cos(a+t*.025)*rad,y=Math.sin(a+t*.025)*rad;
+      ctx.fillStyle=`rgba(255,116,12,${.04+.04*Math.sin(i+t)})`;ctx.beginPath();ctx.ellipse(x,y,2.8,1.4,a,0,TAU);ctx.fill();
+    }
+    ctx.restore();
+  }
+  const start=performance.now();
+  function frame(now) {
+    const t=(now-start)/1000;
+    yaw=.12+Math.sin(t*.035)*.13;tilt=.68+Math.sin(t*.028)*.075;
+    ctx.setTransform(dpr,0,0,dpr,0,0);ctx.drawImage(sky,0,0,width,height);
+    ctx.save();ctx.translate(width/2+Math.sin(t*.041)*5*unit,height/2+Math.cos(t*.033)*9*unit);ctx.scale(unit,unit);
+    // The orbital plane turns gently under a drifting, inclined camera.
+    for(const p of planets) {
+      ctx.beginPath();for(let i=0;i<=180;i++) {const a=i/180*TAU,v=project(Math.cos(a)*p.orbit,Math.sin(a)*p.orbit);if(i===0)ctx.moveTo(v.x,v.y);else ctx.lineTo(v.x,v.y);}
+      ctx.strokeStyle=p.type>5?'rgba(91,142,213,.18)':'rgba(144,166,207,.19)';ctx.lineWidth=.85;ctx.stroke();
+      const a=p.phase+t*p.speed;ctx.beginPath();
+      for(let i=0;i<=50;i++) {const q=a-.42+i/50*.42,v=project(Math.cos(q)*p.orbit,Math.sin(q)*p.orbit);if(i===0)ctx.moveTo(v.x,v.y);else ctx.lineTo(v.x,v.y);}
+      ctx.strokeStyle=p.color+'45';ctx.lineWidth=1.5;ctx.stroke();
+    }
+    for(const d of dust) {const a=d.a+t*.025,v=project(Math.cos(a)*d.r,Math.sin(a)*d.r,d.h);ctx.fillStyle='rgba(167,177,211,.3)';ctx.fillRect(v.x,v.y,d.s,d.s);}
+    const bodies=planets.map(p=>({p,pos:orbit(p,t)}));
+    bodies.push({p:null,pos:{x:0,y:0,z:0}});bodies.sort((a,b)=>a.pos.z-b.pos.z);
+    for(const b of bodies) {if(b.p)planet(b.p,b.pos);else sun(t);}
+    ctx.restore();requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
 })();

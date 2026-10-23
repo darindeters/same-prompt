@@ -2,246 +2,239 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Fireworks on the River</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#030516">
+<title>Midnight Fireworks</title>
 <style>
   * { box-sizing: border-box; }
-  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #02040e; }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #030516; }
   canvas { display: block; width: 100%; height: 100%; }
 </style>
 </head>
 <body>
-<canvas aria-label="Colorful fireworks bloom above a city skyline and shimmer in the river below."></canvas>
+<canvas aria-label="Colorful fireworks over a city skyline reflected in a river at night" role="img"></canvas>
 <script>
 (() => {
   'use strict';
   const canvas = document.querySelector('canvas');
   const ctx = canvas.getContext('2d', { alpha: false });
-  const backdrop = document.createElement('canvas');
+  const scene = document.createElement('canvas');
+  const s = scene.getContext('2d');
+  const trails = document.createElement('canvas');
+  const t = trails.getContext('2d');
   const city = document.createElement('canvas');
-  const fireworks = document.createElement('canvas');
-  const b = backdrop.getContext('2d');
   const c = city.getContext('2d');
-  const f = fireworks.getContext('2d');
   const TAU = Math.PI * 2;
-  const rand = (a, z) => a + Math.random() * (z - a);
+  const rand = (a, b) => a + Math.random() * (b - a);
   const pick = a => a[Math.floor(Math.random() * a.length)];
-  let W, H, horizon, scale, pixelRatio, last = 0, elapsed = 0, nextLaunch = .15;
-  let sparks = [], rockets = [], embers = [], stars = [], buildings = [];
-  const palettes = [
-    [344, 26], [190, 208], [38, 48], [276, 316], [155, 176], [12, 38], [215, 278]
-  ];
-  function size() {
-    const width = innerWidth, height = innerHeight;
-    scale = Math.min(width, height) / 1080;
-    W = width / scale; H = height / scale; horizon = H * .665;
-    pixelRatio = Math.min(devicePixelRatio || 1, 2);
-    for (const el of [canvas, backdrop, city, fireworks]) {
-      el.width = Math.round(width * pixelRatio);
-      el.height = Math.round(height * pixelRatio);
-      el.getContext('2d').setTransform(scale * pixelRatio, 0, 0, scale * pixelRatio, 0, 0);
-    }
-    sparks = []; rockets = []; embers = [];
-    paintBackdrop(); paintCity();
-    burst(W * .28, horizon * .37, 38, 'willow', .9);
-    burst(W * .72, horizon * .26, 322, 'peony', .85);
-    burst(W * .53, horizon * .53, 185, 'ring', .65);
+  const palettes = [[335, 20], [185, 225], [275, 320], [42, 18], [145, 180], [12, 48]];
+  let w, h, scale, horizon, stars, buildings, last = 0, clock = 0, next = 0.2, count = 0;
+  let particles = [], rockets = [], flashes = [];
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.6);
+    w = Math.round(innerWidth * dpr); h = Math.round(innerHeight * dpr);
+    for (const layer of [canvas, scene, trails, city]) { layer.width = w; layer.height = h; }
+    scale = Math.min(w, h); horizon = h * 0.685;
+    stars = Array.from({ length: 140 }, () => ({ x: rand(0, w), y: rand(0, horizon * 0.88), r: rand(0.35, 1.1) * scale / 1080, a: rand(0.12, 0.65), phase: rand(0, TAU) }));
+    particles = []; rockets = []; flashes = [];
+    buildCity();
+    burst(w * 0.28, h * 0.27, 'peony', [335, 20]);
+    burst(w * 0.73, h * 0.18, 'ring', [185, 225]);
+    launch(w * 0.57, h * 0.31, 'willow', [42, 18]);
   }
-  function paintBackdrop() {
-    const sky = b.createLinearGradient(0, 0, 0, H);
-    sky.addColorStop(0, '#020411'); sky.addColorStop(.39, '#080c22');
-    sky.addColorStop(.66, '#16152b'); sky.addColorStop(1, '#020712');
-    b.fillStyle = sky; b.fillRect(0, 0, W, H);
-    const haze = b.createRadialGradient(W * .51, horizon, 0, W * .51, horizon, W * .65);
-    haze.addColorStop(0, '#56334830'); haze.addColorStop(1, '#0c122000');
-    b.fillStyle = haze; b.fillRect(0, 0, W, H);
-    stars = Array.from({ length: Math.floor(W * horizon / 2200) }, () => ({
-      x: rand(0, W), y: rand(0, horizon * .88), r: rand(.4, 1.25), phase: rand(0, TAU)
-    }));
-    const mx = W * .845, my = horizon * .145;
-    const glow = b.createRadialGradient(mx, my, 1, mx, my, 62);
-    glow.addColorStop(0, '#a7c9f01a'); glow.addColorStop(1, '#a7c9f000');
-    b.fillStyle = glow; b.fillRect(mx - 62, my - 62, 124, 124);
-    b.fillStyle = '#c4d1e0'; b.beginPath(); b.arc(mx, my, 13, 0, TAU); b.fill();
-    b.fillStyle = '#080c1d'; b.beginPath(); b.arc(mx - 5, my - 4, 12, 0, TAU); b.fill();
-  }
-  function paintCity() {
-    c.clearRect(0, 0, W, H); buildings = [];
-    // A distant, softer layer gives the waterfront depth.
-    for (let x = -10; x < W; ) {
-      const width = rand(15, 49), height = rand(28, 104);
-      c.fillStyle = '#131827'; c.fillRect(x, horizon - height - 14, width, height + 14);
-      x += width + rand(1, 6);
+
+  function buildCity() {
+    c.clearRect(0, 0, w, h);
+    const u = scale / 1080;
+    buildings = [];
+    // Distant towers form a softer second layer behind the waterfront.
+    for (let x = -20 * u; x < w;) {
+      const bw = rand(22, 60) * u, bh = rand(30, 105) * u;
+      c.fillStyle = '#11162e'; c.fillRect(x, horizon - bh, bw, bh);
+      x += bw + rand(2, 9) * u;
     }
-    for (let x = -15; x < W; ) {
-      const width = rand(25, 65);
-      const position = x / W;
-      let height = rand(55, 161);
-      if (position > .4 && position < .59) height += rand(35, 95);
-      buildings.push({ x, width, height });
-      c.fillStyle = pick(['#060b16', '#080d19', '#0a101c']);
-      c.fillRect(x, horizon - height, width, height + 8);
-      if (Math.random() < .45) {
-        c.fillRect(x + width * .18, horizon - height - 9, width * .64, 12);
-        c.fillStyle = '#293040'; c.fillRect(x + width * .5, horizon - height - 28, 1, 20);
+    for (let x = -12 * u; x < w;) {
+      const bw = rand(26, 69) * u;
+      const center = (x + bw / 2) / w;
+      let bh = rand(55, 155) * u;
+      if (center > 0.42 && center < 0.6) bh += 65 * u;
+      const top = horizon - bh;
+      c.fillStyle = '#050a18'; c.fillRect(x, top, bw, bh);
+      c.fillStyle = '#0b1226'; c.fillRect(x + bw * 0.74, top, bw * 0.26, bh);
+      if (Math.random() < 0.5) {
+        c.fillStyle = '#060b19'; c.fillRect(x + bw * 0.22, top - 10 * u, bw * 0.56, 12 * u);
       }
-      for (let yy = horizon - height + 11; yy < horizon - 10; yy += 11) {
-        for (let xx = x + 7; xx < x + width - 5; xx += 9) {
-          if (Math.random() < .43) continue;
-          c.fillStyle = Math.random() < .17 ? '#6999ae70' : pick(['#e5ba7468', '#f5cf897c', '#a9956540']);
-          c.fillRect(xx, yy, 2.5, 4);
+      if (bh > 135 * u) {
+        c.strokeStyle = '#24314d'; c.lineWidth = u;
+        c.beginPath(); c.moveTo(x + bw / 2, top); c.lineTo(x + bw / 2, top - rand(15, 35) * u); c.stroke();
+        c.fillStyle = '#ff487c'; c.fillRect(x + bw / 2 - u, top - 19 * u, 2 * u, 2 * u);
+      }
+      for (let yy = top + 9 * u; yy < horizon - 5 * u; yy += 8 * u) {
+        for (let xx = x + 5 * u; xx < x + bw - 4 * u; xx += 7 * u) {
+          if (Math.random() > 0.51) {
+            c.fillStyle = Math.random() < 0.16 ? 'rgba(95,205,255,0.65)' : `rgba(255,209,135,${rand(0.2, 0.7)})`;
+            c.fillRect(xx, yy, 2.2 * u, 3 * u);
+          }
         }
       }
-      x += width + rand(2, 7);
+      buildings.push({x, top, bw, bh});
+      x += bw + rand(3, 12) * u;
     }
-    // A slim landmark with a luminous crown.
-    const tx = W * .565, top = horizon - 277;
-    c.fillStyle = '#070c17'; c.fillRect(tx - 21, top + 48, 42, 232);
-    c.beginPath(); c.moveTo(tx - 21, top + 48); c.lineTo(tx - 11, top + 25);
-    c.lineTo(tx + 11, top + 25); c.lineTo(tx + 21, top + 48); c.fill();
-    c.fillStyle = '#8299b8'; c.fillRect(tx - .6, top - 7, 1.2, 32);
-    c.fillStyle = '#b7cad8'; c.fillRect(tx - 12, top + 26, 24, 1);
-    for (let y = top + 54; y < horizon - 9; y += 9) {
-      c.fillStyle = '#a5bacc55'; c.fillRect(tx - 16, y, 32, 1);
+    // A slim illuminated landmark anchors the center of the skyline.
+    const lx = w * 0.535, ly = horizon - 265 * u;
+    c.fillStyle = '#070d1e';
+    c.beginPath(); c.moveTo(lx - 23*u, horizon); c.lineTo(lx - 18*u, ly + 45*u); c.lineTo(lx - 7*u, ly + 28*u); c.lineTo(lx, ly); c.lineTo(lx + 7*u, ly + 28*u); c.lineTo(lx + 18*u, ly + 45*u); c.lineTo(lx + 23*u, horizon); c.fill();
+    c.strokeStyle = '#547f9b'; c.lineWidth = 1.2 * u;
+    c.beginPath(); c.moveTo(lx, ly - 31*u); c.lineTo(lx, ly + 8*u); c.stroke();
+    c.strokeStyle = '#3b6d89';
+    c.beginPath(); c.moveTo(lx - 15*u, ly + 48*u); c.lineTo(lx - 20*u, horizon); c.moveTo(lx + 15*u, ly + 48*u); c.lineTo(lx + 20*u, horizon); c.stroke();
+    for (let yy = ly + 48*u; yy < horizon; yy += 8*u) {
+      c.fillStyle = 'rgba(138,222,255,0.45)'; c.fillRect(lx - 9*u, yy, 18*u, 1.2*u);
     }
-    c.fillStyle = '#020711'; c.fillRect(0, horizon - 3, W, 13);
-    c.fillStyle = '#b6a48560'; c.fillRect(0, horizon + 3, W, 1);
-    for (let x = 8; x < W; x += rand(22, 43)) {
-      c.fillStyle = '#f6cc8fa0'; c.fillRect(x, horizon - 2, 2, 2);
+    c.fillStyle = '#020610'; c.fillRect(0, horizon - 3*u, w, 8*u);
+    for (let x = 0; x < w; x += 17*u) {
+      c.fillStyle = 'rgba(255,206,131,0.85)'; c.fillRect(x, horizon - 2*u, 2*u, 1.5*u);
     }
   }
-  function spark(x, y, vx, vy, hue, life, radius, drag = .983, gravity = 32) {
-    sparks.push({ x, y, px: x, py: y, vx, vy, hue, life, max: life, radius, drag, gravity, twinkle: Math.random() });
+
+  function launch(x, y, shape, palette) {
+    rockets.push({ x: x + rand(-0.08, 0.08)*scale, y: horizon + 3, tx: x, ty: y, shape, palette, life: 0, duration: rand(0.7, 1.1), sx: x + rand(-0.09, 0.09)*scale, sy: horizon });
   }
-  function burst(x, y, hue, shape, power = 1) {
-    const count = shape === 'willow' ? 210 : shape === 'ring' ? 115 : 170;
-    const speed = rand(110, 150) * power;
-    for (let i = 0; i < count; i++) {
-      const a = i / count * TAU + rand(-.025, .025);
-      let vx, vy, life = rand(1.65, 2.7), drag = .982, gravity = 32;
-      let color = hue + rand(-8, 8);
+
+  function burst(x, y, shape, palette) {
+    flashes.push({x, y, hue: palette[0], life: 0.32});
+    const n = shape === 'willow' ? 145 : shape === 'heart' ? 110 : 165;
+    const radius = rand(0.105, 0.165) * scale;
+    for (let i = 0; i < n; i++) {
+      const a = TAU * i / n + rand(-0.025, 0.025);
+      let dx, dy, speed = radius * rand(0.83, 1.05);
       if (shape === 'heart') {
-        vx = 16 * Math.pow(Math.sin(a), 3) * speed / 18;
-        vy = -(13 * Math.cos(a) - 5 * Math.cos(2*a) - 2 * Math.cos(3*a) - Math.cos(4*a)) * speed / 18;
-        life = rand(2, 2.7);
-      } else if (shape === 'ring') {
-        vx = Math.cos(a) * speed; vy = Math.sin(a) * speed * .78;
-        if (i % 3 === 0) { vx *= .6; vy *= .6; color += 65; }
+        dx = Math.pow(Math.sin(a), 3) * radius;
+        dy = -(13*Math.cos(a) - 5*Math.cos(2*a) - 2*Math.cos(3*a) - Math.cos(4*a)) / 16 * radius;
       } else {
-        const radial = shape === 'willow' ? rand(.65, 1) : Math.sqrt(Math.random());
-        vx = Math.cos(a) * speed * radial; vy = Math.sin(a) * speed * radial;
-        if (shape === 'willow') { life = rand(2.7, 4.2); drag = .99; gravity = 43; color = hue + rand(-7, 7); }
-        if (shape === 'palm') {
-          const branch = Math.round(a / TAU * 9) / 9 * TAU;
-          vx = Math.cos(branch) * speed * radial; vy = Math.sin(branch) * speed * radial;
-          life = rand(2, 3.2); drag = .99;
-        }
+        if (shape === 'peony' || shape === 'willow') speed *= Math.sqrt(Math.random());
+        if (shape === 'star') speed *= 0.68 + 0.32 * Math.cos(a * 5);
+        dx = Math.cos(a) * speed;
+        dy = Math.sin(a) * speed * (shape === 'ring' ? 0.52 : 1);
       }
-      spark(x, y, vx, vy, color, life, rand(1.1, 2.1), drag, gravity);
+      const life = shape === 'willow' ? rand(2.1, 3.7) : rand(1.25, 2.35);
+      particles.push({x, y, vx: dx * 1.65, vy: dy * 1.65, life, total: life,
+        hue: i % 5 === 0 ? palette[1] : palette[0] + rand(-9, 9),
+        size: rand(1.1, 2.2) * scale / 1080, drag: shape === 'willow' ? 1.15 : 1.7,
+        gravity: (shape === 'willow' ? 29 : 22) * scale / 1080, flicker: rand(0, TAU), willow: shape === 'willow'});
     }
-    embers.push({ x, y, hue, life: .22, max: .22, radius: 65 * power });
-    for (let i = 0; i < 25; i++) {
-      const a = rand(0, TAU), v = rand(6, 48);
-      spark(x, y, Math.cos(a)*v, Math.sin(a)*v, 45, rand(.4, 1), 1.1);
+    // A contrasting inner bloom gives each shell a luminous center.
+    if (shape !== 'heart' && shape !== 'star') {
+      for (let i = 0; i < 36; i++) {
+        const a = TAU*i/36, life = rand(0.65, 1.3);
+        particles.push({x, y, vx: Math.cos(a)*radius*0.55, vy: Math.sin(a)*radius*0.55, life, total: life, hue: palette[1], size: 1.5*scale/1080, drag: 1.5, gravity: 22*scale/1080, flicker: i, willow: false});
+      }
     }
+    if (particles.length > 2800) particles.splice(0, particles.length - 2800);
   }
-  function launch() {
-    const palette = pick(palettes);
-    const x = rand(W * .14, W * .86), y = rand(horizon * .16, horizon * .54);
-    rockets.push({ x: x + rand(-90, 90), y: horizon + 5, tx: x, ty: y,
-      startY: horizon + 5, age: 0, duration: rand(.85, 1.3), hue: palette[0],
-      shape: pick(['peony', 'peony', 'willow', 'ring', 'heart', 'palm']), power: rand(.72, 1.18) });
-  }
-  function drawFireworks(dt) {
-    f.globalCompositeOperation = 'destination-out';
-    f.fillStyle = `rgba(0,0,0,${1 - Math.pow(.035, dt)})`; f.fillRect(0, 0, W, H);
-    f.globalCompositeOperation = 'lighter';
+
+  function update(dt) {
+    t.globalCompositeOperation = 'destination-out';
+    t.fillStyle = `rgba(0,0,0,${1-Math.exp(-dt*7)})`; t.fillRect(0, 0, w, h);
+    t.globalCompositeOperation = 'lighter';
+    t.lineCap = 'round';
     for (let i = rockets.length - 1; i >= 0; i--) {
-      const r = rockets[i]; r.age += dt;
-      const t = Math.min(r.age / r.duration, 1), oldX = r.x, oldY = r.y;
-      r.x += (r.tx - r.x) * Math.min(1, dt * 3);
-      r.y = r.startY + (r.ty - r.startY) * (1 - Math.pow(1 - t, 1.65));
-      f.strokeStyle = `hsla(${r.hue},80%,75%,.8)`; f.lineWidth = 1.6;
-      f.beginPath(); f.moveTo(oldX, oldY); f.lineTo(r.x, r.y); f.stroke();
-      for (let k = 0; k < 3; k++) spark(r.x + rand(-2, 2), r.y, rand(-9, 9), rand(10, 45), 40, rand(.25, .55), .8);
-      if (t === 1) { burst(r.x, r.y, r.hue, r.shape, r.power); rockets.splice(i, 1); }
+      const r = rockets[i], ox = r.x, oy = r.y;
+      r.life += dt;
+      const f = Math.min(r.life/r.duration, 1), ease = 1 - Math.pow(1-f, 1.65);
+      r.x = r.sx + (r.tx-r.sx)*ease; r.y = r.sy + (r.ty-r.sy)*ease;
+      t.strokeStyle = `hsla(${r.palette[0]},100%,78%,0.85)`; t.lineWidth = 1.8*scale/1080;
+      t.beginPath(); t.moveTo(ox,oy); t.lineTo(r.x,r.y); t.stroke();
+      if (f >= 1) { burst(r.tx,r.ty,r.shape,r.palette); rockets.splice(i,1); }
     }
-    for (let i = sparks.length - 1; i >= 0; i--) {
-      const p = sparks[i]; p.life -= dt;
-      if (p.life <= 0 || p.y > horizon + 10) { sparks.splice(i, 1); continue; }
-      p.px = p.x; p.py = p.y;
-      const friction = Math.pow(p.drag, dt * 60);
-      p.vx *= friction; p.vy = p.vy * friction + p.gravity * dt;
-      p.x += p.vx * dt; p.y += p.vy * dt;
-      let alpha = Math.min(1, p.life * 1.6) * Math.pow(p.life / p.max, .3);
-      if (p.life < .85 && p.twinkle > .55) alpha *= .35 + .65 * Math.pow(Math.sin(p.life * 38), 2);
-      f.strokeStyle = `hsla(${p.hue},100%,65%,${alpha * .7})`;
-      f.lineWidth = p.radius;
-      f.beginPath(); f.moveTo(p.px, p.py); f.lineTo(p.x, p.y); f.stroke();
-      f.fillStyle = `hsla(${p.hue},100%,87%,${alpha})`;
-      f.beginPath(); f.arc(p.x, p.y, p.radius * .65, 0, TAU); f.fill();
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i]; p.life -= dt;
+      if (p.life <= 0) { particles.splice(i,1); continue; }
+      const ox = p.x, oy = p.y;
+      const drag = Math.exp(-p.drag*dt);
+      p.vx *= drag; p.vy = p.vy*drag + p.gravity*dt;
+      p.x += p.vx*dt; p.y += p.vy*dt;
+      const fade = Math.min(1, p.life*1.7), age = 1-p.life/p.total;
+      const twinkle = age > 0.55 ? 0.45 + 0.55*Math.pow(Math.sin(clock*22+p.flicker),2) : 1;
+      t.strokeStyle = `hsla(${p.hue + (p.willow ? age*12 : 0)},100%,${68-age*17}%,${fade*twinkle})`;
+      t.lineWidth = p.size * (1-age*0.35);
+      t.beginPath(); t.moveTo(ox,oy); t.lineTo(p.x + (p.x-ox)*0.25,p.y + (p.y-oy)*0.25); t.stroke();
+      if (age < 0.18) {
+        t.fillStyle = `rgba(255,249,229,${(1-age/0.18)*0.8})`;
+        t.fillRect(p.x,p.y,p.size*0.7,p.size*0.7);
+      }
     }
-    for (let i = embers.length - 1; i >= 0; i--) {
-      const e = embers[i]; e.life -= dt;
-      if (e.life <= 0) { embers.splice(i, 1); continue; }
-      const g = f.createRadialGradient(e.x, e.y, 0, e.x, e.y, e.radius);
-      g.addColorStop(0, `hsla(${e.hue},95%,85%,${e.life / e.max * .6})`);
-      g.addColorStop(.12, `hsla(${e.hue},100%,60%,${e.life / e.max * .15})`);
-      g.addColorStop(1, `hsla(${e.hue},100%,50%,0)`);
-      f.fillStyle = g; f.fillRect(e.x-e.radius, e.y-e.radius, e.radius*2, e.radius*2);
+    next -= dt;
+    if (next <= 0) {
+      count++;
+      const shape = ['peony','ring','willow','heart','peony','star'][count % 6];
+      const palette = palettes[count % palettes.length];
+      const x = rand(0.18,0.82)*w, y = rand(0.16,0.39)*h;
+      launch(x,y,shape,palette);
+      if (count % 4 === 0) launch(w-x, y+0.08*h, 'peony', palettes[(count+2)%palettes.length]);
+      next = rand(0.8,1.4);
     }
-    f.globalCompositeOperation = 'source-over';
   }
-  function frame(now) {
-    const dt = Math.min((now - (last || now - 16)) / 1000, .04); last = now; elapsed += dt;
-    nextLaunch -= dt;
-    if (nextLaunch <= 0) { launch(); nextLaunch = rand(.65, 1.2); }
-    drawFireworks(dt);
-    ctx.globalAlpha = 1; ctx.drawImage(backdrop, 0, 0, W, H);
-    for (const s of stars) {
-      ctx.globalAlpha = .25 + .25 * Math.sin(elapsed * .65 + s.phase);
-      ctx.fillStyle = '#c0d7ff'; ctx.fillRect(s.x, s.y, s.r, s.r);
+
+  function draw(dt) {
+    const sky = s.createLinearGradient(0,0,0,horizon);
+    sky.addColorStop(0,'#020311'); sky.addColorStop(0.58,'#080b25'); sky.addColorStop(1,'#19152d');
+    s.fillStyle = sky; s.fillRect(0,0,w,h);
+    for (const star of stars) {
+      s.fillStyle = `rgba(177,207,255,${star.a*(0.75+0.25*Math.sin(clock*0.7+star.phase))})`;
+      s.beginPath(); s.arc(star.x,star.y,star.r,0,TAU); s.fill();
     }
-    ctx.globalAlpha = 1;
-    ctx.drawImage(fireworks, 0, 0, W, H);
-    ctx.drawImage(city, 0, 0, W, H);
-    // Reflect the actual animated sky in thin, independently drifting water bands.
-    const waterHeight = H - horizon;
-    const sourceScale = scale * pixelRatio;
-    for (let y = 0; y < waterHeight; y += 3) {
-      const depth = y / waterHeight;
-      const sourceY = horizon - y * 1.65;
+    for (let i = flashes.length-1; i >= 0; i--) {
+      const f = flashes[i]; f.life -= dt;
+      if (f.life <= 0) { flashes.splice(i,1); continue; }
+      const g = s.createRadialGradient(f.x,f.y,0,f.x,f.y,scale*0.3);
+      g.addColorStop(0,`hsla(${f.hue},100%,60%,${f.life*0.18})`); g.addColorStop(1,`hsla(${f.hue},100%,50%,0)`);
+      s.fillStyle = g; s.fillRect(0,0,w,horizon);
+    }
+    s.drawImage(trails,0,0);
+    s.drawImage(city,0,0);
+    ctx.drawImage(scene,0,0);
+    const water = ctx.createLinearGradient(0,horizon,0,h);
+    water.addColorStop(0,'#0c1125'); water.addColorStop(1,'#020713');
+    ctx.fillStyle = water; ctx.fillRect(0,horizon,w,h-horizon);
+    // Mirrored strips drift independently, stretching light into rippling ribbons.
+    ctx.save();
+    ctx.beginPath(); ctx.rect(0,horizon,w,h-horizon); ctx.clip();
+    const band = Math.max(1.5,scale/420);
+    for (let y = horizon; y < h; y += band) {
+      const depth = (y-horizon)/(h-horizon);
+      const sourceY = horizon - (y-horizon)*1.38;
       if (sourceY < 0) continue;
-      const wave = Math.sin(y * .115 + elapsed * 1.8) * (1.5 + depth * 9)
-        + Math.sin(y * .047 - elapsed * .9) * depth * 9;
-      ctx.globalAlpha = (.29 - depth * .19) * (.65 + .35 * Math.sin(y * 1.7 + elapsed));
-      ctx.drawImage(fireworks, 0, sourceY * sourceScale, fireworks.width, 5 * sourceScale,
-        wave, horizon + y + 8, W, 3);
-      ctx.globalAlpha = .32 * (1 - depth * .7);
-      ctx.drawImage(city, 0, sourceY * sourceScale, city.width, 5 * sourceScale,
-        wave * .6, horizon + y + 8, W, 3);
+      const shift = (Math.sin(y/scale*150+clock*1.3)*2 + Math.sin(y/scale*340-clock*1.8)*1.2) * (0.4+depth*3.5)*scale/1080;
+      ctx.globalAlpha = (0.52-depth*0.25)*(0.65+0.35*Math.sin(y*0.41+clock*0.8)**2);
+      ctx.drawImage(scene,0,Math.max(0,sourceY),w,band*1.38,shift,y,w,band+0.5);
     }
     ctx.globalAlpha = 1;
-    const water = ctx.createLinearGradient(0, horizon, 0, H);
-    water.addColorStop(0, '#02081308'); water.addColorStop(1, '#01050ddb');
-    ctx.fillStyle = water; ctx.fillRect(0, horizon + 10, W, waterHeight);
-    // Fine ripples catch the ambient light between the reflected bursts.
-    ctx.lineWidth = .65;
-    for (let i = 0; i < 110; i++) {
-      const y = horizon + 15 + ((i * 37.71) % Math.max(1, waterHeight - 20));
-      const depth = (y - horizon) / waterHeight;
-      const x = ((i * 173.13 + Math.sin(elapsed * .25 + i) * 9) % W);
-      ctx.strokeStyle = `rgba(109,139,180,${.025 + .025 * (1-depth)})`;
-      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 10 + depth * 48, y); ctx.stroke();
+    ctx.fillStyle = 'rgba(2,7,20,0.23)'; ctx.fillRect(0,horizon,w,h-horizon);
+    for (let i=0; i<65; i++) {
+      const depth = (i+1)/66, y = horizon+(h-horizon)*depth;
+      const x = ((Math.sin(i*127.1)*43758.5453)%1+1)%1*w;
+      ctx.strokeStyle = `rgba(94,139,178,${0.025+0.035*Math.sin(i+clock*0.6)**2})`;
+      ctx.lineWidth = scale/1080;
+      ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+scale*(0.008+depth*0.045),y); ctx.stroke();
     }
-    const vignette = ctx.createRadialGradient(W/2, H*.43, W*.22, W/2, H*.43, Math.max(W,H)*.78);
-    vignette.addColorStop(0, '#00000000'); vignette.addColorStop(1, '#00030b99');
-    ctx.fillStyle = vignette; ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+    const vignette = ctx.createRadialGradient(w/2,h*0.4,scale*0.28,w/2,h*0.45,Math.max(w,h)*0.8);
+    vignette.addColorStop(0,'rgba(0,0,0,0)'); vignette.addColorStop(1,'rgba(0,0,8,0.42)');
+    ctx.fillStyle = vignette; ctx.fillRect(0,0,w,h);
+  }
+
+  function frame(time) {
+    const dt = Math.min((time-last)/1000 || 1/60,0.035);
+    last = time; clock += dt;
+    update(dt); draw(dt);
     requestAnimationFrame(frame);
   }
-  addEventListener('resize', size);
-  document.addEventListener('visibilitychange', () => { last = 0; });
-  size(); requestAnimationFrame(frame);
+  window.addEventListener('resize',resize);
+  document.addEventListener('visibilitychange',() => { last = performance.now(); });
+  resize();
+  requestAnimationFrame(frame);
 })();
 </script>
 </body>
