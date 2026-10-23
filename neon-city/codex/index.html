@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#08051d">
+<title>Neon After Midnight</title>
+<style>
+*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#070619}canvas{display:block;width:100%;height:100%}
+</style>
+</head>
+<body>
+<canvas aria-label="An animated neon city in the rain, with flying cars passing between illuminated towers"></canvas>
+<script>
+(()=>{
+'use strict';
+const canvas=document.querySelector('canvas'),ctx=canvas.getContext('2d',{alpha:false});
+const city=document.createElement('canvas'),g=city.getContext('2d');
+const W=1080,H=1080,TAU=Math.PI*2;
+let width,height,dpr,scale,ox,oy,last=0,time=0;
+let seed=82421;
+const rnd=()=>{seed=(seed*1664525+1013904223)>>>0;return seed/4294967296};
+const range=(a,b)=>a+rnd()*(b-a);
+const cyan='#35faff',pink='#ff239e',violet='#9162ff',amber='#ffb34c';
+function rect(c,x,y,w,h,color){c.fillStyle=color;c.fillRect(x,y,w,h)}
+function line(c,x,y,x2,y2,color,size=1){c.strokeStyle=color;c.lineWidth=size;c.beginPath();c.moveTo(x,y);c.lineTo(x2,y2);c.stroke()}
+function glow(c,color,blur,fn){c.save();c.shadowColor=color;c.shadowBlur=blur;fn();c.restore()}
+function haze(c,x,y,r,color){const a=c.createRadialGradient(x,y,0,x,y,r);a.addColorStop(0,color);a.addColorStop(1,'transparent');c.fillStyle=a;c.fillRect(x-r,y-r,r*2,r*2)}
+function poly(c,points,fill){c.fillStyle=fill;c.beginPath();points.forEach((p,i)=>i?c.lineTo(...p):c.moveTo(...p));c.closePath();c.fill()}
+function ring(c,x,y,r,color,lw){c.strokeStyle=color;c.lineWidth=lw;c.beginPath();c.arc(x,y,r,0,TAU);c.stroke()}
+function windows(x,y,w,h,size,color,density){
+ for(let yy=y+14;yy<y+h-8;yy+=size*2.7)for(let xx=x+8;xx<x+w-7;xx+=size*2.1){if(rnd()>density)continue;g.globalAlpha=range(.15,.68);rect(g,xx,yy,size,range(2,5),color)}g.globalAlpha=1;
+}
+function tower(x,y,w,h,tint,edge,style=0){
+ const grad=g.createLinearGradient(x,y,x+w,y);grad.addColorStop(0,'#070d25');grad.addColorStop(.65,tint);grad.addColorStop(1,'#08091c');
+ rect(g,x,y,w,h,grad);poly(g,[[x+w,y],[x+w+18,y-12],[x+w+18,y+h],[x+w,y+h]],'#080a1b');
+ line(g,x,y,x+w,y,edge,.9);line(g,x+w,y,x+w,y+h,edge,.8);
+ windows(x,y,w,h,style===1?4:3,edge,.58);
+ if(style===1){for(let yy=y+48;yy<y+h;yy+=68){rect(g,x,yy,w,6,'#06091b');line(g,x,yy,x+w,yy,edge,.6)}}
+ if(style===2){for(let xx=x+15;xx<x+w;xx+=23)line(g,xx,y+8,xx,y+h,'#bb42de',.5)}
+}
+function sign(x,y,w,h,color,type){
+ glow(g,color,22,()=>{rect(g,x,y,w,h,'#080d24');g.strokeStyle=color;g.lineWidth=2;g.strokeRect(x,y,w,h)});
+ g.save();g.strokeStyle=color;g.lineWidth=3;g.lineCap='square';
+ // Abstract luminous marks: architecture and pictograms, never typography.
+ if(type===0){for(let yy=y+15;yy<y+h-12;yy+=31){g.beginPath();g.moveTo(x+10,yy);g.lineTo(x+w-10,yy);g.moveTo(x+w/2,yy-7);g.lineTo(x+w/2,yy+12);g.moveTo(x+13,yy+8);g.lineTo(x+w-13,yy+15);g.stroke()}}
+ else if(type===1){for(let yy=y+13;yy<y+h-8;yy+=17){line(g,x+9,yy,x+w-9,yy,color,2);rect(g,x+9,yy,5,5,'#fff0fa')}}
+ else {ring(g,x+w/2,y+h/2,Math.min(w,h)*.28,color,3);line(g,x+10,y+h*.75,x+w-10,y+h*.25,color,3)}g.restore();
+}
+function build(){
+ city.width=W;city.height=H;seed=82421;
+ const sky=g.createLinearGradient(0,0,0,H);sky.addColorStop(0,'#070820');sky.addColorStop(.42,'#21133e');sky.addColorStop(.75,'#34204d');sky.addColorStop(1,'#06091b');rect(g,0,0,W,H,sky);
+ haze(g,605,368,410,'#56377670');haze(g,255,555,270,'#eb15952a');haze(g,810,560,300,'#0cd8ff25');
+ // An eclipsed, hazy moon behind the distant skyline.
+ haze(g,652,188,135,'#ff6bad20');const moon=g.createLinearGradient(602,120,705,250);moon.addColorStop(0,'#f8b0b8');moon.addColorStop(1,'#9d528d');g.fillStyle=moon;g.beginPath();g.arc(652,184,57,0,TAU);g.fill();
+ for(let i=0;i<90;i++)rect(g,range(0,W),range(0,440),1,1,'#8d8abb55');
+ // The deepest layer is almost swallowed by rain and atmospheric perspective.
+ for(let i=0;i<42;i++){let x=i*29-25,w=range(20,55),y=range(260,540);rect(g,x,y,w,820-y,'#211c3b');windows(x,y,w,820-y,2,'#9a89dc',.36);if(rnd()>.65)line(g,x+w/2,y,x+w/2,y-range(15,55),'#63557c',1)}
+ haze(g,560,640,230,'#d746b53b');
+ tower(400,367,66,405,'#171d3a','#49bfd3',1);tower(615,309,62,480,'#1e1939','#a376d4',0);
+ tower(485,448,40,345,'#241d41','#f893c8');tower(552,402,48,379,'#19253c','#4da4cf',1);
+ // Needle spires.
+ tower(697,217,80,623,'#181731','#b13ec7',2);poly(g,[[704,217],[737,157],[770,217]],'#11122c');line(g,737,158,737,99,'#a74cab',1);glow(g,pink,14,()=>rect(g,735,113,4,4,pink));
+ tower(318,258,73,594,'#11233a','#21b3c8',1);rect(g,333,239,42,19,'#122238');line(g,355,240,355,193,'#517b93');
+ glow(g,cyan,12,()=>{line(g,325,274,325,720,cyan,2);line(g,377,274,377,719,'#2193af',1)});
+ tower(799,346,100,560,'#171431','#cd378d',1);sign(812,411,33,137,pink,0);
+ tower(215,419,81,467,'#15162f','#a051cc',0);sign(251,492,31,120,'#c86bff',1);
+ // Distant suspended bridges bind the towers together.
+ for(const [a,b,y] of [[390,485,589],[599,698,523],[773,816,633]]){rect(g,a,y,b-a,13,'#0b1028');line(g,a,y,b,y,'#614b81');line(g,a,y+13,b,y+13,'#be4e9b',1)}
+ // Foreground architecture frames a deep central street.
+ tower(-54,148,213,932,'#17132e','#8642a1',2);poly(g,[[159,148],[201,174],[201,1080],[159,1080]],'#0c0d23');
+ for(let yy=202;yy<940;yy+=48){line(g,160,yy,200,yy+10,'#51264c',2)}
+ rect(g,0,153,151,13,'#16142a');line(g,0,168,155,168,'#b82b91',2);
+ glow(g,pink,18,()=>{line(g,151,167,151,947,pink,3);line(g,9,174,135,174,pink,2)});
+ tower(889,99,230,981,'#10243a','#207e9a',1);poly(g,[[858,132],[889,99],[889,1080],[858,1080]],'#0a1328');
+ glow(g,cyan,19,()=>{line(g,885,111,885,1070,cyan,3);line(g,901,124,1079,124,cyan,2)});
+ for(let xx=917;xx<1080;xx+=25){rect(g,xx,156,9,453,'#0a1426');line(g,xx,158,xx,600,'#227590',1)}
+ // Large luminous installations, rendered as graphic shapes rather than words.
+ sign(909,266,87,192,pink,0);sign(870,541,48,168,cyan,1);
+ glow(g,pink,28,()=>{ring(g,108,377,68,pink,8);ring(g,108,377,56,'#ff7ec7',2)});
+ glow(g,cyan,20,()=>{g.save();g.translate(108,377);g.rotate(-.36);g.scale(1,.29);ring(g,0,0,90,cyan,5);g.restore()});
+ sign(174,573,49,167,'#ffad45',0);sign(42,696,101,56,pink,2);
+ // Foreground ducts, balconies, and awnings.
+ for(let yy=470;yy<1020;yy+=155){rect(g,0,yy,80,22,'#070b1c');line(g,0,yy,82,yy,'#5e396a',3)}
+ rect(g,940,723,140,19,'#070d20');glow(g,cyan,18,()=>line(g,940,742,1080,742,cyan,4));
+ poly(g,[[0,915],[241,878],[287,915],[0,988]],'#080a1c');line(g,0,916,241,879,pink,3);
+ poly(g,[[857,868],[1080,897],[1080,966],[824,906]],'#080b1c');line(g,857,868,1080,897,cyan,3);
+ // Wet avenue recedes to a single vanishing point.
+ const road=g.createLinearGradient(0,792,0,1080);road.addColorStop(0,'#19152c');road.addColorStop(1,'#060a19');poly(g,[[479,782],[615,782],[953,1080],[128,1080]],road);
+ poly(g,[[479,782],[463,799],[117,1080],[83,1080]],'#12182a');poly(g,[[617,782],[633,798],[989,1080],[951,1080]],'#111c2b');
+ line(g,473,793,124,1080,'#d343a0',1.5);line(g,625,794,966,1080,'#32bbd5',1.5);
+ for(let i=0;i<270;i++){const y=range(803,1080),depth=(y-782)/298,x=range(540-depth*400,550+depth*420);g.globalAlpha=range(.05,.4);rect(g,x,y,range(4,42)*depth,range(.5,2),x<550?'#ff3aaa':'#24d9ff')}g.globalAlpha=1;
+ for(let i=0;i<11;i++){let z=i/11,y=788+z*z*330;line(g,546-z*5,y,548+z*5,y,'#9b7da1',1+z*2)}
+ // Street lamps and their small islands of colored light.
+ for(const side of [-1,1])for(let i=0;i<5;i++){let z=(i+1)/5,x=550+side*(70+z*z*415),y=796+z*z*254,h=20+z*80;line(g,x,y,x,y-h,'#172a3d',2+z*2);line(g,x,y-h,x-side*18*z,y-h-5,'#26495a',3);glow(g,side<0?pink:cyan,18,()=>line(g,x-side*19*z,y-h-4,x-side*8*z,y-h-2,side<0?pink:cyan,3));}
+ // Hanging cables cut across the immense vertical buildings.
+ g.strokeStyle='#04091bcc';g.lineWidth=2;for(let i=0;i<3;i++){g.beginPath();g.moveTo(-20,65+i*22);g.bezierCurveTo(360,300+i*13,710,40+i*20,1100,195+i*15);g.stroke()}
+ // Dark bottom corners keep the wet light concentrated in the avenue.
+ const vignette=g.createRadialGradient(540,510,310,540,510,760);vignette.addColorStop(0,'transparent');vignette.addColorStop(1,'#020414a8');rect(g,0,0,W,H,vignette);
+}
+const rain=Array.from({length:580},()=>({x:range(-100,1180),y:range(-100,1180),z:range(.25,1),speed:range(580,1040)}));
+const cars=Array.from({length:18},(_,i)=>({phase:i/18,dir:i%2?1:-1,lane:i%6,speed:range(.028,.052),size:range(.65,1.1),color:i%3===0?pink:cyan}));
+const ripples=Array.from({length:28},()=>({x:range(180,910),y:range(910,1080),phase:rnd(),r:range(6,19)}));
+function car(c,x,y,s,dir,color,t){
+ c.save();c.translate(x,y);c.scale(s*dir,s);
+ // Long exposure wakes and a pool of engine glow.
+ const trail=c.createLinearGradient(-115,0,-12,0);trail.addColorStop(0,'transparent');trail.addColorStop(1,color+'95');c.fillStyle=trail;c.beginPath();c.moveTo(-130,5);c.lineTo(-15,-1);c.lineTo(-15,8);c.closePath();c.fill();
+ glow(c,color,18,()=>{line(c,-75,5,-18,5,color,1.4);line(c,-19,11,20,11,color,2)});
+ poly(c,[[-28,0],[-17,-5],[-8,-13],[10,-13],[23,-5],[33,-2],[31,6],[-24,7]],'#081020');
+ poly(c,[[-12,-5],[-6,-11],[9,-11],[18,-5]],'#65ccec');line(c,-25,0,27,0,'#6862a0',1.1);
+ glow(c,'#c1fbff',12,()=>{line(c,25,-1,33,0,'#d5ffff',2.7)});glow(c,pink,10,()=>rect(c,-28,1,4,3,pink));
+ c.globalAlpha=.7+.2*Math.sin(t*8);line(c,-16,9,-5,9,color,2);line(c,10,9,21,9,color,2);c.restore();
+}
+function resize(){width=innerWidth;height=innerHeight;dpr=Math.min(devicePixelRatio||1,1.7);canvas.width=Math.round(width*dpr);canvas.height=Math.round(height*dpr);scale=Math.max(width/W,height/H);ox=(width-W*scale)/2;oy=(height-H*scale)/2;}
+function frame(ms){
+ const dt=Math.min((ms-last)/1000||.016,.04);last=ms;time+=dt;
+ ctx.setTransform(dpr*scale,0,0,dpr*scale,dpr*ox,dpr*oy);ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';ctx.drawImage(city,0,0);
+ // Soft moving light high in the rain.
+ ctx.save();ctx.globalCompositeOperation='screen';ctx.globalAlpha=.055;
+ const bx=610+Math.sin(time*.17)*160;const beam=ctx.createLinearGradient(bx,600,bx-140,90);beam.addColorStop(0,'#6cd9ff');beam.addColorStop(1,'transparent');poly(ctx,[[bx,630],[bx-240,0],[bx-100,0]],beam);ctx.restore();
+ // Distant traffic uses shallow arcs; nearer traffic sweeps across the canyon.
+ for(const v of cars){const p=(v.phase+time*v.speed)%1,q=v.dir>0?p:1-p;const z=v.lane/5;const x=-160+q*1400,y=303+z*425+Math.sin(q*Math.PI*2+v.lane)*34;const s=(.28+z*.75)*v.size;car(ctx,x,y,s,v.dir,v.color,time);}
+ // Vapor at street level curls through the pools of neon.
+ ctx.save();ctx.globalCompositeOperation='screen';for(let i=0;i<5;i++){let x=270+i*141+Math.sin(time*.23+i)*65,y=812+Math.cos(time*.3+i)*18;ctx.save();ctx.translate(x,y);ctx.scale(2.7,.3);haze(ctx,0,0,75,i%2?'#29c5e715':'#cc409b19');ctx.restore()}ctx.restore();
+ // Reflections shimmer in short horizontal broken strokes.
+ ctx.save();ctx.globalCompositeOperation='screen';
+ for(let i=0;i<75;i++){const z=i/75,y=820+z*260,x=550+Math.sin(i*17.3)*z*365;ctx.globalAlpha=(.09+.1*Math.sin(time*2+i))*(.3+z);rect(ctx,x+Math.sin(time+i)*4,y,6+z*37,1+z,x<550?pink:cyan)}
+ for(const r of ripples){const p=(time*.48+r.phase)%1;ctx.globalAlpha=(1-p)*.25;ctx.strokeStyle=r.x<540?pink:cyan;ctx.lineWidth=.8;ctx.beginPath();ctx.ellipse(r.x,r.y,r.r*p*2,r.r*p*.29,0,0,TAU);ctx.stroke()}ctx.restore();
+ // Three depths of rainfall: distant mist, bright streaks, and near lens drops.
+ ctx.save();ctx.lineCap='round';
+ for(const r of rain){r.y+=dt*r.speed*(.5+r.z);r.x-=dt*(65+100*r.z);if(r.y>1120){r.y=-50;r.x=range(-20,1260)}if(r.x< -80)r.x=1160;ctx.globalAlpha=.1+r.z*.27;ctx.strokeStyle=r.x<400?'#c598dc':'#93d9ed';ctx.lineWidth=.5+r.z*.85;const len=8+r.z*27;line(ctx,r.x,r.y,r.x-len*.2,r.y+len,ctx.strokeStyle,ctx.lineWidth)}ctx.restore();
+ // Pulsing rooftop beacons.
+ ctx.globalAlpha=.35+.65*Math.pow(Math.max(0,Math.sin(time*2.1)),5);glow(ctx,pink,19,()=>{rect(ctx,735,111,4,4,'#ff74bb');rect(ctx,352,191,3,3,'#ff74bb')});ctx.globalAlpha=1;
+ requestAnimationFrame(frame);
+}
+build();resize();addEventListener('resize',resize,{passive:true});requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

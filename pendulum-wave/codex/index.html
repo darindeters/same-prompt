@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#050713">
+  <title>Pendulum Wave</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #050713; }
+    canvas { display: block; width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+  <canvas aria-label="Fifteen colorful pendulums swinging through a repeating wave" role="img"></canvas>
+  <script>
+    (() => {
+      'use strict';
+      const canvas = document.querySelector('canvas');
+      const ctx = canvas.getContext('2d', { alpha: false });
+      const TAU = Math.PI * 2;
+      const count = 15;
+      const reunion = 72;
+      let width, height, size, left, top, backdrop;
+      const pendulums = Array.from({ length: count }, (_, i) => ({
+        hue: 185 + i * 20.5,
+        cycles: 62 - i,
+        length: 0.267 * Math.pow(62 / (62 - i), 2),
+        depth: i / (count - 1)
+      }));
+
+      function resize() {
+        width = window.innerWidth;
+        height = window.innerHeight;
+        const ratio = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.width = Math.round(width * ratio);
+        canvas.height = Math.round(height * ratio);
+        ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+        size = Math.min(width, height);
+        left = (width - size) / 2;
+        top = (height - size) / 2;
+        backdrop = ctx.createRadialGradient(
+          width * 0.5, height * 0.48, 0,
+          width * 0.5, height * 0.48, Math.max(width, height) * 0.74
+        );
+        backdrop.addColorStop(0, '#12172d');
+        backdrop.addColorStop(0.5, '#090d1d');
+        backdrop.addColorStop(1, '#03050d');
+      }
+
+      function position(p, time) {
+        // Integer oscillation counts return the whole wave to alignment every 72 seconds.
+        // Period squared is proportional to length, as in a physical pendulum wave.
+        const angle = 0.58 * Math.cos(TAU * p.cycles * time / reunion);
+        const ax = left + size * (0.65 - p.depth * 0.29);
+        const ay = top + size * (0.205 + p.depth * 0.105);
+        const length = size * p.length;
+        return {
+          ax, ay,
+          x: ax + Math.sin(angle) * length,
+          y: ay + Math.cos(angle) * length,
+          radius: size * (0.010 + p.depth * 0.005)
+        };
+      }
+
+      function line(x1, y1, x2, y2, color, weight) {
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = weight;
+        ctx.stroke();
+      }
+
+      function draw(time) {
+        ctx.fillStyle = backdrop;
+        ctx.fillRect(0, 0, width, height);
+
+        // A soft pool of light gives the suspended sculpture a quiet stage.
+        ctx.save();
+        ctx.translate(width / 2, top + size * 0.85);
+        ctx.scale(1, 0.22);
+        const pool = ctx.createRadialGradient(0, 0, 0, 0, 0, size * 0.44);
+        pool.addColorStop(0, '#182b4538');
+        pool.addColorStop(0.6, '#10243918');
+        pool.addColorStop(1, '#07102000');
+        ctx.fillStyle = pool;
+        ctx.fillRect(-size * 0.5, -size * 0.5, size, size);
+        ctx.restore();
+
+        const back = position(pendulums[0], time);
+        const front = position(pendulums[count - 1], time);
+        ctx.lineCap = 'round';
+        line(back.ax + size * 0.023, back.ay - size * 0.008,
+          front.ax - size * 0.023, front.ay + size * 0.008, '#030611', size * 0.014);
+        line(back.ax + size * 0.023, back.ay - size * 0.011,
+          front.ax - size * 0.023, front.ay + size * 0.005, '#54637c', size * 0.003);
+
+        // Short luminous histories reveal the arcs without obscuring the moving bobs.
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        for (const p of pendulums) {
+          for (let k = 24; k > 0; k--) {
+            const a = position(p, time - k * 0.009);
+            const b = position(p, time - (k - 1) * 0.009);
+            const fade = 1 - k / 25;
+            line(a.x, a.y, b.x, b.y, `hsla(${p.hue},100%,60%,${fade * 0.16})`, a.radius * 1.25 * fade);
+          }
+        }
+        ctx.restore();
+
+        for (const p of pendulums) {
+          const q = position(p, time);
+          const { x, y, ax, ay, radius: r } = q;
+          const h = p.hue;
+
+          // Each suspension is a fine colored filament with a bright central strand.
+          line(ax, ay, x, y, `hsla(${h},90%,65%,0.065)`, size * 0.006);
+          const filament = ctx.createLinearGradient(ax, ay, x, y);
+          filament.addColorStop(0, `hsla(${h},45%,75%,0.28)`);
+          filament.addColorStop(1, `hsla(${h},95%,72%,0.85)`);
+          line(ax, ay, x, y, filament, Math.max(0.65, size * 0.001));
+
+          ctx.beginPath();
+          ctx.arc(ax, ay, size * 0.0028, 0, TAU);
+          ctx.fillStyle = `hsl(${h},80%,78%)`;
+          ctx.fill();
+
+          const glow = ctx.createRadialGradient(x, y, r * 0.25, x, y, r * 4.5);
+          glow.addColorStop(0, `hsla(${h},100%,58%,0.30)`);
+          glow.addColorStop(0.4, `hsla(${h},100%,55%,0.10)`);
+          glow.addColorStop(1, `hsla(${h},100%,50%,0)`);
+          ctx.fillStyle = glow;
+          ctx.beginPath();
+          ctx.arc(x, y, r * 4.5, 0, TAU);
+          ctx.fill();
+
+          const sphere = ctx.createRadialGradient(x - r * 0.33, y - r * 0.38, r * 0.04, x, y, r);
+          sphere.addColorStop(0, `hsl(${h},100%,94%)`);
+          sphere.addColorStop(0.23, `hsl(${h},100%,75%)`);
+          sphere.addColorStop(0.55, `hsl(${h},100%,55%)`);
+          sphere.addColorStop(0.86, `hsl(${h},95%,38%)`);
+          sphere.addColorStop(1, `hsl(${h},90%,22%)`);
+          ctx.fillStyle = sphere;
+          ctx.beginPath();
+          ctx.arc(x, y, r, 0, TAU);
+          ctx.fill();
+          ctx.strokeStyle = `hsla(${h},100%,80%,0.55)`;
+          ctx.lineWidth = Math.max(0.5, size * 0.0007);
+          ctx.stroke();
+        }
+        requestAnimationFrame(frame);
+      }
+
+      const start = performance.now();
+      function frame(now) { draw((now - start) / 1000); }
+      window.addEventListener('resize', resize, { passive: true });
+      resize();
+      frame(start);
+    })();
+  </script>
+</body>
+</html>

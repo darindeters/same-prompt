@@ -182,3 +182,47 @@ Note: Claude, Codex and Grok ran this one under the earlier 15-minute cap. All f
 | Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:27 | [open](https://darindeters.github.io/same-prompt/aurora/codex/) |
 | Gemini (4 Argon) | Antigravity CLI 1.4.5 | 2:27 | [open](https://darindeters.github.io/same-prompt/aurora/gemini/) |
 | Grok (4.7) | Grok Build 1.0.62 | 12:21 | [open](https://darindeters.github.io/same-prompt/aurora/grok/) |
+
+## Pendulum Wave
+
+> Build a pendulum wave of fifteen pendulums with slightly different lengths, swinging in and out of mesmerizing patterns, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 0:57 | [open](https://darindeters.github.io/same-prompt/pendulum-wave/claude/) |
+| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 1:26 | [open](https://darindeters.github.io/same-prompt/pendulum-wave/codex/) |
+| Gemini (4 Argon) | Antigravity CLI 1.4.5 | 3:08 | [open](https://darindeters.github.io/same-prompt/pendulum-wave/gemini/) |
+| Grok (4.7) | Grok Build 1.0.62 | 17:11 | [open](https://darindeters.github.io/same-prompt/pendulum-wave/grok/) |
+
+## Tornado
+
+> Build a tornado tearing across farmland at dusk, lifting dust and debris into the funnel, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 4:52 | [open](https://darindeters.github.io/same-prompt/tornado/claude/) |
+| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:01 | [open](https://darindeters.github.io/same-prompt/tornado/codex/) |
+| Gemini (4 Argon) | Antigravity CLI 1.4.5 | 3:08 | [open](https://darindeters.github.io/same-prompt/tornado/gemini/) |
+| Grok (4.7) | Grok Build 1.0.62 | 21:15 | [open](https://darindeters.github.io/same-prompt/tornado/grok/) |
+
+## Ink in Water
+
+> Build drops of colorful ink blooming and swirling as they sink through a glass of water, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 3:22 | [open](https://darindeters.github.io/same-prompt/ink/claude/) |
+| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 1:58 | [open](https://darindeters.github.io/same-prompt/ink/codex/) |
+| Gemini (4 Argon) | Antigravity CLI 1.4.5 | 3:39 | [open](https://darindeters.github.io/same-prompt/ink/gemini/) |
+| Grok (4.7) | Grok Build 1.0.62 | 26:55 | [open](https://darindeters.github.io/same-prompt/ink/grok/) |
+
+## Neon City
+
+> Build a neon cyberpunk city at night, with rain, glowing signs and flying cars weaving between towers, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 7:28 | [open](https://darindeters.github.io/same-prompt/neon-city/claude/) |
+| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:29 | [open](https://darindeters.github.io/same-prompt/neon-city/codex/) |
+| Gemini (4 Argon) | Antigravity CLI 1.4.5 | 2:40 | [open](https://darindeters.github.io/same-prompt/neon-city/gemini/) |
+| Grok (4.7) | Grok Build 1.0.62 | 19:25 | [open](https://darindeters.github.io/same-prompt/neon-city/grok/) |

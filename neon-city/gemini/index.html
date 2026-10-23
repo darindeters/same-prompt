@@ -1,0 +1,1171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Cyberpunk Night City</title>
+<style>
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #04020c;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="city"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('city');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  // Reference virtual resolution 1080x1080 for crisp composition at any aspect ratio
+  let vw = 1080;
+  let vh = 1080;
+  let dpr = 1;
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    // Keep 1080 base scale along the shorter axis so 1080x1080 maps 1:1
+    const base = 1080;
+    const aspect = w / h;
+    if (aspect >= 1) {
+      vh = base;
+      vw = base * aspect;
+    } else {
+      vw = base;
+      vh = base / aspect;
+    }
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Deterministic PRNG for procedural architecture
+  let seed = 421337;
+  function rand() {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  }
+  function range(min, max) {
+    return min + rand() * (max - min);
+  }
+  function pick(arr) {
+    return arr[Math.floor(rand() * arr.length)];
+  }
+
+  // Vivid neon palette
+  const NEON = {
+    cyan: '#00f6ff',
+    magenta: '#ff007f',
+    pink: '#ff2afc',
+    purple: '#9d00ff',
+    amber: '#ffaa00',
+    gold: '#ffe600',
+    lime: '#00ff88',
+    crimson: '#ff1744',
+    electric: '#2979ff'
+  };
+  const NEON_LIST = [
+    NEON.cyan, NEON.magenta, NEON.pink, NEON.amber,
+    NEON.gold, NEON.lime, NEON.electric, NEON.crimson
+  ];
+
+  // Abstract cyber-glyph drawer (no font dependencies, no English text)
+  function drawGlyph(ctx, id, x, y, size) {
+    const s = size * 0.36;
+    ctx.beginPath();
+    switch (id % 12) {
+      case 0:
+        ctx.moveTo(x - s, y - s);
+        ctx.lineTo(x + s, y - s);
+        ctx.moveTo(x, y - s);
+        ctx.lineTo(x, y + s);
+        ctx.moveTo(x - s * 0.8, y + s * 0.2);
+        ctx.lineTo(x + s * 0.8, y - s * 0.2);
+        break;
+      case 1:
+        ctx.moveTo(x - s, y - s * 0.6);
+        ctx.lineTo(x + s, y - s * 0.6);
+        ctx.lineTo(x + s * 0.4, y + s);
+        ctx.moveTo(x - s * 0.6, y + s * 0.1);
+        ctx.lineTo(x + s * 0.2, y + s * 0.7);
+        break;
+      case 2:
+        ctx.rect(x - s * 0.8, y - s * 0.8, s * 1.6, s * 0.9);
+        ctx.moveTo(x, y - s * 0.8);
+        ctx.lineTo(x, y + s);
+        ctx.moveTo(x - s, y + s);
+        ctx.lineTo(x + s, y + s);
+        break;
+      case 3:
+        ctx.moveTo(x - s, y - s * 0.8);
+        ctx.lineTo(x + s, y - s * 0.8);
+        ctx.moveTo(x - s * 0.7, y - s * 0.1);
+        ctx.lineTo(x + s * 0.7, y - s * 0.1);
+        ctx.moveTo(x + s * 0.3, y - s * 0.8);
+        ctx.lineTo(x - s * 0.8, y + s);
+        ctx.moveTo(x, y + s * 0.1);
+        ctx.lineTo(x + s * 0.9, y + s);
+        break;
+      case 4:
+        ctx.moveTo(x - s * 0.9, y - s);
+        ctx.lineTo(x - s * 0.9, y + s);
+        ctx.moveTo(x - s * 0.9, y - s * 0.3);
+        ctx.lineTo(x + s * 0.9, y - s * 0.3);
+        ctx.lineTo(x + s * 0.5, y + s);
+        break;
+      case 5:
+        ctx.moveTo(x, y - s);
+        ctx.lineTo(x - s, y);
+        ctx.lineTo(x + s, y);
+        ctx.moveTo(x - s * 0.6, y);
+        ctx.lineTo(x - s * 0.6, y + s);
+        ctx.moveTo(x + s * 0.6, y);
+        ctx.lineTo(x + s * 0.6, y + s);
+        break;
+      case 6:
+        ctx.arc(x, y - s * 0.2, s * 0.65, 0, Math.PI * 1.5);
+        ctx.moveTo(x - s, y + s * 0.8);
+        ctx.lineTo(x + s, y + s * 0.8);
+        break;
+      case 7:
+        ctx.moveTo(x - s, y - s * 0.5);
+        ctx.lineTo(x + s, y - s * 0.5);
+        ctx.moveTo(x - s * 0.7, y + s * 0.2);
+        ctx.lineTo(x + s * 0.7, y + s * 0.2);
+        ctx.moveTo(x - s, y + s * 0.9);
+        ctx.lineTo(x + s, y + s * 0.9);
+        ctx.moveTo(x, y - s);
+        ctx.lineTo(x, y + s * 0.9);
+        break;
+      case 8:
+        ctx.moveTo(x - s * 0.8, y - s);
+        ctx.lineTo(x + s * 0.8, y - s);
+        ctx.lineTo(x - s * 0.8, y + s);
+        ctx.lineTo(x + s * 0.8, y + s);
+        ctx.moveTo(x - s * 0.3, y);
+        ctx.lineTo(x + s * 0.9, y);
+        break;
+      case 9:
+        ctx.moveTo(x - s, y - s * 0.3);
+        ctx.lineTo(x, y - s);
+        ctx.lineTo(x + s, y - s * 0.3);
+        ctx.moveTo(x - s * 0.6, y + s * 0.2);
+        ctx.lineTo(x + s * 0.6, y + s * 0.2);
+        ctx.moveTo(x, y - s * 0.4);
+        ctx.lineTo(x, y + s);
+        break;
+      case 10:
+        ctx.moveTo(x - s * 0.8, y - s);
+        ctx.lineTo(x - s * 0.2, y + s);
+        ctx.moveTo(x + s * 0.8, y - s);
+        ctx.lineTo(x + s * 0.2, y + s);
+        ctx.moveTo(x - s, y);
+        ctx.lineTo(x + s, y);
+        break;
+      case 11:
+        ctx.moveTo(x - s * 0.8, y - s * 0.8);
+        ctx.lineTo(x + s * 0.8, y - s * 0.8);
+        ctx.lineTo(x + s * 0.8, y + s * 0.8);
+        ctx.moveTo(x - s * 0.8, y);
+        ctx.lineTo(x + s * 0.3, y);
+        ctx.moveTo(x - s * 0.8, y + s * 0.8);
+        ctx.lineTo(x + s * 0.8, y + s * 0.8);
+        break;
+    }
+    ctx.stroke();
+  }
+
+  // Generate sky searchlights
+  const searchlights = [];
+  for (let i = 0; i < 6; i++) {
+    searchlights.push({
+      x: range(0.08, 0.92),
+      y: range(0.75, 0.95),
+      baseAngle: range(-Math.PI * 0.68, -Math.PI * 0.32),
+      swing: range(0.18, 0.38),
+      speed: range(0.3, 0.75),
+      phase: range(0, Math.PI * 2),
+      width: range(0.04, 0.085),
+      color: pick([NEON.cyan, NEON.magenta, NEON.pink, NEON.electric])
+    });
+  }
+
+  // Generate 4 depth layers of towers so flying cars weave in front and behind them
+  // Layer 0: Distant mega-arcologies
+  // Layer 1: Mid-back skyline towers
+  // Layer 2: Mid-front neon towers with billboards & bridges
+  // Layer 3: Foreground canyon framing towers
+  const towersByLayer = [[], [], [], []];
+
+  function createTower(layer, xNorm, wNorm, topYNorm) {
+    const colorA = pick(NEON_LIST);
+    let colorB = pick(NEON_LIST);
+    if (colorB === colorA) colorB = NEON.cyan;
+
+    const shape = pick(['crown', 'slanted', 'stepped', 'spire', 'twin', 'monolith']);
+    const hasSpire = rand() > 0.3;
+    const spireH = range(0.04, 0.13);
+
+    // Pre-generate window strips / blocks
+    const windowCols = Math.max(3, Math.floor(wNorm * (layer === 0 ? 55 : layer === 1 ? 75 : 90)));
+    const windowRows = Math.floor((1.0 - topYNorm) * (layer === 0 ? 60 : 85));
+    const litCells = [];
+    for (let r = 2; r < windowRows; r++) {
+      if (rand() < 0.18) continue; // dark mechanical floor
+      const rowColor = rand() < 0.72 ? colorA : (rand() < 0.5 ? NEON.amber : colorB);
+      for (let c = 1; c < windowCols - 1; c++) {
+        if (rand() < (layer === 0 ? 0.25 : 0.42)) {
+          litCells.push({
+            c, r,
+            span: rand() < 0.25 ? 2 : 1,
+            color: rand() < 0.85 ? rowColor : NEON.gold,
+            alpha: range(0.35, 0.95),
+            blinkSpeed: rand() < 0.08 ? range(1.5, 5.0) : 0,
+            phase: range(0, 10)
+          });
+        }
+      }
+    }
+
+    // Generate neon signs on layers 1, 2, 3
+    const signs = [];
+    if (layer >= 1) {
+      const signCount = layer === 1 ? Math.floor(range(1, 3)) : Math.floor(range(2, 5));
+      for (let s = 0; s < signCount; s++) {
+        const isSideBanner = rand() < 0.55;
+        const side = rand() < 0.5 ? -1 : 1;
+        const signColor = pick(NEON_LIST);
+        const accentColor = pick(NEON_LIST);
+        const glyphs = [];
+        const glyphLen = Math.floor(range(3, 7));
+        for (let g = 0; g < glyphLen; g++) glyphs.push(Math.floor(rand() * 12));
+
+        signs.push({
+          isSideBanner,
+          side,
+          yNorm: topYNorm + range(0.06, Math.min(0.55, (0.88 - topYNorm))),
+          hNorm: isSideBanner ? range(0.11, 0.24) : range(0.05, 0.11),
+          wFactor: isSideBanner ? range(0.18, 0.28) : range(0.55, 0.86),
+          xOffsetFactor: isSideBanner ? side * 0.52 : range(-0.15, 0.15),
+          color: signColor,
+          accent: accentColor,
+          glyphs,
+          emblemType: Math.floor(rand() * 5),
+          flickerSeed: range(0, 100),
+          pulseSpeed: range(1.5, 4.5)
+        });
+      }
+    }
+
+    // Rooftop hologram for select towers
+    const hasHolo = layer >= 1 && rand() < 0.45;
+    const holo = hasHolo ? {
+      color: pick([NEON.cyan, NEON.magenta, NEON.pink, NEON.lime, NEON.gold]),
+      type: Math.floor(rand() * 4),
+      radiusFactor: range(0.28, 0.48),
+      speed: range(0.6, 1.8)
+    } : null;
+
+    // Vertical neon edge rails
+    const rails = [];
+    const railCount = Math.floor(range(1, 4));
+    for (let i = 0; i < railCount; i++) {
+      rails.push({
+        xFrac: range(0.08, 0.92),
+        yStart: topYNorm + range(0.02, 0.12),
+        yEnd: range(0.75, 0.98),
+        color: i % 2 === 0 ? colorA : colorB,
+        hasPulse: rand() < 0.7,
+        pulseSpeed: range(0.12, 0.35),
+        phase: range(0, 1)
+      });
+    }
+
+    return {
+      layer,
+      xNorm,
+      wNorm,
+      topYNorm,
+      shape,
+      colorA,
+      colorB,
+      hasSpire,
+      spireH,
+      windowCols,
+      windowRows,
+      litCells,
+      signs,
+      holo,
+      rails
+    };
+  }
+
+  // Populate Layer 0 (Mega background towers)
+  const l0Positions = [0.06, 0.18, 0.31, 0.46, 0.60, 0.74, 0.89];
+  for (const x of l0Positions) {
+    towersByLayer[0].push(createTower(0, x + range(-0.02, 0.02), range(0.11, 0.17), range(0.07, 0.24)));
+  }
+
+  // Populate Layer 1 (Mid-distant towers)
+  const l1Positions = [0.02, 0.13, 0.25, 0.38, 0.52, 0.66, 0.79, 0.93];
+  for (const x of l1Positions) {
+    towersByLayer[1].push(createTower(1, x + range(-0.015, 0.015), range(0.085, 0.13), range(0.12, 0.34)));
+  }
+
+  // Populate Layer 2 (Mid-foreground hero towers with rich signs)
+  const l2Positions = [0.09, 0.22, 0.36, 0.64, 0.78, 0.92];
+  for (const x of l2Positions) {
+    towersByLayer[2].push(createTower(2, x + range(-0.01, 0.01), range(0.08, 0.115), range(0.16, 0.38)));
+  }
+
+  // Center deep canyon hero spire in Layer 1/2
+  towersByLayer[1].push(createTower(1, 0.50, 0.11, 0.09));
+
+  // Populate Layer 3 (Foreground framing towers on sides & lower canyon)
+  towersByLayer[3].push(createTower(3, -0.01, 0.11, 0.06));
+  towersByLayer[3].push(createTower(3, 1.01, 0.11, 0.05));
+  towersByLayer[3].push(createTower(3, 0.16, 0.075, 0.46));
+  towersByLayer[3].push(createTower(3, 0.84, 0.08, 0.43));
+  towersByLayer[3].push(createTower(3, 0.43, 0.07, 0.58));
+
+  // Skybridges connecting towers across the canyon
+  const bridges = [
+    { layer: 1, x1: 0.24, x2: 0.52, y: 0.48, h: 0.012, color: NEON.cyan },
+    { layer: 1, x1: 0.50, x2: 0.80, y: 0.62, h: 0.014, color: NEON.magenta },
+    { layer: 2, x1: 0.08, x2: 0.37, y: 0.55, h: 0.016, color: NEON.amber },
+    { layer: 2, x1: 0.63, x2: 0.93, y: 0.51, h: 0.016, color: NEON.pink },
+    { layer: 2, x1: 0.21, x2: 0.65, y: 0.73, h: 0.018, color: NEON.cyan }
+  ];
+
+  // Flying cars weaving between towers across multiple depth layers
+  // Each car can smoothly shift altitude, weave sinusoidally, or even transition depth lanes!
+  const cars = [];
+  const CAR_COUNTS_PER_LAYER = [22, 26, 22, 12];
+
+  for (let layer = 0; layer < 4; layer++) {
+    const count = CAR_COUNTS_PER_LAYER[layer];
+    for (let i = 0; i < count; i++) {
+      const dir = i % 2 === 0 ? 1 : -1;
+      const scaleBase = [0.38, 0.62, 0.95, 1.48][layer];
+      const speedBase = [0.045, 0.08, 0.135, 0.22][layer];
+      const primaryColor = pick([NEON.cyan, NEON.magenta, NEON.amber, NEON.lime, NEON.pink, NEON.electric]);
+      const tailColor = dir === 1 ? NEON.crimson : (rand() < 0.5 ? NEON.magenta : NEON.amber);
+      const headColor = rand() < 0.7 ? NEON.cyan : '#fff7d6';
+
+      cars.push({
+        layer,
+        x: range(-0.2, 1.2),
+        baseY: range(0.14, 0.87),
+        dir,
+        speed: speedBase * range(0.75, 1.35),
+        scale: scaleBase * range(0.85, 1.2),
+        weaveAmp: range(0.018, 0.065) * (layer === 3 ? 1.25 : 1),
+        weaveFreq: range(1.6, 3.8),
+        weavePhase: range(0, Math.PI * 2),
+        depthWeaveAmp: range(0.12, 0.28),
+        primaryColor,
+        tailColor,
+        headColor,
+        isPolice: rand() < 0.14,
+        trail: []
+      });
+    }
+  }
+
+  // Rising steam / neon fog vents in the canyon
+  const fogPuffs = [];
+  for (let i = 0; i < 28; i++) {
+    fogPuffs.push({
+      x: range(0, 1),
+      y: range(0.45, 1.02),
+      r: range(0.08, 0.22),
+      vx: range(-0.012, 0.018),
+      vy: range(-0.015, -0.005),
+      color: pick([NEON.magenta, NEON.cyan, NEON.purple, NEON.pink]),
+      alpha: range(0.04, 0.12),
+      phase: range(0, Math.PI * 2)
+    });
+  }
+
+  // Multi-depth rain particles
+  const raindrops = [];
+  const RAIN_COUNT = 520;
+  for (let i = 0; i < RAIN_COUNT; i++) {
+    const z = rand(); // 0 = far, 1 = close foreground
+    raindrops.push({
+      x: rand(),
+      y: rand(),
+      z,
+      len: 0.022 + z * 0.055,
+      speed: 0.65 + z * 1.15,
+      color: rand() < 0.35 ? NEON.cyan : (rand() < 0.5 ? NEON.pink : '#b8dcff'),
+      alpha: 0.15 + z * 0.52
+    });
+  }
+
+  // Rain splashes on wet horizontal surfaces (bridges, lower terrace, ledges)
+  const splashes = [];
+  for (let i = 0; i < 65; i++) {
+    splashes.push({
+      x: rand(),
+      y: range(0.89, 0.995),
+      t: rand(),
+      speed: range(1.8, 3.4),
+      maxR: range(4, 15),
+      color: pick([NEON.cyan, NEON.magenta, NEON.pink, NEON.amber])
+    });
+  }
+
+  // Helper: Draw a tower with its architectural details, windows, rails, holos, and neon signs
+  function drawTower(t, time) {
+    const x = (t.xNorm - t.wNorm * 0.5) * vw;
+    const w = t.wNorm * vw;
+    const y = t.topYNorm * vh;
+    const h = vh * 0.92 - y;
+
+    // Base body darkness by layer depth
+    const bodyColors = [
+      ['#0d0622', '#060312'],
+      ['#0a051c', '#04020d'],
+      ['#070415', '#030109'],
+      ['#04020c', '#010005']
+    ][t.layer];
+
+    ctx.save();
+
+    // Rim backlight glow on distant/mid towers
+    if (t.layer <= 2) {
+      ctx.shadowColor = t.colorA;
+      ctx.shadowBlur = (3 - t.layer) * 8;
+    }
+
+    const grad = ctx.createLinearGradient(x, y, x + w, y + h);
+    grad.addColorStop(0, bodyColors[0]);
+    grad.addColorStop(1, bodyColors[1]);
+    ctx.fillStyle = grad;
+
+    // Draw silhouette with architectural crown
+    ctx.beginPath();
+    if (t.shape === 'slanted') {
+      ctx.moveTo(x, vh);
+      ctx.lineTo(x, y + w * 0.38);
+      ctx.lineTo(x + w * 0.85, y);
+      ctx.lineTo(x + w, y + w * 0.12);
+      ctx.lineTo(x + w, vh);
+    } else if (t.shape === 'stepped') {
+      ctx.moveTo(x, vh);
+      ctx.lineTo(x, y + h * 0.18);
+      ctx.lineTo(x + w * 0.15, y + h * 0.18);
+      ctx.lineTo(x + w * 0.15, y + h * 0.07);
+      ctx.lineTo(x + w * 0.3, y);
+      ctx.lineTo(x + w * 0.7, y);
+      ctx.lineTo(x + w * 0.85, y + h * 0.07);
+      ctx.lineTo(x + w * 0.85, y + h * 0.18);
+      ctx.lineTo(x + w, y + h * 0.18);
+      ctx.lineTo(x + w, vh);
+    } else if (t.shape === 'crown') {
+      ctx.moveTo(x, vh);
+      ctx.lineTo(x, y + w * 0.25);
+      ctx.lineTo(x + w * 0.18, y);
+      ctx.lineTo(x + w * 0.32, y + w * 0.18);
+      ctx.lineTo(x + w * 0.5, y - w * 0.08);
+      ctx.lineTo(x + w * 0.68, y + w * 0.18);
+      ctx.lineTo(x + w * 0.82, y);
+      ctx.lineTo(x + w, y + w * 0.25);
+      ctx.lineTo(x + w, vh);
+    } else {
+      ctx.rect(x, y, w, h + vh * 0.1);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // Neon edge highlight along building profile
+    ctx.strokeStyle = t.colorA;
+    ctx.globalAlpha = [0.35, 0.55, 0.75, 0.85][t.layer];
+    ctx.lineWidth = [1, 1.4, 2, 2.5][t.layer];
+    ctx.stroke();
+
+    // Spire & blinking aviation beacon
+    if (t.hasSpire) {
+      const sx = x + w * 0.5;
+      const sy = y - t.spireH * vh;
+      ctx.strokeStyle = t.colorB;
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = 0.75;
+      ctx.beginPath();
+      ctx.moveTo(sx, y + 6);
+      ctx.lineTo(sx, sy);
+      ctx.stroke();
+
+      const pulse = 0.5 + 0.5 * Math.sin(time * 4.5 + t.xNorm * 20);
+      ctx.fillStyle = NEON.crimson;
+      ctx.globalAlpha = 0.4 + 0.6 * pulse;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 3.5 + pulse * 3, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(sx, sy, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Lit windows
+    const cellW = w / t.windowCols;
+    const cellH = (vh - y) / t.windowRows;
+    const winW = Math.max(1.5, cellW * 0.62);
+    const winH = Math.max(1.5, cellH * 0.48);
+
+    for (let i = 0; i < t.litCells.length; i++) {
+      const cell = t.litCells[i];
+      const wy = y + cell.r * cellH;
+      if (wy > vh * 0.91) continue;
+      if (t.shape === 'slanted' && wy < y + w * 0.38) continue;
+      if (t.shape === 'stepped' && wy < y + h * 0.18 && (cell.c < t.windowCols * 0.22 || cell.c > t.windowCols * 0.76)) continue;
+
+      let a = cell.alpha;
+      if (cell.blinkSpeed > 0) {
+        a *= 0.35 + 0.65 * Math.sin(time * cell.blinkSpeed + cell.phase);
+      }
+      ctx.fillStyle = cell.color;
+      ctx.globalAlpha = a * [0.45, 0.68, 0.88, 0.95][t.layer];
+      ctx.fillRect(x + cell.c * cellW, wy, winW * cell.span, winH);
+    }
+
+    // Vertical neon energy rails & data packets
+    for (let i = 0; i < t.rails.length; i++) {
+      const r = t.rails[i];
+      const rx = x + r.xFrac * w;
+      const ry1 = r.yStart * vh;
+      const ry2 = r.yEnd * vh;
+
+      ctx.strokeStyle = r.color;
+      ctx.lineWidth = t.layer >= 2 ? 2.4 : 1.5;
+      ctx.globalAlpha = [0.35, 0.55, 0.8, 0.9][t.layer];
+      ctx.beginPath();
+      ctx.moveTo(rx, ry1);
+      ctx.lineTo(rx, ry2);
+      ctx.stroke();
+
+      if (r.hasPulse) {
+        const prog = (time * r.pulseSpeed + r.phase) % 1;
+        const py = ry1 + prog * (ry2 - ry1);
+        const packetLen = 28;
+        const pGrad = ctx.createLinearGradient(rx, py - packetLen, rx, py + packetLen);
+        pGrad.addColorStop(0, 'rgba(255,255,255,0)');
+        pGrad.addColorStop(0.5, '#ffffff');
+        pGrad.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.strokeStyle = pGrad;
+        ctx.lineWidth = 3.5;
+        ctx.globalAlpha = 0.95;
+        ctx.beginPath();
+        ctx.moveTo(rx, Math.max(ry1, py - packetLen));
+        ctx.lineTo(rx, Math.min(ry2, py + packetLen));
+        ctx.stroke();
+      }
+    }
+
+    // Rooftop spinning hologram projection
+    if (t.holo) {
+      const hx = x + w * 0.5;
+      const hy = y - w * 0.22;
+      const rad = w * t.holo.radiusFactor;
+
+      ctx.save();
+      ctx.translate(hx, hy);
+      ctx.globalCompositeOperation = 'lighter';
+
+      // Projection cone from roof
+      const coneGrad = ctx.createLinearGradient(0, w * 0.22, 0, -rad);
+      coneGrad.addColorStop(0, t.holo.color);
+      coneGrad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = coneGrad;
+      ctx.globalAlpha = 0.24;
+      ctx.beginPath();
+      ctx.moveTo(-rad * 0.25, w * 0.22);
+      ctx.lineTo(-rad * 1.1, -rad * 0.6);
+      ctx.lineTo(rad * 1.1, -rad * 0.6);
+      ctx.lineTo(rad * 0.25, w * 0.22);
+      ctx.closePath();
+      ctx.fill();
+
+      // Rotating wireframe rings / cyber-prism
+      ctx.strokeStyle = t.holo.color;
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = 0.8 + 0.2 * Math.sin(time * 6);
+
+      for (let ring = 0; ring < 3; ring++) {
+        const ry = (ring - 1) * rad * 0.35;
+        const rScale = ring === 1 ? 1.0 : 0.72;
+        ctx.beginPath();
+        ctx.ellipse(0, ry, rad * rScale, rad * 0.26 * rScale, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // Rotating central diamond/emblem
+      const spin = Math.cos(time * t.holo.speed);
+      ctx.beginPath();
+      ctx.moveTo(0, -rad * 0.75);
+      ctx.lineTo(rad * 0.65 * spin, 0);
+      ctx.lineTo(0, rad * 0.75);
+      ctx.lineTo(-rad * 0.65 * spin, 0);
+      ctx.closePath();
+      ctx.stroke();
+
+      ctx.restore();
+    }
+
+    // Glowing Neon Signs & Holographic Billboards
+    for (let i = 0; i < t.signs.length; i++) {
+      const s = t.signs[i];
+      const sw = w * s.wFactor;
+      const sh = vh * s.hNorm;
+      const sx = x + w * 0.5 + w * s.xOffsetFactor - sw * 0.5;
+      const sy = s.yNorm * vh;
+
+      // Occasional neon buzz/flicker
+      const flickerNoise = Math.sin(time * 23 + s.flickerSeed) * Math.sin(time * 57 + s.flickerSeed);
+      const flicker = flickerNoise > 0.92 ? 0.25 : 1.0;
+
+      ctx.save();
+
+      // Mounting struts for side-hanging banners
+      if (s.isSideBanner) {
+        ctx.strokeStyle = '#1f183d';
+        ctx.lineWidth = 3;
+        ctx.globalAlpha = 0.9;
+        const attachX = s.side < 0 ? x + 4 : x + w - 4;
+        const targetX = s.side < 0 ? sx + sw : sx;
+        ctx.beginPath();
+        ctx.moveTo(attachX, sy + sh * 0.2);
+        ctx.lineTo(targetX, sy + sh * 0.2);
+        ctx.moveTo(attachX, sy + sh * 0.8);
+        ctx.lineTo(targetX, sy + sh * 0.8);
+        ctx.stroke();
+      }
+
+      // Sign dark backing panel
+      ctx.fillStyle = 'rgba(6, 2, 18, 0.88)';
+      ctx.fillRect(sx, sy, sw, sh);
+
+      // Vivid outer bloom
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.shadowColor = s.color;
+      ctx.shadowBlur = 18 * flicker;
+
+      // Glowing border frame with chamfered corners
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = 2.4;
+      ctx.globalAlpha = 0.92 * flicker;
+      const cut = Math.min(sw, sh) * 0.16;
+      ctx.beginPath();
+      ctx.moveTo(sx + cut, sy);
+      ctx.lineTo(sx + sw - cut, sy);
+      ctx.lineTo(sx + sw, sy + cut);
+      ctx.lineTo(sx + sw, sy + sh - cut);
+      ctx.lineTo(sx + sw - cut, sy + sh);
+      ctx.lineTo(sx + cut, sy + sh);
+      ctx.lineTo(sx, sy + sh - cut);
+      ctx.lineTo(sx, sy + cut);
+      ctx.closePath();
+      ctx.stroke();
+
+      // Inner neon fill wash
+      ctx.fillStyle = s.color;
+      ctx.globalAlpha = 0.18 * flicker;
+      ctx.fill();
+
+      // Animated scanline bar inside sign
+      const scanY = sy + ((time * 0.45 + s.flickerSeed) % 1) * sh;
+      ctx.fillStyle = '#ffffff';
+      ctx.globalAlpha = 0.28 * flicker;
+      ctx.fillRect(sx + 2, scanY, sw - 4, 2);
+
+      // Draw cybernetic glyphs or graphic emblem
+      ctx.strokeStyle = '#ffffff';
+      ctx.shadowColor = s.accent;
+      ctx.shadowBlur = 12 * flicker;
+      ctx.lineWidth = Math.max(1.8, Math.min(sw, sh) * 0.085);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.globalAlpha = 0.95 * flicker;
+
+      if (s.isSideBanner) {
+        // Vertical stack of glowing cyber-glyphs
+        const count = s.glyphs.length;
+        const stepY = (sh - cut * 1.4) / count;
+        const gSize = Math.min(sw * 0.72, stepY * 0.82);
+        for (let g = 0; g < count; g++) {
+          const gy = sy + cut * 0.7 + stepY * (g + 0.5);
+          const gx = sx + sw * 0.5;
+          ctx.strokeStyle = g === 0 ? s.accent : '#ffffff';
+          drawGlyph(ctx, s.glyphs[g], gx, gy, gSize);
+        }
+      } else {
+        // Wide holographic billboard: cyber emblem + horizontal glyphs + animated equalizer bars
+        const emblemR = Math.min(sw * 0.22, sh * 0.34);
+        const ex = sx + emblemR * 1.45;
+        const ey = sy + sh * 0.5;
+
+        ctx.strokeStyle = s.accent;
+        ctx.beginPath();
+        if (s.emblemType % 3 === 0) {
+          // Neon lotus / sun
+          ctx.arc(ex, ey, emblemR, 0, Math.PI * 2);
+          ctx.moveTo(ex - emblemR * 1.3, ey);
+          ctx.lineTo(ex + emblemR * 1.3, ey);
+        } else if (s.emblemType % 3 === 1) {
+          // Cyber triangle
+          ctx.moveTo(ex, ey - emblemR);
+          ctx.lineTo(ex + emblemR, ey + emblemR * 0.85);
+          ctx.lineTo(ex - emblemR, ey + emblemR * 0.85);
+          ctx.closePath();
+        } else {
+          // Hex core
+          for (let k = 0; k < 6; k++) {
+            const a = (k * Math.PI) / 3 + time * 0.8;
+            const px = ex + Math.cos(a) * emblemR;
+            const py = ey + Math.sin(a) * emblemR;
+            if (k === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          }
+          ctx.closePath();
+        }
+        ctx.stroke();
+
+        // Horizontal glyphs next to emblem
+        const startX = ex + emblemR * 1.6;
+        const availW = sx + sw - cut - startX;
+        const hCount = Math.min(3, s.glyphs.length);
+        if (availW > 14) {
+          const stepX = availW / hCount;
+          const gSize = Math.min(stepX * 0.8, sh * 0.45);
+          ctx.strokeStyle = '#ffffff';
+          for (let g = 0; g < hCount; g++) {
+            drawGlyph(ctx, s.glyphs[g], startX + stepX * (g + 0.5), ey - sh * 0.1, gSize);
+          }
+          // Animated pulse bar below glyphs
+          const barW = availW * (0.45 + 0.45 * Math.sin(time * s.pulseSpeed + s.flickerSeed));
+          ctx.fillStyle = s.accent;
+          ctx.fillRect(startX, ey + sh * 0.22, barW, 3);
+        }
+      }
+
+      ctx.restore();
+    }
+
+    ctx.restore();
+  }
+
+  // Draw skybridges at a given layer
+  function drawBridgesForLayer(layer, time) {
+    for (let i = 0; i < bridges.length; i++) {
+      const b = bridges[i];
+      if (b.layer !== layer) continue;
+      const x1 = b.x1 * vw;
+      const x2 = b.x2 * vw;
+      const y = b.y * vh;
+      const h = b.h * vh;
+
+      ctx.save();
+      ctx.fillStyle = '#070312';
+      ctx.fillRect(x1, y, x2 - x1, h);
+
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.strokeStyle = b.color;
+      ctx.shadowColor = b.color;
+      ctx.shadowBlur = 10;
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = 0.8;
+      ctx.beginPath();
+      ctx.moveTo(x1, y);
+      ctx.lineTo(x2, y);
+      ctx.moveTo(x1, y + h);
+      ctx.lineTo(x2, y + h);
+      ctx.stroke();
+
+      // Animated light nodes along bridge
+      const dots = 12;
+      for (let d = 0; d < dots; d++) {
+        const frac = ((d / dots) + time * 0.08) % 1;
+        const dx = x1 + frac * (x2 - x1);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(dx - 2, y + h * 0.35, 4, h * 0.3);
+      }
+      ctx.restore();
+    }
+  }
+
+  // Update and draw flying cars for a given layer
+  function drawCarsForLayer(layer, dt, time) {
+    for (let i = 0; i < cars.length; i++) {
+      const c = cars[i];
+      if (c.layer !== layer) continue;
+
+      c.x += c.dir * c.speed * dt;
+      if (c.dir === 1 && c.x > 1.25) {
+        c.x = -0.22;
+        c.trail.length = 0;
+      } else if (c.dir === -1 && c.x < -0.25) {
+        c.x = 1.22;
+        c.trail.length = 0;
+      }
+
+      // Weaving trajectory (vertical & subtle banking)
+      const waveAngle = time * c.weaveFreq + c.weavePhase;
+      const yOffset = Math.sin(waveAngle) * c.weaveAmp + Math.cos(waveAngle * 0.5) * (c.weaveAmp * 0.4);
+      const pitch = Math.cos(waveAngle) * c.weaveAmp * c.weaveFreq * 0.35 * c.dir;
+      const scaleMod = 1 + Math.sin(waveAngle * 0.7) * c.depthWeaveAmp;
+
+      const cx = c.x * vw;
+      const cy = (c.baseY + yOffset) * vh;
+      const sc = c.scale * scaleMod;
+
+      // Record light ribbon trail
+      c.trail.push({ x: cx, y: cy });
+      const maxTrail = layer >= 2 ? 22 : 14;
+      if (c.trail.length > maxTrail) c.trail.shift();
+
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+
+      // Draw glowing tail light ribbon
+      if (c.trail.length > 2) {
+        ctx.beginPath();
+        for (let t = 0; t < c.trail.length; t++) {
+          const pt = c.trail[t];
+          if (t === 0) ctx.moveTo(pt.x, pt.y);
+          else ctx.lineTo(pt.x, pt.y);
+        }
+        const tailStart = c.trail[0];
+        const tGrad = ctx.createLinearGradient(tailStart.x, tailStart.y, cx, cy);
+        tGrad.addColorStop(0, 'rgba(0,0,0,0)');
+        tGrad.addColorStop(1, c.tailColor);
+        ctx.strokeStyle = tGrad;
+        ctx.lineWidth = Math.max(1.5, 4.2 * sc);
+        ctx.globalAlpha = 0.78;
+        ctx.stroke();
+      }
+
+      ctx.translate(cx, cy);
+      ctx.rotate(pitch);
+      ctx.scale(c.dir * sc, sc);
+
+      // Volumetric headlight cone cutting through rain
+      const coneLen = 115;
+      const hGrad = ctx.createLinearGradient(12, 0, 12 + coneLen, 0);
+      hGrad.addColorStop(0, c.headColor);
+      hGrad.addColorStop(1, 'rgba(0, 246, 255, 0)');
+      ctx.fillStyle = hGrad;
+      ctx.globalAlpha = 0.32;
+      ctx.beginPath();
+      ctx.moveTo(10, -2);
+      ctx.lineTo(12 + coneLen, -18);
+      ctx.lineTo(12 + coneLen, 16);
+      ctx.lineTo(10, 3);
+      ctx.closePath();
+      ctx.fill();
+
+      // Sleek spinner chassis
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = '#090618';
+      ctx.strokeStyle = c.primaryColor;
+      ctx.lineWidth = 1.4;
+      ctx.globalAlpha = 0.95;
+      ctx.beginPath();
+      ctx.moveTo(-16, 2);
+      ctx.lineTo(-10, -4.5);
+      ctx.lineTo(4, -5);
+      ctx.lineTo(16, 0.5);
+      ctx.lineTo(12, 4);
+      ctx.lineTo(-13, 4.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // Glowing canopy & thrusters
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = c.primaryColor;
+      ctx.globalAlpha = 0.85;
+      ctx.beginPath();
+      ctx.moveTo(-5, -3.5);
+      ctx.lineTo(3, -3.8);
+      ctx.lineTo(9, 0);
+      ctx.lineTo(-4, 0);
+      ctx.closePath();
+      ctx.fill();
+
+      // Twin rear thruster flare
+      ctx.fillStyle = c.tailColor;
+      ctx.shadowColor = c.tailColor;
+      ctx.shadowBlur = 12;
+      ctx.beginPath();
+      ctx.arc(-16, 1.5, 3.8, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Bright headlight core
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowColor = c.headColor;
+      ctx.shadowBlur = 10;
+      ctx.beginPath();
+      ctx.arc(15, 1, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Police spinner strobe (red/cyan alternating flash)
+      if (c.isPolice) {
+        const strobe = Math.sin(time * 28 + i) > 0 ? NEON.crimson : NEON.cyan;
+        ctx.fillStyle = strobe;
+        ctx.shadowColor = strobe;
+        ctx.shadowBlur = 18;
+        ctx.beginPath();
+        ctx.arc(-1, -6, 3.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.restore();
+    }
+  }
+
+  // Draw volumetric neon fog between layers
+  function drawCanyonFog(layer, dt, time) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < fogPuffs.length; i++) {
+      if (i % 3 !== layer % 3) continue;
+      const f = fogPuffs[i];
+      f.x += f.vx * dt * 0.25;
+      f.y += f.vy * dt * 0.25;
+      if (f.x > 1.2) f.x = -0.2;
+      if (f.x < -0.2) f.x = 1.2;
+      if (f.y < 0.35) f.y = 1.05;
+
+      const fx = f.x * vw;
+      const fy = f.y * vh;
+      const fr = f.r * Math.max(vw, vh);
+
+      const g = ctx.createRadialGradient(fx, fy, 0, fx, fy, fr);
+      g.addColorStop(0, f.color);
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g;
+      ctx.globalAlpha = f.alpha * (0.75 + 0.25 * Math.sin(time * 1.2 + f.phase));
+      ctx.beginPath();
+      ctx.arc(fx, fy, fr, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // Draw wet lower deck with neon reflections & raindrop splashes
+  function drawWetDeckAndSplashes(dt, time) {
+    const deckY = vh * 0.90;
+    const deckH = vh - deckY;
+
+    // Dark wet asphalt base
+    const baseGrad = ctx.createLinearGradient(0, deckY, 0, vh);
+    baseGrad.addColorStop(0, '#050210');
+    baseGrad.addColorStop(1, '#020108');
+    ctx.fillStyle = baseGrad;
+    ctx.fillRect(0, deckY, vw, deckH);
+
+    // Shimmering vertical neon reflections on wet ground
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let layer = 1; layer <= 3; layer++) {
+      const list = towersByLayer[layer];
+      for (let i = 0; i < list.length; i++) {
+        const t = list[i];
+        const rx = (t.xNorm - t.wNorm * 0.45) * vw;
+        const rw = t.wNorm * 0.9 * vw;
+
+        const rGrad = ctx.createLinearGradient(rx, deckY, rx, vh);
+        rGrad.addColorStop(0, t.colorA);
+        rGrad.addColorStop(0.5, t.colorB);
+        rGrad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = rGrad;
+        ctx.globalAlpha = 0.16;
+        ctx.fillRect(rx, deckY, rw, deckH);
+
+        // Horizontal wet ripple streaks
+        ctx.fillStyle = t.colorA;
+        ctx.globalAlpha = 0.28;
+        for (let s = 0; s < 7; s++) {
+          const sy = deckY + (s / 7) * deckH + Math.sin(time * 3 + s + i) * 2;
+          const sw = rw * (0.4 + 0.5 * Math.sin(time * 2 + s * 1.7));
+          ctx.fillRect(rx + (rw - sw) * 0.5, sy, sw, 2);
+        }
+      }
+    }
+
+    // Horizon neon curb strip
+    const curbGrad = ctx.createLinearGradient(0, deckY, vw, deckY);
+    curbGrad.addColorStop(0, NEON.magenta);
+    curbGrad.addColorStop(0.3, NEON.cyan);
+    curbGrad.addColorStop(0.65, NEON.pink);
+    curbGrad.addColorStop(1, NEON.amber);
+    ctx.fillStyle = curbGrad;
+    ctx.globalAlpha = 0.85;
+    ctx.fillRect(0, deckY, vw, 2.5);
+
+    // Expanding rain splash ripples
+    for (let i = 0; i < splashes.length; i++) {
+      const sp = splashes[i];
+      sp.t += dt * sp.speed;
+      if (sp.t >= 1) {
+        sp.t = 0;
+        sp.x = Math.random();
+        sp.y = 0.902 + Math.random() * 0.095;
+      }
+      const sx = sp.x * vw;
+      const sy = sp.y * vh;
+      const rad = sp.t * sp.maxR;
+
+      ctx.strokeStyle = sp.color;
+      ctx.lineWidth = 1.4;
+      ctx.globalAlpha = (1 - sp.t) * 0.75;
+      ctx.beginPath();
+      ctx.ellipse(sx, sy, rad * 1.8, rad * 0.42, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // Draw driving cyberpunk rain
+  function drawRain(dt) {
+    const windSlope = -0.18; // Slanted rain
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round';
+
+    for (let i = 0; i < raindrops.length; i++) {
+      const r = raindrops[i];
+      r.y += r.speed * dt;
+      r.x += windSlope * r.speed * dt;
+
+      if (r.y > 1.05) {
+        r.y = -0.06;
+        r.x = Math.random() * 1.2;
+      }
+      if (r.x < -0.1) {
+        r.x += 1.2;
+      }
+
+      const x1 = r.x * vw;
+      const y1 = r.y * vh;
+      const x2 = x1 + windSlope * r.len * vh;
+      const y2 = y1 + r.len * vh;
+
+      ctx.strokeStyle = r.color;
+      ctx.lineWidth = 0.8 + r.z * 1.4;
+      ctx.globalAlpha = r.alpha;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  let lastTime = performance.now();
+
+  function render(now) {
+    const dt = Math.min(0.05, (now - lastTime) * 0.001);
+    lastTime = now;
+    const time = now * 0.001;
+
+    ctx.save();
+    ctx.scale( canvas.width / vw, canvas.height / vh );
+
+    // 1. Deep night sky & toxic neon horizon gradient
+    const skyGrad = ctx.createLinearGradient(0, 0, 0, vh * 0.92);
+    skyGrad.addColorStop(0, '#03010a');
+    skyGrad.addColorStop(0.32, '#0c0424');
+    skyGrad.addColorStop(0.65, '#220842');
+    skyGrad.addColorStop(0.88, '#4a0b5c');
+    skyGrad.addColorStop(1, '#12294a');
+    ctx.fillStyle = skyGrad;
+    ctx.fillRect(0, 0, vw, vh);
+
+    // Subtle distant lightning sheet in upper storm clouds
+    const lightning = Math.pow(Math.max(0, Math.sin(time * 0.9) * Math.sin(time * 7.3) * Math.sin(time * 19.1)), 12);
+    if (lightning > 0.02) {
+      ctx.fillStyle = '#8ef6ff';
+      ctx.globalAlpha = lightning * 0.35;
+      ctx.fillRect(0, 0, vw, vh * 0.55);
+      ctx.globalAlpha = 1;
+    }
+
+    // 2. Sweeping sky searchlights
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < searchlights.length; i++) {
+      const s = searchlights[i];
+      const sx = s.x * vw;
+      const sy = s.y * vh;
+      const angle = s.baseAngle + Math.sin(time * s.speed + s.phase) * s.swing;
+      const len = vh * 1.15;
+
+      const x1 = sx + Math.cos(angle - s.width) * len;
+      const y1 = sy + Math.sin(angle - s.width) * len;
+      const x2 = sx + Math.cos(angle + s.width) * len;
+      const y2 = sy + Math.sin(angle + s.width) * len;
+
+      const bGrad = ctx.createLinearGradient(sx, sy, (x1 + x2) * 0.5, (y1 + y2) * 0.5);
+      bGrad.addColorStop(0, s.color);
+      bGrad.addColorStop(1, 'rgba(0,0,0,0)');
+
+      ctx.fillStyle = bGrad;
+      ctx.globalAlpha = 0.16;
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+
+    // 3. Interleaved Depth Layers: Towers -> Bridges -> Weaving Flying Cars -> Neon Fog
+    for (let layer = 0; layer < 4; layer++) {
+      const layerTowers = towersByLayer[layer];
+      for (let i = 0; i < layerTowers.length; i++) {
+        drawTower(layerTowers[i], time);
+      }
+      drawBridgesForLayer(layer, time);
+      drawCarsForLayer(layer, dt, time);
+      if (layer < 3) {
+        drawCanyonFog(layer, dt, time);
+      }
+    }
+
+    // 4. Wet reflective lower terrace & raindrop splash ripples
+    drawWetDeckAndSplashes(dt, time);
+
+    // 5. Multi-depth neon rain streaks
+    drawRain(dt);
+
+    ctx.restore();
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>

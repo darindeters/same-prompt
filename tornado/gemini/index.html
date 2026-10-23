@@ -1,0 +1,1127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Tornado at Dusk</title>
+<style>
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #0b0514;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('scene');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  // Reference virtual resolution 1080x1080 for consistent composition
+  const SIZE = 1080;
+  let width = SIZE;
+  let height = SIZE;
+  let scale = 1;
+  let offsetX = 0;
+  let offsetY = 0;
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = window.innerWidth * dpr;
+    canvas.height = window.innerHeight * dpr;
+    width = canvas.width;
+    height = canvas.height;
+    // Cover-style scaling centered around 1080x1080 coordinate system
+    scale = Math.max(width / SIZE, height / SIZE);
+    offsetX = (width - SIZE * scale) * 0.5;
+    offsetY = (height - SIZE * scale) * 0.5;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Deterministic / seeded helper alongside Math.random
+  const rand = (min, max) => min + Math.random() * (max - min);
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+  // Scene layout constants (in 1080x1080 space)
+  const HORIZON_Y = 665;
+  const CLOUD_BASE_Y = 235;
+
+  // Tornado state
+  const tornado = {
+    baseX: 540,
+    baseY: 790,
+    topX: 480,
+    topY: 195,
+    phase: 0,
+    lightningIntensity: 0,
+    sheetLightning: 0,
+    bolt: null,
+    nextBoltTimer: 1.2
+  };
+
+  // Pre-generate supercell cloud puffs for the upper wall cloud & anvil
+  const cloudLayers = [];
+  for (let layer = 0; layer < 4; layer++) {
+    const puffs = [];
+    const count = 22 + layer * 6;
+    for (let i = 0; i < count; i++) {
+      puffs.push({
+        x: (i / count) * (SIZE + 400) - 200 + rand(-30, 30),
+        y: 50 + layer * 58 + rand(-22, 24),
+        rx: rand(110, 210),
+        ry: rand(42, 85),
+        speed: (0.18 + layer * 0.12) * (layer % 2 === 0 ? 1 : -0.8),
+        shade: layer,
+        seed: rand(0, Math.PI * 2)
+      });
+    }
+    cloudLayers.push(puffs);
+  }
+
+  // Rotating mesocyclone collar rings around the upper funnel
+  const mesoRings = [];
+  for (let i = 0; i < 28; i++) {
+    mesoRings.push({
+      angle: (i / 28) * Math.PI * 2,
+      radiusScale: rand(0.65, 1.35),
+      tier: i % 3,
+      size: rand(55, 120),
+      speed: rand(0.9, 1.6)
+    });
+  }
+
+  // Funnel vertical slices for volumetric sinuous rendering
+  const FUNNEL_SEGMENTS = 68;
+  const funnelRings = [];
+  for (let i = 0; i <= FUNNEL_SEGMENTS; i++) {
+    const t = i / FUNNEL_SEGMENTS; // 0 = top (cloud base), 1 = ground
+    funnelRings.push({
+      t,
+      noiseOffset: rand(0, 100),
+      bandPhase: rand(0, Math.PI * 2)
+    });
+  }
+
+  // Spiraling vortex filaments wrapping the funnel
+  const vortexStrands = [];
+  for (let i = 0; i < 42; i++) {
+    vortexStrands.push({
+      t: Math.random(),
+      angle: rand(0, Math.PI * 2),
+      rotSpeed: rand(4.5, 8.2),
+      riseSpeed: rand(0.22, 0.45),
+      length: rand(0.6, 1.35),
+      thickness: rand(2.5, 7.5),
+      radiusOffset: rand(0.88, 1.28),
+      hueShift: rand(-15, 20)
+    });
+  }
+
+  // Flying debris & dust particles lifted from the farmland
+  const DEBRIS_COUNT = 340;
+  const debrisList = [];
+  function resetDebris(p, randomHeight = false) {
+    p.t = randomHeight ? Math.pow(Math.random(), 1.3) : rand(0.78, 1.0);
+    p.angle = rand(0, Math.PI * 2);
+    p.rotSpeed = rand(4.0, 9.5);
+    p.upSpeed = rand(0.18, 0.48);
+    p.radialSpread = rand(0.85, 2.35);
+    p.size = rand(2.2, 11.5);
+    p.spin = rand(0, Math.PI * 2);
+    p.spinSpeed = rand(-12, 12);
+    // Type: 0 = glowing dust clump, 1 = soil/clod, 2 = barn plank/sheet metal, 3 = golden straw/stalk
+    const r = Math.random();
+    p.type = r < 0.45 ? 0 : r < 0.72 ? 3 : r < 0.9 ? 1 : 2;
+    p.aspect = p.type === 2 ? rand(2.2, 4.2) : p.type === 3 ? rand(3.5, 6.0) : rand(1.0, 1.6);
+  }
+  for (let i = 0; i < DEBRIS_COUNT; i++) {
+    const p = {};
+    resetDebris(p, true);
+    debrisList.push(p);
+  }
+
+  // Ground dust cloud puffs billowing at the tornado foot
+  const baseDustPuffs = [];
+  for (let i = 0; i < 55; i++) {
+    baseDustPuffs.push({
+      angle: rand(0, Math.PI * 2),
+      dist: rand(0.1, 1.0),
+      height: rand(0, 1),
+      size: rand(35, 95),
+      speed: rand(2.2, 5.2),
+      lift: rand(0.3, 0.9),
+      phase: rand(0, Math.PI * 2)
+    });
+  }
+
+  // Surface inflow dust streaks skimming across the fields into the vortex base
+  const inflowStreaks = [];
+  for (let i = 0; i < 65; i++) {
+    inflowStreaks.push({
+      side: i % 2 === 0 ? -1 : 1,
+      progress: Math.random(),
+      yOffset: rand(-95, 240),
+      length: rand(65, 190),
+      speed: rand(0.55, 1.25),
+      thickness: rand(2, 8),
+      warmth: Math.random()
+    });
+  }
+
+  // Farmland crop stalks in foreground & midground that bend violently toward the funnel
+  const cropStalks = [];
+  for (let i = 0; i < 260; i++) {
+    const depth = Math.pow(Math.random(), 0.75); // 0 near horizon, 1 near bottom
+    const y = HORIZON_Y + 35 + depth * (SIZE - HORIZON_Y - 15);
+    const x = rand(-60, SIZE + 60);
+    cropStalks.push({
+      x,
+      y,
+      depth,
+      height: 14 + depth * 52,
+      phase: rand(0, Math.PI * 2),
+      stiffness: rand(0.7, 1.3),
+      hue: rand(26, 46)
+    });
+  }
+  cropStalks.sort((a, b) => a.y - b.y);
+
+  // Fence posts & power line poles along a country road
+  const fencePosts = [];
+  const POST_COUNT = 16;
+  for (let i = 0; i < POST_COUNT; i++) {
+    const d = i / (POST_COUNT - 1);
+    fencePosts.push({
+      d,
+      swaySeed: rand(0, 10)
+    });
+  }
+
+  // Rain streaks in the distant storm downdraft
+  const rainStreaks = [];
+  for (let i = 0; i < 90; i++) {
+    rainStreaks.push({
+      x: rand(-100, SIZE + 100),
+      y: rand(CLOUD_BASE_Y, HORIZON_Y + 80),
+      len: rand(45, 110),
+      speed: rand(650, 1100)
+    });
+  }
+
+  // Evaluate funnel spine center (x, y) and radius at normalized vertical parameter t in [0, 1]
+  function getFunnelPoint(t, time) {
+    // Sinuous snake-like bend from cloud top (t=0) to tearing ground contact (t=1)
+    const ropeWave =
+      Math.sin(time * 1.45 - t * 4.2) * (38 * (1 - t * 0.35)) +
+      Math.cos(time * 2.3 + t * 6.5) * (16 * t * (1 - t));
+    const groundSweep = Math.sin(time * 0.55) * 145 + Math.cos(time * 1.15) * 45;
+    const topSweep = Math.sin(time * 0.42 + 0.9) * 70;
+
+    // Ease curve from top to bottom with dramatic bend in lower-middle section
+    const bendBias = Math.sin(t * Math.PI) * Math.cos(time * 0.8) * 68;
+    const x =
+      tornado.topX +
+      topSweep * (1 - t) +
+      (tornado.baseX + groundSweep - tornado.topX) * Math.pow(t, 1.35) +
+      ropeWave +
+      bendBias;
+
+    const y = tornado.topY + (tornado.baseY - tornado.topY) * t;
+
+    // Classic wedge-to-stovepipe profile: wide collar at top, tight intense core near ground, wide debris flare at very bottom
+    const upperCollar = Math.pow(1 - t, 1.65) * 185;
+    const coreRadius = 24 + (1 - t) * 52;
+    const groundFlare = t > 0.78 ? Math.pow((t - 0.78) / 0.22, 1.8) * 75 : 0;
+    const pulse = Math.sin(time * 5.5 - t * 12) * 5;
+    const radius = upperCollar + coreRadius + groundFlare + pulse;
+
+    return { x, y, radius };
+  }
+
+  // Generate jagged branching lightning bolt inside/around the supercell and funnel
+  function createLightningBolt(time) {
+    const topPt = getFunnelPoint(0.08, time);
+    const midPt = getFunnelPoint(0.45, time);
+    const isCloseToFunnel = Math.random() < 0.7;
+    const startX = isCloseToFunnel
+      ? topPt.x + rand(-190, 190)
+      : rand(120, SIZE - 120);
+    const startY = rand(75, 220);
+    const endX = isCloseToFunnel
+      ? midPt.x + rand(-240, 240)
+      : startX + rand(-160, 160);
+    const endY = isCloseToFunnel ? rand(480, HORIZON_Y + 25) : rand(420, HORIZON_Y);
+
+    const segments = [];
+    function buildBranch(x1, y1, x2, y2, displace, thickness) {
+      if (displace < 8) {
+        segments.push({ x1, y1, x2, y2, thickness });
+        return;
+      }
+      const mx = (x1 + x2) * 0.5 + (Math.random() - 0.5) * displace;
+      const my = (y1 + y2) * 0.5 + (Math.random() - 0.5) * displace * 0.35;
+      buildBranch(x1, y1, mx, my, displace * 0.52, thickness);
+      buildBranch(mx, my, x2, y2, displace * 0.52, thickness * 0.92);
+
+      if (displace > 28 && Math.random() < 0.38) {
+        const bx = mx + rand(-140, 140);
+        const by = my + rand(60, 190);
+        buildBranch(mx, my, bx, by, displace * 0.45, thickness * 0.55);
+      }
+    }
+
+    buildBranch(startX, startY, endX, endY, 130, 4.5);
+    return {
+      segments,
+      x: startX,
+      y: startY,
+      life: 1.0,
+      decay: rand(3.2, 5.5)
+    };
+  }
+
+  function drawSkyAndHorizonGlow(time) {
+    const lightningBoost = tornado.lightningIntensity * 0.35 + tornado.sheetLightning * 0.25;
+
+    // Vivid saturated dusk sky gradient: deep violet zenith -> electric magenta -> fiery orange-red -> blazing golden-amber horizon
+    const skyGrad = ctx.createLinearGradient(0, 0, 0, HORIZON_Y + 30);
+    skyGrad.addColorStop(0.0, '#090316');
+    skyGrad.addColorStop(0.22, '#1f093d');
+    skyGrad.addColorStop(0.46, '#58125c');
+    skyGrad.addColorStop(0.68, '#b52147');
+    skyGrad.addColorStop(0.84, '#f25722');
+    skyGrad.addColorStop(0.95, '#ff9e1b');
+    skyGrad.addColorStop(1.0, '#ffe156');
+    ctx.fillStyle = skyGrad;
+    ctx.fillRect(-200, -200, SIZE + 400, HORIZON_Y + 230);
+
+    // Intense setting sun / dusk afterglow on the horizon behind the storm
+    const sunX = 215 + Math.sin(time * 0.15) * 18;
+    const sunY = HORIZON_Y - 10;
+    const sunGlow = ctx.createRadialGradient(sunX, sunY, 10, sunX, sunY, 540);
+    sunGlow.addColorStop(0.0, 'rgba(255, 248, 175, 0.95)');
+    sunGlow.addColorStop(0.18, 'rgba(255, 168, 38, 0.82)');
+    sunGlow.addColorStop(0.45, 'rgba(245, 58, 72, 0.48)');
+    sunGlow.addColorStop(0.75, 'rgba(130, 18, 105, 0.18)');
+    sunGlow.addColorStop(1.0, 'rgba(30, 5, 50, 0)');
+    ctx.fillStyle = sunGlow;
+    ctx.fillRect(-200, 100, SIZE + 400, HORIZON_Y);
+
+    // Secondary eerie green-teal hail-core glow inside the supercell vault (classic severe storm hue)
+    const footPt = getFunnelPoint(0.2, time);
+    const hailGlow = ctx.createRadialGradient(
+      footPt.x + 70,
+      CLOUD_BASE_Y + 55,
+      20,
+      footPt.x + 70,
+      CLOUD_BASE_Y + 75,
+      360
+    );
+    hailGlow.addColorStop(0.0, `rgba(72, 235, 200, ${0.28 + lightningBoost * 0.35})`);
+    hailGlow.addColorStop(0.5, `rgba(38, 145, 148, ${0.16 + lightningBoost * 0.2})`);
+    hailGlow.addColorStop(1.0, 'rgba(20, 30, 60, 0)');
+    ctx.fillStyle = hailGlow;
+    ctx.fillRect(-100, 60, SIZE + 200, HORIZON_Y);
+
+    // Sheet lightning flash illuminating the middle sky
+    if (lightningBoost > 0.01) {
+      const lx = tornado.bolt ? tornado.bolt.x : footPt.x;
+      const ly = tornado.bolt ? tornado.bolt.y : 210;
+      const flashGrad = ctx.createRadialGradient(lx, ly, 20, lx, ly, 680);
+      flashGrad.addColorStop(0, `rgba(235, 225, 255, ${clamp(lightningBoost * 1.4, 0, 0.85)})`);
+      flashGrad.addColorStop(0.4, `rgba(185, 140, 255, ${clamp(lightningBoost * 0.8, 0, 0.5)})`);
+      flashGrad.addColorStop(1, 'rgba(90, 40, 150, 0)');
+      ctx.fillStyle = flashGrad;
+      ctx.fillRect(-200, -100, SIZE + 400, HORIZON_Y + 120);
+    }
+  }
+
+  function drawDistantRainAndDowndraft(time) {
+    const topPt = getFunnelPoint(0.15, time);
+    // Dark rain curtain on the right side of the supercell
+    const curtainGrad = ctx.createLinearGradient(topPt.x + 40, CLOUD_BASE_Y, topPt.x + 390, HORIZON_Y);
+    curtainGrad.addColorStop(0, 'rgba(24, 15, 42, 0.72)');
+    curtainGrad.addColorStop(0.6, 'rgba(52, 24, 58, 0.38)');
+    curtainGrad.addColorStop(1, 'rgba(90, 32, 55, 0)');
+    ctx.fillStyle = curtainGrad;
+    ctx.fillRect(topPt.x - 40, CLOUD_BASE_Y, 560, HORIZON_Y - CLOUD_BASE_Y + 10);
+
+    // Slanted wind-whipped rain shafts
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255, 165, 130, 0.13)';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    for (let i = 0; i < rainStreaks.length; i++) {
+      const r = rainStreaks[i];
+      const rx = ((r.x + time * 180) % (SIZE + 200)) - 100;
+      const ry = CLOUD_BASE_Y + ((r.y + time * r.speed) % (HORIZON_Y - CLOUD_BASE_Y + 40));
+      ctx.moveTo(rx, ry);
+      ctx.lineTo(rx - r.len * 0.42, ry + r.len);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawFarmland(time, groundPt) {
+    // Rich dark soil and dusk-lit farmland base
+    const groundGrad = ctx.createLinearGradient(0, HORIZON_Y, 0, SIZE);
+    groundGrad.addColorStop(0.0, '#3a1423');
+    groundGrad.addColorStop(0.18, '#2d111b');
+    groundGrad.addColorStop(0.48, '#231016');
+    groundGrad.addColorStop(1.0, '#12070c');
+    ctx.fillStyle = groundGrad;
+    ctx.fillRect(-200, HORIZON_Y - 2, SIZE + 400, SIZE - HORIZON_Y + 200);
+
+    // Distant rolling hills along horizon silhouetted against golden dusk
+    ctx.fillStyle = '#260b1c';
+    ctx.beginPath();
+    ctx.moveTo(-200, HORIZON_Y + 8);
+    for (let x = -200; x <= SIZE + 200; x += 40) {
+      const h = Math.sin(x * 0.006 + 1.2) * 14 + Math.cos(x * 0.015) * 7;
+      ctx.lineTo(x, HORIZON_Y - 6 + h);
+    }
+    ctx.lineTo(SIZE + 200, HORIZON_Y + 30);
+    ctx.closePath();
+    ctx.fill();
+
+    // Perspective converging crop rows & furrows stretching toward the vanishing point
+    const vanishX = 360 + Math.sin(time * 0.12) * 20;
+    const vanishY = HORIZON_Y - 4;
+    const rowCount = 34;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(-200, HORIZON_Y, SIZE + 400, SIZE - HORIZON_Y + 150);
+    ctx.clip();
+
+    for (let i = -rowCount; i <= rowCount; i++) {
+      const bottomX1 = vanishX + i * 92 - (time * 28 % 92);
+      const bottomX2 = bottomX1 + 44;
+
+      // Alternate warm golden-amber wheat/corn stubble & deep crimson-violet plowed earth
+      const isGoldenRow = Math.abs(i) % 2 === 0;
+      const rowGrad = ctx.createLinearGradient(0, HORIZON_Y, 0, SIZE);
+      if (isGoldenRow) {
+        rowGrad.addColorStop(0.0, 'rgba(255, 145, 35, 0.42)');
+        rowGrad.addColorStop(0.35, 'rgba(214, 88, 28, 0.55)');
+        rowGrad.addColorStop(1.0, 'rgba(135, 48, 18, 0.65)');
+      } else {
+        rowGrad.addColorStop(0.0, 'rgba(85, 20, 48, 0.65)');
+        rowGrad.addColorStop(0.5, 'rgba(48, 14, 30, 0.85)');
+        rowGrad.addColorStop(1.0, 'rgba(22, 7, 16, 0.92)');
+      }
+
+      ctx.fillStyle = rowGrad;
+      ctx.beginPath();
+      ctx.moveTo(vanishX + i * 6, vanishY);
+      ctx.lineTo(vanishX + (i + 0.48) * 6, vanishY);
+      ctx.lineTo(bottomX2, SIZE + 80);
+      ctx.lineTo(bottomX1, SIZE + 80);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Scoured dark dirt path torn by the tornado vortex across the field
+    const scourGrad = ctx.createRadialGradient(
+      groundPt.x,
+      groundPt.y + 12,
+      20,
+      groundPt.x,
+      groundPt.y + 25,
+      340
+    );
+    scourGrad.addColorStop(0.0, 'rgba(18, 8, 10, 0.92)');
+    scourGrad.addColorStop(0.45, 'rgba(48, 18, 14, 0.68)');
+    scourGrad.addColorStop(0.75, 'rgba(140, 52, 22, 0.28)');
+    scourGrad.addColorStop(1.0, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = scourGrad;
+    ctx.save();
+    ctx.translate(groundPt.x, groundPt.y + 15);
+    ctx.scale(1.6, 0.42);
+    ctx.beginPath();
+    ctx.arc(0, 0, 320, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    ctx.restore();
+  }
+
+  function drawFarmsteadSilhouette(time, groundPt) {
+    // Classic red barn, silo, and spinning windmill on the right-midground horizon
+    const farmX = 855;
+    const farmY = HORIZON_Y + 4;
+    const distToTornado = Math.abs(farmX - groundPt.x);
+    const windShake = clamp(1 - distToTornado / 650, 0.15, 1) * Math.sin(time * 28) * 1.8;
+
+    ctx.save();
+    ctx.translate(farmX + windShake, farmY);
+
+    // Amber rim-light from sunset on the left side of the silo and barn
+    // Silo
+    ctx.fillStyle = '#1e0816';
+    ctx.fillRect(-58, -74, 24, 78);
+    ctx.beginPath();
+    ctx.arc(-46, -74, 12, Math.PI, 0);
+    ctx.fill();
+    // Silo sunset rim highlight
+    ctx.fillStyle = '#ff8c24';
+    ctx.fillRect(-58, -74, 3.5, 76);
+
+    // Gambrel Barn
+    ctx.fillStyle = '#290917';
+    ctx.beginPath();
+    ctx.moveTo(-32, 4);
+    ctx.lineTo(-32, -38);
+    ctx.lineTo(-18, -62);
+    ctx.lineTo(6, -74);
+    ctx.lineTo(30, -62);
+    ctx.lineTo(44, -38);
+    ctx.lineTo(44, 4);
+    ctx.closePath();
+    ctx.fill();
+
+    // Glowing lit barn loft window
+    ctx.fillStyle = '#ffae2b';
+    ctx.fillRect(-2, -52, 11, 13);
+
+    // Sunset rim on barn roof
+    ctx.strokeStyle = '#ff7b29';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(-32, -38);
+    ctx.lineTo(-18, -62);
+    ctx.lineTo(6, -74);
+    ctx.stroke();
+
+    // Farm windmill tower
+    ctx.strokeStyle = '#1c0613';
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.moveTo(68, 4);
+    ctx.lineTo(78, -88);
+    ctx.lineTo(88, 4);
+    ctx.moveTo(71, -25);
+    ctx.lineTo(85, -25);
+    ctx.moveTo(74, -55);
+    ctx.lineTo(82, -55);
+    ctx.stroke();
+
+    // Rapidly spinning windmill turbine blades in the gale
+    ctx.save();
+    ctx.translate(78, -88);
+    ctx.rotate(time * 16);
+    ctx.strokeStyle = '#ff9a3d';
+    ctx.lineWidth = 2;
+    for (let b = 0; b < 6; b++) {
+      ctx.rotate(Math.PI / 3);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(0, -18);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    ctx.restore();
+  }
+
+  function drawSwirlingCropsAndFence(time, groundPt) {
+    // Draw swaying wheat/corn stalks that bend sharply toward the tornado's inflow
+    ctx.save();
+    ctx.lineCap = 'round';
+    for (let i = 0; i < cropStalks.length; i++) {
+      const c = cropStalks[i];
+      const dx = groundPt.x - c.x;
+      const dy = groundPt.y - c.y;
+      const dist = Math.hypot(dx, dy) + 40;
+      const pull = clamp(420 / dist, 0.25, 2.6);
+      const dir = dx >= 0 ? 1 : -1;
+
+      const gust =
+        Math.sin(time * 9 + c.x * 0.025 + c.phase) * 0.35 +
+        Math.cos(time * 15 - c.y * 0.03) * 0.2;
+      const bendAngle = dir * clamp((pull * 0.62 + gust) * c.stiffness, -1.35, 1.35);
+
+      const tipX = c.x + Math.sin(bendAngle) * c.height;
+      const tipY = c.y - Math.cos(bendAngle) * c.height * 0.78;
+      const ctrlX = c.x + Math.sin(bendAngle * 0.55) * c.height * 0.55;
+      const ctrlY = c.y - Math.cos(bendAngle * 0.55) * c.height * 0.55;
+
+      const light = clamp(52 + (1 - c.depth) * 18 + (pull > 1.2 ? 12 : 0), 35, 78);
+      ctx.strokeStyle = `hsl(${c.hue}, 95%, ${light}%)`;
+      ctx.lineWidth = 1.4 + c.depth * 2.4;
+
+      ctx.beginPath();
+      ctx.moveTo(c.x, c.y);
+      ctx.quadraticCurveTo(ctrlX, ctrlY, tipX, tipY);
+      ctx.stroke();
+
+      // Golden seed head on foreground stalks
+      if (c.depth > 0.45) {
+        ctx.fillStyle = `hsl(${c.hue + 8}, 100%, ${light + 12}%)`;
+        ctx.beginPath();
+        ctx.ellipse(
+          tipX,
+          tipY,
+          (2.2 + c.depth * 3.5) * 1.4,
+          1.4 + c.depth * 1.8,
+          bendAngle,
+          0,
+          Math.PI * 2
+        );
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+
+    // Wooden fence line along the left foreground leaning into the wind
+    ctx.save();
+    let prevTopX = null;
+    let prevTopY = null;
+    let prevMidX = null;
+    let prevMidY = null;
+
+    for (let i = 0; i < fencePosts.length; i++) {
+      const fp = fencePosts[i];
+      const t = Math.pow(fp.d, 1.55);
+      const px = 210 - t * 225;
+      const py = HORIZON_Y + 18 + t * (SIZE - HORIZON_Y + 10);
+      const postH = 14 + t * 92;
+
+      const dx = groundPt.x - px;
+      const lean = clamp(dx / 500, -0.45, 0.55) + Math.sin(time * 11 + fp.swaySeed) * 0.06;
+      const tx = px + Math.sin(lean) * postH;
+      const ty = py - Math.cos(lean) * postH;
+      const mx = px + Math.sin(lean) * postH * 0.55;
+      const my = py - Math.cos(lean) * postH * 0.55;
+
+      // Wire rails between posts
+      if (prevTopX !== null) {
+        ctx.strokeStyle = 'rgba(255, 152, 68, 0.55)';
+        ctx.lineWidth = 1 + t * 1.5;
+        ctx.beginPath();
+        ctx.moveTo(prevTopX, prevTopY);
+        ctx.lineTo(tx, ty);
+        ctx.moveTo(prevMidX, prevMidY);
+        ctx.lineTo(mx, my);
+        ctx.stroke();
+      }
+
+      // Post body with warm sunset rim
+      ctx.strokeStyle = '#1c0712';
+      ctx.lineWidth = 2.2 + t * 6.5;
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      ctx.lineTo(tx, ty);
+      ctx.stroke();
+
+      ctx.strokeStyle = 'rgba(255, 130, 40, 0.65)';
+      ctx.lineWidth = 1 + t * 1.6;
+      ctx.beginPath();
+      ctx.moveTo(px - 1, py);
+      ctx.lineTo(tx - 1, ty);
+      ctx.stroke();
+
+      prevTopX = tx;
+      prevTopY = ty;
+      prevMidX = mx;
+      prevMidY = my;
+    }
+    ctx.restore();
+  }
+
+  function drawLightningBolts() {
+    if (!tornado.bolt || tornado.bolt.life <= 0) return;
+    const b = tornado.bolt;
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    // Outer electric violet-magenta glow
+    ctx.strokeStyle = `rgba(215, 110, 255, ${b.life * 0.55})`;
+    for (let i = 0; i < b.segments.length; i++) {
+      const s = b.segments[i];
+      ctx.lineWidth = s.thickness * 4.2;
+      ctx.beginPath();
+      ctx.moveTo(s.x1, s.y1);
+      ctx.lineTo(s.x2, s.y2);
+      ctx.stroke();
+    }
+
+    // Core hot white-cyan bolt
+    ctx.strokeStyle = `rgba(255, 250, 255, ${b.life * 0.98})`;
+    for (let i = 0; i < b.segments.length; i++) {
+      const s = b.segments[i];
+      ctx.lineWidth = s.thickness;
+      ctx.beginPath();
+      ctx.moveTo(s.x1, s.y1);
+      ctx.lineTo(s.x2, s.y2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawTornadoFunnel(time) {
+    // Compute spine geometry for all segments
+    const spine = [];
+    for (let i = 0; i <= FUNNEL_SEGMENTS; i++) {
+      const t = i / FUNNEL_SEGMENTS;
+      spine.push(getFunnelPoint(t, time));
+    }
+
+    // 1. Outer translucent dust sheath / inflow veil around the funnel
+    ctx.save();
+    ctx.beginPath();
+    for (let i = 0; i <= FUNNEL_SEGMENTS; i++) {
+      const pt = spine[i];
+      const wobble = Math.sin(time * 7 - i * 0.4) * 14;
+      const x = pt.x - pt.radius * 1.38 + wobble;
+      if (i === 0) ctx.moveTo(x, pt.y);
+      else ctx.lineTo(x, pt.y);
+    }
+    for (let i = FUNNEL_SEGMENTS; i >= 0; i--) {
+      const pt = spine[i];
+      const wobble = Math.cos(time * 7 - i * 0.4) * 14;
+      const x = pt.x + pt.radius * 1.38 + wobble;
+      ctx.lineTo(x, pt.y);
+    }
+    ctx.closePath();
+
+    const sheathGrad = ctx.createLinearGradient(250, tornado.topY, 820, tornado.baseY);
+    sheathGrad.addColorStop(0.0, 'rgba(255, 130, 55, 0.25)');
+    sheathGrad.addColorStop(0.45, 'rgba(130, 42, 68, 0.32)');
+    sheathGrad.addColorStop(1.0, 'rgba(185, 72, 32, 0.42)');
+    ctx.fillStyle = sheathGrad;
+    ctx.fill();
+    ctx.restore();
+
+    // 2. Main volumetric rotating condensation funnel built from stacked turbulent horizontal rings
+    const lightningFlash = tornado.lightningIntensity * 0.45;
+    for (let i = 0; i < FUNNEL_SEGMENTS; i++) {
+      const p1 = spine[i];
+      const p2 = spine[i + 1];
+      const t = i / FUNNEL_SEGMENTS;
+
+      // Spiraling turbulent edge ridges
+      const ridgeL = Math.sin(time * 11 - t * 26) * (6 + (1 - t) * 10);
+      const ridgeR = Math.cos(time * 11 - t * 26 + 1.4) * (6 + (1 - t) * 10);
+
+      const x1L = p1.x - p1.radius + ridgeL;
+      const x1R = p1.x + p1.radius + ridgeR;
+      const x2L = p2.x - p2.radius + ridgeL;
+      const x2R = p2.x + p2.radius + ridgeR;
+
+      // Horizontal 3D cylinder shading: fiery sunset gold/crimson on left edge, deep storm indigo/charcoal core, violet-amber dust rim on right
+      const grad = ctx.createLinearGradient(x1L, p1.y, x1R, p1.y);
+      const bandMod = Math.sin(time * 9 - t * 32) * 12;
+
+      // Left edge lit by blazing setting sun
+      grad.addColorStop(0.0, `rgb(${255}, ${clamp(165 + bandMod, 120, 220)}, ${55})`);
+      grad.addColorStop(0.18, `rgb(${clamp(225 + bandMod, 180, 250)}, ${clamp(78 + bandMod, 50, 120)}, ${62})`);
+      // Dense rotating core + internal lightning illumination
+      const coreR = clamp(38 + t * 28 + lightningFlash * 150, 24, 210);
+      const coreG = clamp(18 + t * 12 + lightningFlash * 130, 12, 190);
+      const coreB = clamp(52 - t * 14 + lightningFlash * 185, 22, 235);
+      grad.addColorStop(0.52, `rgb(${coreR}, ${coreG}, ${coreB})`);
+      grad.addColorStop(0.82, `rgb(${clamp(26 + t * 22, 18, 70)}, ${12}, ${clamp(38 - t * 10, 18, 52)})`);
+      // Backscatter warm dust reflection on right edge
+      grad.addColorStop(1.0, `rgb(${clamp(145 + t * 50, 110, 210)}, ${clamp(52 + t * 20, 35, 90)}, ${68})`);
+
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.moveTo(x1L, p1.y - 1);
+      ctx.lineTo(x1R, p1.y - 1);
+      ctx.lineTo(x2R, p2.y + 1.5);
+      ctx.lineTo(x2L, p2.y + 1.5);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // 3. Dynamic spiraling vortex filaments & suction vortices wrapping the funnel
+    ctx.save();
+    ctx.lineCap = 'round';
+    for (let i = 0; i < vortexStrands.length; i++) {
+      const s = vortexStrands[i];
+      const baseT = s.t;
+      const idx = Math.min(FUNNEL_SEGMENTS, Math.floor(baseT * FUNNEL_SEGMENTS));
+      const pt = spine[idx];
+
+      // 3D helical ribbon across the front of the funnel
+      const a1 = s.angle;
+      const a2 = s.angle + s.length;
+      const sin1 = Math.sin(a1);
+      const sin2 = Math.sin(a2);
+      const cos1 = Math.cos(a1);
+
+      // Draw when wrapping across the visible front hemisphere (cos > -0.25)
+      if (cos1 > -0.25) {
+        const r = pt.radius * s.radiusOffset;
+        const x1 = pt.x + sin1 * r;
+        const y1 = pt.y + cos1 * 14;
+        const x2 = pt.x + sin2 * r * 0.95;
+        const y2 = pt.y - 26 + Math.cos(a2) * 14;
+        const cx = pt.x + Math.sin((a1 + a2) * 0.5) * r * 1.08;
+        const cy = (y1 + y2) * 0.5;
+
+        // Sunlit on left (sin1 < 0), shadowed dirt/violet on right (sin1 > 0)
+        const sunMix = clamp((1 - sin1) * 0.5, 0, 1);
+        const alpha = clamp((cos1 + 0.25) * 0.65, 0.08, 0.72);
+        const hue = 18 + sunMix * 24 + s.hueShift;
+        const light = 22 + sunMix * 44 + baseT * 10;
+
+        ctx.strokeStyle = `hsla(${hue}, 92%, ${light}%, ${alpha})`;
+        ctx.lineWidth = s.thickness * (0.7 + (1 - baseT) * 0.7);
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.quadraticCurveTo(cx, cy, x2, y2);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawDebrisAndDustCloud(time) {
+    const groundPt = getFunnelPoint(1.0, time);
+
+    // 1. Inflow dust bands skimming across the farmland into the tornado base
+    ctx.save();
+    ctx.lineCap = 'round';
+    for (let i = 0; i < inflowStreaks.length; i++) {
+      const st = inflowStreaks[i];
+      const p = st.progress; // 0 = far out on field, 1 = sucked into base
+      const startDist = (1 - p) * 580 + 35;
+      const sx = groundPt.x + st.side * startDist;
+      const sy = groundPt.y + st.yOffset * (1 - p * 0.65);
+
+      const endDist = Math.max(15, startDist - st.length * (0.5 + p * 0.8));
+      const ex = groundPt.x + st.side * endDist;
+      const ey = groundPt.y + st.yOffset * (1 - (p + 0.15) * 0.65) - p * 28;
+
+      const alpha = Math.sin(p * Math.PI) * 0.42;
+      const r = st.side < 0 ? 255 : 195;
+      const g = st.side < 0 ? Math.floor(125 + st.warmth * 55) : Math.floor(68 + st.warmth * 35);
+      const b = st.side < 0 ? 45 : 52;
+
+      ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
+      ctx.lineWidth = st.thickness * (0.6 + p * 1.4);
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.quadraticCurveTo((sx + ex) * 0.5, sy + 12, ex, ey);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // 2. Massive boiling dirt & dust cloud at the foot of the funnel
+    for (let i = 0; i < baseDustPuffs.length; i++) {
+      const d = baseDustPuffs[i];
+      const a = d.angle + time * d.speed;
+      const liftCycle = (d.height + time * d.lift) % 1;
+      const spreadX = (95 + liftCycle * 185) * d.dist;
+      const px = groundPt.x + Math.sin(a) * spreadX;
+      const py = groundPt.y + 18 - liftCycle * 175 + Math.cos(a) * 26;
+      const radius = d.size * (0.65 + Math.sin(liftCycle * Math.PI) * 0.65);
+
+      const sunSide = clamp((groundPt.x - px) / 220 + 0.5, 0, 1);
+      const alpha = Math.sin(liftCycle * Math.PI) * 0.55;
+
+      const puffGrad = ctx.createRadialGradient(
+        px - radius * 0.25,
+        py - radius * 0.2,
+        radius * 0.1,
+        px,
+        py,
+        radius
+      );
+      const rCol = Math.floor(75 + sunSide * 180);
+      const gCol = Math.floor(28 + sunSide * 92);
+      const bCol = Math.floor(32 + sunSide * 18);
+
+      puffGrad.addColorStop(0.0, `rgba(${rCol}, ${gCol}, ${bCol}, ${alpha})`);
+      puffGrad.addColorStop(0.55, `rgba(${Math.floor(rCol * 0.65)}, ${Math.floor(gCol * 0.55)}, ${bCol}, ${alpha * 0.7})`);
+      puffGrad.addColorStop(1.0, 'rgba(30, 12, 18, 0)');
+
+      ctx.fillStyle = puffGrad;
+      ctx.beginPath();
+      ctx.arc(px, py, radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // 3. Flying debris: soil clods, glowing dust embers, golden straw, and torn barn planks spiraling upward
+    ctx.save();
+    for (let i = 0; i < debrisList.length; i++) {
+      const p = debrisList[i];
+      const pt = getFunnelPoint(p.t, time);
+
+      // Orbit radius expands near the ground debris fan and flares out as centrifugal force throws debris
+      const orbitR =
+        (pt.radius * p.radialSpread) +
+        (p.t > 0.65 ? Math.pow((p.t - 0.65) / 0.35, 1.5) * 115 : 0);
+
+      const sinA = Math.sin(p.angle);
+      const cosA = Math.cos(p.angle);
+      const x = pt.x + sinA * orbitR;
+      const y = pt.y + cosA * (14 + p.t * 22);
+
+      // Depth scale based on front/back of vortex
+      const depthScale = 0.65 + (cosA + 1) * 0.35;
+      const sz = p.size * depthScale;
+      const isSunlit = sinA < 0.15;
+
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(p.spin);
+
+      if (p.type === 0) {
+        // Sunlit dust clump
+        ctx.fillStyle = isSunlit
+          ? 'rgba(255, 162, 52, 0.78)'
+          : 'rgba(120, 42, 48, 0.68)';
+        ctx.beginPath();
+        ctx.arc(0, 0, sz * 0.85, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (p.type === 3) {
+        // Golden flying crop stalk / straw
+        ctx.strokeStyle = isSunlit ? '#ffbe3b' : '#b85a24';
+        ctx.lineWidth = Math.max(1.5, sz * 0.28);
+        ctx.beginPath();
+        ctx.moveTo(-sz * 1.4, 0);
+        ctx.quadraticCurveTo(0, sz * 0.4, sz * 1.4, 0);
+        ctx.stroke();
+      } else if (p.type === 2) {
+        // Torn wooden plank / roof shingle / sheet metal
+        ctx.fillStyle = isSunlit ? '#e05328' : '#260b16';
+        ctx.fillRect(-sz * p.aspect * 0.5, -sz * 0.45, sz * p.aspect, sz * 0.9);
+        if (isSunlit) {
+          ctx.fillStyle = '#ffba42';
+          ctx.fillRect(-sz * p.aspect * 0.5, -sz * 0.45, sz * p.aspect, sz * 0.22);
+        }
+      } else {
+        // Dark clod of rich farmland soil
+        ctx.fillStyle = isSunlit ? '#6e281d' : '#1f0912';
+        ctx.beginPath();
+        ctx.ellipse(0, 0, sz * 0.9, sz * 0.6, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  function drawSupercellClouds(time) {
+    const topPt = getFunnelPoint(0.0, time);
+    const lightningBoost = tornado.lightningIntensity * 0.55 + tornado.sheetLightning * 0.35;
+
+    // 1. Rotating Mesocyclone Wall Cloud collar directly above the funnel
+    for (let i = 0; i < mesoRings.length; i++) {
+      const m = mesoRings[i];
+      const a = m.angle + time * m.speed;
+      const rx = (220 + m.tier * 95) * m.radiusScale;
+      const ry = (38 + m.tier * 20) * m.radiusScale;
+      const cx = topPt.x + Math.cos(a) * rx;
+      const cy = topPt.y - 10 + m.tier * 22 + Math.sin(a) * ry;
+      const r = m.size * (0.85 + Math.sin(a) * 0.2);
+
+      const grad = ctx.createRadialGradient(
+        cx - r * 0.25,
+        cy + r * 0.28,
+        r * 0.1,
+        cx,
+        cy,
+        r
+      );
+
+      // Underside lit by fiery sunset orange-magenta & internal lightning
+      const sunFactor = clamp((topPt.x - cx) / 280 + 0.55, 0, 1);
+      const litR = Math.min(255, Math.floor(95 + sunFactor * 155 + lightningBoost * 110));
+      const litG = Math.min(255, Math.floor(28 + sunFactor * 82 + lightningBoost * 95));
+      const litB = Math.min(255, Math.floor(68 + sunFactor * 20 + lightningBoost * 140));
+
+      grad.addColorStop(0.0, `rgba(${litR}, ${litG}, ${litB}, 0.92)`);
+      grad.addColorStop(0.55, 'rgba(38, 14, 48, 0.88)');
+      grad.addColorStop(1.0, 'rgba(18, 6, 28, 0)');
+
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // 2. Sweeping dramatic storm cloud decks & mammatus undersides across the top sky
+    for (let layer = cloudLayers.length - 1; layer >= 0; layer--) {
+      const puffs = cloudLayers[layer];
+      for (let i = 0; i < puffs.length; i++) {
+        const p = puffs[i];
+        const x = ((p.x + time * p.speed * 60 + 250) % (SIZE + 500)) - 250;
+        const y = p.y + Math.sin(time * 0.8 + p.seed) * 6;
+
+        const grad = ctx.createLinearGradient(x, y - p.ry, x, y + p.ry);
+        if (layer === 3) {
+          // Lowest cloud deck catching vivid crimson-gold sunset reflection on its belly
+          grad.addColorStop(0.0, 'rgba(22, 8, 35, 0.95)');
+          grad.addColorStop(0.58, 'rgba(72, 18, 58, 0.88)');
+          grad.addColorStop(0.88, 'rgba(218, 64, 42, 0.72)');
+          grad.addColorStop(1.0, 'rgba(255, 145, 38, 0)');
+        } else if (layer === 2) {
+          grad.addColorStop(0.0, 'rgba(16, 6, 28, 0.96)');
+          grad.addColorStop(0.65, 'rgba(54, 15, 52, 0.9)');
+          grad.addColorStop(1.0, 'rgba(145, 34, 62, 0)');
+        } else {
+          // Upper brooding storm canopy
+          grad.addColorStop(0.0, 'rgba(10, 4, 20, 0.98)');
+          grad.addColorStop(0.75, 'rgba(28, 10, 42, 0.92)');
+          grad.addColorStop(1.0, 'rgba(58, 18, 64, 0)');
+        }
+
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.ellipse(x, y, p.rx, p.ry, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  function drawForegroundWindAndVignette(time) {
+    // Fast close-up wind streaks and glowing embers/straw whipping across the lens
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255, 185, 85, 0.22)';
+    ctx.lineWidth = 2.2;
+    for (let i = 0; i < 14; i++) {
+      const progress = ((time * (1.8 + (i % 4) * 0.45) + i * 0.37) % 1);
+      const wx = SIZE + 150 - progress * (SIZE + 300);
+      const wy = 480 + ((i * 173) % 560) + Math.sin(progress * 8 + i) * 35;
+      const len = 85 + (i % 3) * 45;
+
+      ctx.beginPath();
+      ctx.moveTo(wx, wy);
+      ctx.quadraticCurveTo(wx + len * 0.5, wy - 12, wx + len, wy + 4);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Subtle atmospheric vignette to frame the 1080x1080 square with rich cinema contrast
+    const vig = ctx.createRadialGradient(
+      SIZE * 0.5,
+      SIZE * 0.52,
+      SIZE * 0.36,
+      SIZE * 0.5,
+      SIZE * 0.5,
+      SIZE * 0.78
+    );
+    vig.addColorStop(0.0, 'rgba(0, 0, 0, 0)');
+    vig.addColorStop(0.75, 'rgba(12, 3, 20, 0.22)');
+    vig.addColorStop(1.0, 'rgba(6, 2, 12, 0.62)');
+    ctx.fillStyle = vig;
+    ctx.fillRect(-200, -200, SIZE + 400, SIZE + 400);
+  }
+
+  function update(dt, time) {
+    // Update spiraling vortex strands
+    for (let i = 0; i < vortexStrands.length; i++) {
+      const s = vortexStrands[i];
+      s.angle += s.rotSpeed * dt;
+      s.t -= s.riseSpeed * dt;
+      if (s.t < 0.02) {
+        s.t = 0.98;
+        s.angle = rand(0, Math.PI * 2);
+      }
+    }
+
+    // Update flying debris particles
+    for (let i = 0; i < debrisList.length; i++) {
+      const p = debrisList[i];
+      // Faster angular velocity near the tight ground core
+      const speedMult = 0.75 + p.t * 0.85;
+      p.angle += p.rotSpeed * speedMult * dt;
+      p.t -= p.upSpeed * dt;
+      p.spin += p.spinSpeed * dt;
+      // Slight outward centrifugal drift as debris rises
+      p.radialSpread += 0.18 * dt;
+
+      if (p.t < 0.04 || p.radialSpread > 2.8) {
+        resetDebris(p, false);
+      }
+    }
+
+    // Update surface inflow dust streaks
+    for (let i = 0; i < inflowStreaks.length; i++) {
+      const st = inflowStreaks[i];
+      st.progress += st.speed * dt;
+      if (st.progress >= 1) {
+        st.progress = 0;
+        st.yOffset = rand(-95, 240);
+      }
+    }
+
+    // Update lightning bolts & sheet lightning
+    tornado.nextBoltTimer -= dt;
+    if (tornado.nextBoltTimer <= 0) {
+      if (Math.random() < 0.68) {
+        tornado.bolt = createLightningBolt(time);
+        tornado.lightningIntensity = 1.0;
+      } else {
+        tornado.sheetLightning = rand(0.65, 1.0);
+      }
+      tornado.nextBoltTimer = rand(0.85, 2.6);
+    }
+
+    if (tornado.bolt) {
+      tornado.bolt.life -= tornado.bolt.decay * dt;
+      if (tornado.bolt.life <= 0) tornado.bolt = null;
+    }
+    tornado.lightningIntensity = Math.max(0, tornado.lightningIntensity - 3.8 * dt);
+    tornado.sheetLightning = Math.max(0, tornado.sheetLightning - 2.6 * dt);
+  }
+
+  let lastTime = performance.now();
+  function frame(now) {
+    const dt = Math.min((now - lastTime) * 0.001, 0.05);
+    lastTime = now;
+    const time = now * 0.001;
+
+    update(dt, time);
+
+    ctx.save();
+    ctx.translate(offsetX, offsetY);
+    ctx.scale(scale, scale);
+
+    // Subtle low-frequency rumble shake when tornado is close
+    const groundPt = getFunnelPoint(1.0, time);
+    const shakeAmp = 1.6 + tornado.lightningIntensity * 2.5;
+    const shakeX = Math.sin(time * 37) * shakeAmp;
+    const shakeY = Math.cos(time * 43) * shakeAmp;
+    ctx.translate(shakeX, shakeY);
+
+    drawSkyAndHorizonGlow(time);
+    drawDistantRainAndDowndraft(time);
+    drawLightningBolts();
+    drawFarmland(time, groundPt);
+    drawFarmsteadSilhouette(time, groundPt);
+    drawTornadoFunnel(time);
+    drawSwirlingCropsAndFence(time, groundPt);
+    drawDebrisAndDustCloud(time);
+    drawSupercellClouds(time);
+    drawForegroundWindAndVignette(time);
+
+    ctx.restore();
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

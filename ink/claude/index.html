@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ink in Water</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #04060f; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  #glass {
+    position: fixed; inset: 0; pointer-events: none;
+    background:
+      radial-gradient(ellipse at 50% 45%, rgba(0,0,0,0) 52%, rgba(0,0,0,.6) 100%),
+      linear-gradient(90deg, rgba(255,255,255,.08) 0%, rgba(255,255,255,0) 16%,
+                             rgba(255,255,255,0) 84%, rgba(255,255,255,.06) 100%);
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="glass"></div>
+<script>
+(() => {
+'use strict';
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d', { alpha: false });
+
+// ---------- simulation state ----------
+let W, H, S, CW, CH, DPR;
+let u, v, u0, v0, p, dv, curl, dr, dg, db, tr, tg, tb;
+let off, octx, img, pix, bg;
+const ITER = 18;          // pressure solver iterations
+const GRAVITY = 10;       // how fast dense ink sinks (cells / s^2)
+const VORT = 9;           // vorticity confinement strength
+const VEL_DAMP = 0.45;    // per-second velocity damping
+const DYE_DAMP = 0.065;   // per-second dye fading
+
+const PALETTE = [
+  [1.00, 0.05, 0.45],  // magenta
+  [0.00, 0.75, 1.00],  // cyan
+  [1.00, 0.85, 0.00],  // yellow
+  [1.00, 0.35, 0.00],  // orange
+  [0.55, 0.05, 1.00],  // violet
+  [0.30, 1.00, 0.20],  // lime
+  [1.00, 0.10, 0.90],  // hot pink
+  [0.00, 1.00, 0.70],  // aqua
+  [1.00, 0.00, 0.15],  // crimson
+  [0.10, 0.35, 1.00]   // royal blue
+];
+
+const drops = [];
+let nextDrop = 0, dropCount = 0, lastPal = -1;
+
+// tone curve lookup (gamma lift so faint wisps stay visible)
+const LUT = new Uint8ClampedArray(1025);
+for (let i = 0; i <= 1024; i++) LUT[i] = Math.round(255 * Math.pow(i / 1024, 0.82));
+
+function alloc() {
+  const F = () => new Float32Array(S);
+  u = F(); v = F(); u0 = F(); v0 = F(); p = F(); dv = F(); curl = F();
+  dr = F(); dg = F(); db = F(); tr = F(); tg = F(); tb = F();
+}
+
+function resize() {
+  CW = innerWidth; CH = innerHeight;
+  DPR = Math.min(devicePixelRatio || 1, 2);
+  canvas.width = Math.round(CW * DPR);
+  canvas.height = Math.round(CH * DPR);
+  const small = Math.min(CW, CH) < 700;
+  const maxCells = small ? 150 : 210;
+  const a = CW / CH;
+  if (a >= 1) { W = maxCells; H = Math.max(24, Math.round(maxCells / a)); }
+  else        { H = maxCells; W = Math.max(24, Math.round(maxCells * a)); }
+  S = (W + 2) * (H + 2);
+  alloc();
+  off = document.createElement('canvas');
+  off.width = W; off.height = H;
+  octx = off.getContext('2d');
+  img = octx.createImageData(W, H);
+  pix = img.data;
+  bg = ctx.createRadialGradient(canvas.width * .5, canvas.height * .42, 0,
+                                canvas.width * .5, canvas.height * .5, Math.max(canvas.width, canvas.height) * .75);
+  bg.addColorStop(0, '#111a3c');
+  bg.addColorStop(0.6, '#070b1e');
+  bg.addColorStop(1, '#02030a');
+  drops.length = 0;
+}
+
+// ---------- stable fluids core ----------
+function setBnd(b, x) {
+  const Wp = W + 2;
+  for (let i = 1; i <= W; i++) {
+    x[i] = b === 2 ? -x[i + Wp] : x[i + Wp];
+    x[i + (H + 1) * Wp] = b === 2 ? -x[i + H * Wp] : x[i + H * Wp];
+  }
+  for (let j = 1; j <= H; j++) {
+    const r = j * Wp;
+    x[r] = b === 1 ? -x[r + 1] : x[r + 1];
+    x[r + W + 1] = b === 1 ? -x[r + W] : x[r + W];
+  }
+  x[0] = .5 * (x[1] + x[Wp]);
+  x[W + 1] = .5 * (x[W] + x[W + 1 + Wp]);
+  x[(H + 1) * Wp] = .5 * (x[(H + 1) * Wp + 1] + x[H * Wp]);
+  x[(H + 1) * Wp + W + 1] = .5 * (x[(H + 1) * Wp + W] + x[H * Wp + W + 1]);
+}
+
+function linSolve(b, x, x0, a, c, iter) {
+  const Wp = W + 2, ic = 1 / c;
+  for (let k = 0; k < iter; k++) {
+    for (let j = 1; j <= H; j++) {
+      let idx = j * Wp + 1;
+      for (let i = 1; i <= W; i++, idx++) {
+        x[idx] = (x0[idx] + a * (x[idx - 1] + x[idx + 1] + x[idx - Wp] + x[idx + Wp])) * ic;
+      }
+    }
+    setBnd(b, x);
+  }
+}
+
+function project(u, v, p, div) {
+  const Wp = W + 2;
+  for (let j = 1; j <= H; j++) {
+    let idx = j * Wp + 1;
+    for (let i = 1; i <= W; i++, idx++) {
+      div[idx] = -0.5 * (u[idx + 1] - u[idx - 1] + v[idx + Wp] - v[idx - Wp]);
+      p[idx] = 0;
+    }
+  }
+  setBnd(0, div); setBnd(0, p);
+  linSolve(0, p, div, 1, 4, ITER);
+  for (let j = 1; j <= H; j++) {
+    let idx = j * Wp + 1;
+    for (let i = 1; i <= W; i++, idx++) {
+      u[idx] -= 0.5 * (p[idx + 1] - p[idx - 1]);
+      v[idx] -= 0.5 * (p[idx + Wp] - p[idx - Wp]);
+    }
+  }
+  setBnd(1, u); setBnd(2, v);
+}
+
+function advect(b, d, d0, uu, vv, dt) {
+  const Wp = W + 2, xmax = W + 0.5, ymax = H + 0.5;
+  for (let j = 1; j <= H; j++) {
+    let idx = j * Wp + 1;
+    for (let i = 1; i <= W; i++, idx++) {
+      let x = i - dt * uu[idx], y = j - dt * vv[idx];
+      if (x < 0.5) x = 0.5; else if (x > xmax) x = xmax;
+      if (y < 0.5) y = 0.5; else if (y > ymax) y = ymax;
+      const i0 = x | 0, j0 = y | 0;
+      const s1 = x - i0, s0 = 1 - s1, t1 = y - j0, t0 = 1 - t1;
+      const k = i0 + j0 * Wp;
+      d[idx] = s0 * (t0 * d0[k] + t1 * d0[k + Wp]) + s1 * (t0 * d0[k + 1] + t1 * d0[k + 1 + Wp]);
+    }
+  }
+  setBnd(b, d);
+}
+
+// advect all three dye channels with one backtrace, applying fade
+function advectDye(dt, fade) {
+  const Wp = W + 2, xmax = W + 0.5, ymax = H + 0.5;
+  for (let j = 1; j <= H; j++) {
+    let idx = j * Wp + 1;
+    for (let i = 1; i <= W; i++, idx++) {
+      let x = i - dt * u[idx], y = j - dt * v[idx];
+      if (x < 0.5) x = 0.5; else if (x > xmax) x = xmax;
+      if (y < 0.5) y = 0.5; else if (y > ymax) y = ymax;
+      const i0 = x | 0, j0 = y | 0;
+      const s1 = x - i0, s0 = 1 - s1, t1 = y - j0, t0 = 1 - t1;
+      const k = i0 + j0 * Wp, k1 = k + 1, k2 = k + Wp, k3 = k2 + 1;
+      const w0 = s0 * t0 * fade, w1 = s1 * t0 * fade, w2 = s0 * t1 * fade, w3 = s1 * t1 * fade;
+      dr[idx] = w0 * tr[k] + w1 * tr[k1] + w2 * tr[k2] + w3 * tr[k3];
+      dg[idx] = w0 * tg[k] + w1 * tg[k1] + w2 * tg[k2] + w3 * tg[k3];
+      db[idx] = w0 * tb[k] + w1 * tb[k1] + w2 * tb[k2] + w3 * tb[k3];
+    }
+  }
+  setBnd(0, dr); setBnd(0, dg); setBnd(0, db);
+}
+
+function vorticity(dt) {
+  const Wp = W + 2;
+  for (let j = 1; j <= H; j++) {
+    let idx = j * Wp + 1;
+    for (let i = 1; i <= W; i++, idx++) {
+      curl[idx] = 0.5 * ((v[idx + 1] - v[idx - 1]) - (u[idx + Wp] - u[idx - Wp]));
+    }
+  }
+  const e = VORT * dt;
+  for (let j = 2; j < H; j++) {
+    let idx = j * Wp + 2;
+    for (let i = 2; i < W; i++, idx++) {
+      let dx = 0.5 * (Math.abs(curl[idx + 1]) - Math.abs(curl[idx - 1]));
+      let dy = 0.5 * (Math.abs(curl[idx + Wp]) - Math.abs(curl[idx - Wp]));
+      const len = Math.sqrt(dx * dx + dy * dy) + 1e-5;
+      dx /= len; dy /= len;
+      const c = curl[idx];
+      u[idx] += e * dy * c;
+      v[idx] -= e * dx * c;
+    }
+  }
+}
+
+// ---------- ink drops ----------
+function spawn(t) {
+  let k;
+  do { k = (Math.random() * PALETTE.length) | 0; } while (k === lastPal);
+  lastPal = k;
+  drops.push({
+    x: 0.14 + Math.random() * 0.72,
+    y: 0.05 + Math.random() * 0.09,
+    color: PALETTE[k],
+    t0: t,
+    fall: 0.38 + Math.random() * 0.12,
+    inj: 0.28 + Math.random() * 0.14,
+    size: 0.022 + Math.random() * 0.016,
+    side: (Math.random() - 0.5) * 0.5,
+    spin: (Math.random() < 0.5 ? -1 : 1) * (0.2 + Math.random() * 0.5)
+  });
+  dropCount++;
+}
+
+function inject(d, dt, f) {
+  const Wp = W + 2;
+  const cx = d.x * W, cy = d.y * H;
+  const rad = d.size * Math.max(W, H);
+  const r2 = rad * rad;
+  const env = Math.sin(Math.PI * f);                      // taper in and out
+  const amt = 2.4 * dt / d.inj * env;                     // dye per frame at centre
+  const push = 190 * dt * env;                            // downward kick
+  const i0 = Math.max(1, Math.floor(cx - rad * 2)), i1 = Math.min(W, Math.ceil(cx + rad * 2));
+  const j0 = Math.max(1, Math.floor(cy - rad * 2)), j1 = Math.min(H, Math.ceil(cy + rad * 2));
+  const [cr, cg, cb] = d.color;
+  for (let j = j0; j <= j1; j++) {
+    const dy = j - cy;
+    for (let i = i0; i <= i1; i++) {
+      const dx = i - cx;
+      const q = (dx * dx + dy * dy) / r2;
+      if (q > 4) continue;
+      const g = Math.exp(-q * 1.6);
+      const idx = i + j * Wp;
+      dr[idx] += amt * g * cr;
+      dg[idx] += amt * g * cg;
+      db[idx] += amt * g * cb;
+      v[idx] += push * g;
+      u[idx] += push * g * (d.side + d.spin * dy / rad * 0.35);
+    }
+  }
+}
+
+// ---------- per-frame step ----------
+function step(dt, t) {
+  const Wp = W + 2;
+  const kd = Math.exp(-dt * VEL_DAMP);
+  const kdye = Math.exp(-dt * DYE_DAMP);
+
+  // gravity on dense ink, gentle ambient convection, velocity damping
+  const g = GRAVITY * dt;
+  for (let j = 1; j <= H; j++) {
+    let idx = j * Wp + 1;
+    const amb = Math.sin(j * 0.045 + t * 0.35) * 0.35 * dt;
+    for (let i = 1; i <= W; i++, idx++) {
+      let dens = dr[idx] + dg[idx] + db[idx];
+      if (dens > 1) dens = 1;
+      v[idx] = v[idx] * kd + g * dens;
+      u[idx] = u[idx] * kd + amb * Math.cos(i * 0.05 - t * 0.27);
+    }
+  }
+
+  vorticity(dt);
+  project(u, v, p, dv);
+  u0.set(u); v0.set(v);
+  advect(1, u, u0, u0, v0, dt);
+  advect(2, v, v0, u0, v0, dt);
+  project(u, v, p, dv);
+
+  tr.set(dr); tg.set(dg); tb.set(db);
+  advectDye(dt, kdye);
+}
+
+// ---------- rendering ----------
+function render(t) {
+  const Wp = W + 2;
+  let o = 0;
+  for (let j = 1; j <= H; j++) {
+    let idx = j * Wp + 1;
+    for (let i = 1; i <= W; i++, idx++, o += 4) {
+      let r = dr[idx], g = dg[idx], b = db[idx];
+      let m = r > g ? (r > b ? r : b) : (g > b ? g : b);
+      if (m > 1) { const s = 1 / m; r *= s; g *= s; b *= s; } // hue-preserving clamp
+      pix[o]     = LUT[(r * 1024) | 0];
+      pix[o + 1] = LUT[(g * 1024) | 0];
+      pix[o + 2] = LUT[(b * 1024) | 0];
+      pix[o + 3] = 255;
+    }
+  }
+  octx.putImageData(img, 0, 0);
+
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.drawImage(off, 0, 0, canvas.width, canvas.height);
+
+  // falling droplets before they hit the water
+  for (const d of drops) {
+    const age = t - d.t0;
+    if (age >= d.fall) continue;
+    const f = age / d.fall;
+    const px = d.x * canvas.width;
+    const py = (-0.04 + (d.y + 0.04) * f * f) * canvas.height;
+    const rad = d.size * Math.max(canvas.width, canvas.height) * 0.42;
+    const [cr, cg, cb] = d.color;
+    const col = `rgb(${cr * 255 | 0},${cg * 255 | 0},${cb * 255 | 0})`;
+    const grad = ctx.createRadialGradient(px, py, 0, px, py, rad);
+    grad.addColorStop(0, '#ffffff');
+    grad.addColorStop(0.35, col);
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.ellipse(px, py, rad * 0.75, rad * (1 + 0.5 * f), 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+// ---------- main loop ----------
+let last = performance.now();
+function frame(now) {
+  let dt = (now - last) / 1000;
+  if (dt > 0.033) dt = 0.033; else if (dt < 0.004) dt = 0.004;
+  last = now;
+  const t = now / 1000;
+
+  if (t >= nextDrop) {
+    spawn(t);
+    const gap = dropCount < 3 ? 0.8 : 1.3 + Math.random() * 2.4;
+    nextDrop = t + gap;
+  }
+  for (let n = drops.length - 1; n >= 0; n--) {
+    const d = drops[n];
+    const age = t - d.t0;
+    if (age > d.fall) {
+      const a = age - d.fall;
+      if (a < d.inj) inject(d, dt, a / d.inj);
+      else drops.splice(n, 1);
+    }
+  }
+
+  step(dt, t);
+  render(t);
+  requestAnimationFrame(frame);
+}
+
+let resizeTimer = 0;
+addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { resize(); nextDrop = 0; dropCount = 0; }, 150);
+});
+
+resize();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

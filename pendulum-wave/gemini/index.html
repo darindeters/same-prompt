@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Pendulum Wave</title>
+<style>
+  *, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #04050c;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  const COUNT = 15;
+  // Full cycle time in seconds where all 15 pendulums realign in unison
+  const CYCLE_SECONDS = 44;
+  // Base oscillations completed by the longest pendulum in one full cycle
+  const BASE_OSCILLATIONS = 22;
+
+  // Vivid, hyper-saturated spectrum designed for high contrast on phone screens
+  const PALETTE = [
+    { main: '#FF1744', glow: 'rgba(255, 23, 68, 0.55)',   core: '#FF8A9E', rgb: [255, 23, 68] },
+    { main: '#FF3D00', glow: 'rgba(255, 61, 0, 0.55)',    core: '#FF9E80', rgb: [255, 61, 0] },
+    { main: '#FF6D00', glow: 'rgba(255, 109, 0, 0.55)',   core: '#FFD180', rgb: [255, 109, 0] },
+    { main: '#FFAB00', glow: 'rgba(255, 171, 0, 0.55)',   core: '#FFE57F', rgb: [255, 171, 0] },
+    { main: '#FFEA00', glow: 'rgba(255, 234, 0, 0.55)',   core: '#FFFF8D', rgb: [255, 234, 0] },
+    { main: '#AEEA00', glow: 'rgba(174, 234, 0, 0.55)',   core: '#F4FF81', rgb: [174, 234, 0] },
+    { main: '#00E676', glow: 'rgba(0, 230, 118, 0.55)',   core: '#B9F6CA', rgb: [0, 230, 118] },
+    { main: '#1DE9B6', glow: 'rgba(29, 233, 182, 0.55)',  core: '#A7FFEB', rgb: [29, 233, 182] },
+    { main: '#00E5FF', glow: 'rgba(0, 229, 255, 0.55)',   core: '#84FFFF', rgb: [0, 229, 255] },
+    { main: '#00B0FF', glow: 'rgba(0, 176, 255, 0.55)',   core: '#80D8FF', rgb: [0, 176, 255] },
+    { main: '#2979FF', glow: 'rgba(41, 121, 255, 0.55)',  core: '#82B1FF', rgb: [41, 121, 255] },
+    { main: '#651FFF', glow: 'rgba(101, 31, 255, 0.55)',  core: '#B388FF', rgb: [101, 31, 255] },
+    { main: '#AA00FF', glow: 'rgba(170, 0, 255, 0.55)',   core: '#EA80FC', rgb: [170, 0, 255] },
+    { main: '#F50057', glow: 'rgba(245, 0, 87, 0.55)',    core: '#FF80AB', rgb: [245, 0, 87] },
+    { main: '#FF4081', glow: 'rgba(255, 64, 129, 0.55)',  core: '#FFAFCC', rgb: [255, 64, 129] }
+  ];
+
+  const TRAIL_LENGTH = 26;
+  const pendulums = [];
+
+  for (let i = 0; i < COUNT; i++) {
+    const oscillations = BASE_OSCILLATIONS + i;
+    const freq = oscillations / CYCLE_SECONDS; // Hz
+    const omega = freq * Math.PI * 2;
+    // Physical pendulum length ratio L_i / L_0 = (N_0 / (N_0 + i))^2
+    const physicalRatio = Math.pow(BASE_OSCILLATIONS / oscillations, 2);
+
+    pendulums.push({
+      index: i,
+      oscillations,
+      freq,
+      omega,
+      physicalRatio,
+      color: PALETTE[i],
+      trail: [],
+      prevAngle: 0,
+      centerFlash: 0,
+      peakFlash: 0,
+      x: 0,
+      y: 0,
+      pivotX: 0,
+      pivotY: 0,
+      length: 0,
+      maxAngle: 0,
+      bobRadius: 0
+    });
+  }
+
+  let width = 0;
+  let height = 0;
+  let dpr = 1;
+  let sceneScale = 1;
+  let centerX = 0;
+  let topRigY = 0;
+  let floorY = 0;
+  let bgGradient = null;
+  let floorGradient = null;
+
+  function updateLayout() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const minDim = Math.min(width, height);
+    sceneScale = minDim / 1080;
+    centerX = width * 0.5;
+    topRigY = height * 0.068;
+    floorY = height * 0.925;
+
+    const availableVertical = floorY - topRigY;
+    // Longest pendulum (i=0) reaches near the bottom floor; shortest (i=14) sits higher up
+    const maxLen = availableVertical * 0.885;
+    const minLen = availableVertical * 0.275;
+
+    // Normalize physical ratios [1.0 .. physicalRatio(14)] smoothly into [maxLen .. minLen]
+    const minPhys = pendulums[COUNT - 1].physicalRatio;
+    const maxPhys = pendulums[0].physicalRatio;
+
+    for (let i = 0; i < COUNT; i++) {
+      const p = pendulums[i];
+      const normPhys = (p.physicalRatio - minPhys) / (maxPhys - minPhys); // 1 for i=0, 0 for i=14
+      const t = i / (COUNT - 1); // 0 for i=0 (back/longest), 1 for i=14 (front/shortest)
+
+      // Slight perspective step on the top suspension beam
+      p.pivotX = centerX + (t - 0.5) * (minDim * 0.045);
+      p.pivotY = topRigY + t * (minDim * 0.036);
+
+      // Blend authentic inverse-square physical curve with clean visual spacing
+      const blendedRatio = normPhys * 0.68 + (1 - t) * 0.32;
+      p.length = minLen + blendedRatio * (maxLen - minLen);
+
+      // Angular amplitude: shorter pendulums swing to a slightly wider angle so the wave
+      // fills the horizontal stage generously across the 1080x1080 square
+      const maxHorizontalSpan = minDim * 0.445;
+      const targetExcursion = maxHorizontalSpan * (0.62 + 0.38 * blendedRatio);
+      p.maxAngle = Math.asin(Math.min(0.84, targetExcursion / p.length));
+
+      // Perspective bob sizing: slightly larger in foreground (shorter pendulums) and background
+      p.bobRadius = Math.max(8, minDim * (0.0175 + 0.0035 * Math.sin(t * Math.PI)));
+      p.trail.length = 0;
+    }
+
+    bgGradient = ctx.createRadialGradient(
+      centerX, height * 0.46, minDim * 0.05,
+      centerX, height * 0.50, Math.max(width, height) * 0.78
+    );
+    bgGradient.addColorStop(0, '#10142e');
+    bgGradient.addColorStop(0.52, '#080a1a');
+    bgGradient.addColorStop(1, '#03040a');
+
+    floorGradient = ctx.createLinearGradient(0, floorY - minDim * 0.03, 0, height);
+    floorGradient.addColorStop(0, 'rgba(16, 22, 52, 0)');
+    floorGradient.addColorStop(0.35, 'rgba(14, 20, 48, 0.65)');
+    floorGradient.addColorStop(1, 'rgba(3, 4, 10, 0.95)');
+  }
+
+  window.addEventListener('resize', updateLayout, { passive: true });
+  updateLayout();
+
+  // Start slightly into the first swing so motion is immediate on frame 1
+  const INITIAL_TIME_OFFSET = 0.12;
+  const startTime = performance.now();
+
+  function drawBackground() {
+    ctx.fillStyle = bgGradient;
+    ctx.fillRect(0, 0, width, height);
+
+    // Subtle geometric harmonic stage rings in the background
+    const minDim = Math.min(width, height);
+    ctx.save();
+    ctx.strokeStyle = 'rgba(110, 145, 255, 0.045)';
+    ctx.lineWidth = Math.max(1, 1.2 * sceneScale);
+
+    // Central equilibrium axis line
+    ctx.beginPath();
+    ctx.moveTo(centerX, topRigY * 0.7);
+    ctx.lineTo(centerX, floorY);
+    ctx.stroke();
+
+    // Faint circular arc guides for each pendulum's swing path
+    for (let i = 0; i < COUNT; i++) {
+      const p = pendulums[i];
+      const r = p.color.rgb;
+      ctx.strokeStyle = `rgba(${r[0]}, ${r[1]}, ${r[2]}, 0.065)`;
+      ctx.beginPath();
+      const startArc = Math.PI * 0.5 - p.maxAngle;
+      const endArc = Math.PI * 0.5 + p.maxAngle;
+      ctx.arc(p.pivotX, p.pivotY, p.length, startArc, endArc);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawSuspensionRig() {
+    const minDim = Math.min(width, height);
+    const first = pendulums[0];
+    const last = pendulums[COUNT - 1];
+    const padX = minDim * 0.045;
+
+    ctx.save();
+    // Outer glow of top suspension bar
+    ctx.strokeStyle = 'rgba(90, 140, 255, 0.24)';
+    ctx.lineWidth = Math.max(6, 12 * sceneScale);
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(first.pivotX - padX, first.pivotY);
+    ctx.lineTo(last.pivotX + padX, last.pivotY);
+    ctx.stroke();
+
+    // Core structural rail
+    ctx.strokeStyle = 'rgba(200, 220, 255, 0.42)';
+    ctx.lineWidth = Math.max(2, 3.5 * sceneScale);
+    ctx.beginPath();
+    ctx.moveTo(first.pivotX - padX, first.pivotY);
+    ctx.lineTo(last.pivotX + padX, last.pivotY);
+    ctx.stroke();
+
+    // Individual color-coded pivot anchors
+    for (let i = 0; i < COUNT; i++) {
+      const p = pendulums[i];
+      const r = p.color.rgb;
+      const pulse = 0.45 + 0.55 * p.centerFlash;
+      const anchorRadius = Math.max(2.5, (4.2 + p.centerFlash * 2.5) * sceneScale);
+
+      ctx.fillStyle = `rgba(${r[0]}, ${r[1]}, ${r[2]}, ${pulse})`;
+      ctx.beginPath();
+      ctx.arc(p.pivotX, p.pivotY, anchorRadius * 1.9, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = p.color.core;
+      ctx.beginPath();
+      ctx.arc(p.pivotX, p.pivotY, anchorRadius * 0.75, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawWaveRibbon() {
+    if (COUNT < 2) return;
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    // Draw smooth cubic Catmull-Rom spine connecting all 15 bobs
+    for (let i = 0; i < COUNT - 1; i++) {
+      const p0 = pendulums[Math.max(0, i - 1)];
+      const p1 = pendulums[i];
+      const p2 = pendulums[i + 1];
+      const p3 = pendulums[Math.min(COUNT - 1, i + 2)];
+
+      const cp1x = p1.x + (p2.x - p0.x) / 6;
+      const cp1y = p1.y + (p2.y - p0.y) / 6;
+      const cp2x = p2.x - (p3.x - p1.x) / 6;
+      const cp2y = p2.y - (p3.y - p1.y) / 6;
+
+      const grad = ctx.createLinearGradient(p1.x, p1.y, p2.x, p2.y);
+      const c1 = p1.color.rgb;
+      const c2 = p2.color.rgb;
+
+      // Outer atmospheric ribbon glow
+      grad.addColorStop(0, `rgba(${c1[0]}, ${c1[1]}, ${c1[2]}, 0.34)`);
+      grad.addColorStop(1, `rgba(${c2[0]}, ${c2[1]}, ${c2[2]}, 0.34)`);
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = Math.max(5, 11 * sceneScale);
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
+      ctx.stroke();
+
+      // Crisp inner energy filament
+      const coreGrad = ctx.createLinearGradient(p1.x, p1.y, p2.x, p2.y);
+      coreGrad.addColorStop(0, p1.color.main);
+      coreGrad.addColorStop(1, p2.color.main);
+      ctx.strokeStyle = coreGrad;
+      ctx.lineWidth = Math.max(1.8, 3.0 * sceneScale);
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
+      ctx.stroke();
+    }
+
+    // Secondary harmonic web: connect every 2nd and 3rd bob when spatially close in X
+    const maxChordDist = Math.min(width, height) * 0.22;
+    for (let step = 2; step <= 3; step++) {
+      for (let i = 0; i < COUNT - step; i++) {
+        const a = pendulums[i];
+        const b = pendulums[i + step];
+        const dx = a.x - b.x;
+        const dy = a.y - b.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < maxChordDist) {
+          const alpha = Math.pow(1 - dist / maxChordDist, 1.8) * 0.28;
+          const ca = a.color.rgb;
+          const cb = b.color.rgb;
+          ctx.strokeStyle = `rgba(${(ca[0] + cb[0]) >> 1}, ${(ca[1] + cb[1]) >> 1}, ${(ca[2] + cb[2]) >> 1}, ${alpha})`;
+          ctx.lineWidth = Math.max(1, 1.6 * sceneScale);
+          ctx.beginPath();
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+          ctx.stroke();
+        }
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawFloorPhaseProjection() {
+    const minDim = Math.min(width, height);
+    ctx.save();
+
+    // Subtle dark reflection deck at bottom
+    ctx.fillStyle = floorGradient;
+    ctx.fillRect(0, floorY - minDim * 0.03, width, height - floorY + minDim * 0.03);
+
+    // Baseline horizon bar
+    const railWidth = minDim * 0.88;
+    const railLeft = centerX - railWidth * 0.5;
+    const railRight = centerX + railWidth * 0.5;
+
+    ctx.strokeStyle = 'rgba(130, 165, 255, 0.18)';
+    ctx.lineWidth = Math.max(1, 1.5 * sceneScale);
+    ctx.beginPath();
+    ctx.moveTo(railLeft, floorY);
+    ctx.lineTo(railRight, floorY);
+    ctx.stroke();
+
+    // Connect floor phase projections with a subtle wave trace
+    ctx.beginPath();
+    for (let i = 0; i < COUNT; i++) {
+      const p = pendulums[i];
+      const py = floorY + (i - (COUNT - 1) * 0.5) * (minDim * 0.0028);
+      if (i === 0) ctx.moveTo(p.x, py);
+      else ctx.lineTo(p.x, py);
+    }
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.16)';
+    ctx.lineWidth = Math.max(1.2, 2 * sceneScale);
+    ctx.stroke();
+
+    // Glowing floor nodes directly below each bob
+    for (let i = 0; i < COUNT; i++) {
+      const p = pendulums[i];
+      const r = p.color.rgb;
+      const py = floorY + (i - (COUNT - 1) * 0.5) * (minDim * 0.0028);
+      const glowW = p.bobRadius * (1.5 + p.centerFlash * 0.9);
+      const glowH = Math.max(2.5, 4.5 * sceneScale);
+
+      const reflGrad = ctx.createRadialGradient(p.x, py, 0, p.x, py, glowW * 1.8);
+      reflGrad.addColorStop(0, `rgba(${r[0]}, ${r[1]}, ${r[2]}, 0.75)`);
+      reflGrad.addColorStop(0.5, `rgba(${r[0]}, ${r[1]}, ${r[2]}, 0.22)`);
+      reflGrad.addColorStop(1, `rgba(${r[0]}, ${r[1]}, ${r[2]}, 0)`);
+
+      ctx.fillStyle = reflGrad;
+      ctx.beginPath();
+      ctx.ellipse(p.x, py, glowW * 1.8, glowH * 1.9, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = p.color.core;
+      ctx.beginPath();
+      ctx.arc(p.x, py, Math.max(2, 3.2 * sceneScale), 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  function render(now) {
+    const elapsed = (now - startTime) * 0.001 + INITIAL_TIME_OFFSET;
+
+    // 1. Update physics state for all 15 pendulums
+    for (let i = 0; i < COUNT; i++) {
+      const p = pendulums[i];
+      const phase = p.omega * elapsed;
+      const angle = p.maxAngle * Math.cos(phase);
+
+      // Detect center crossing (maximum velocity) for subtle visual pulse
+      if ((p.prevAngle < 0 && angle >= 0) || (p.prevAngle > 0 && angle <= 0)) {
+        p.centerFlash = 1.0;
+      } else {
+        p.centerFlash *= 0.91;
+      }
+
+      // Detect turnaround peak for gentle halo bloom
+      const normDisp = Math.abs(angle) / p.maxAngle;
+      if (normDisp > 0.985) {
+        p.peakFlash = Math.min(1, p.peakFlash + 0.18);
+      } else {
+        p.peakFlash *= 0.92;
+      }
+
+      p.prevAngle = angle;
+      p.x = p.pivotX + Math.sin(angle) * p.length;
+      p.y = p.pivotY + Math.cos(angle) * p.length;
+
+      p.trail.push({ x: p.x, y: p.y });
+      if (p.trail.length > TRAIL_LENGTH) {
+        p.trail.shift();
+      }
+    }
+
+    // 2. Render background and subtle guide geometry
+    drawBackground();
+
+    // 3. Render floor reflection and horizontal phase bar
+    drawFloorPhaseProjection();
+
+    // 4. Render pendulum strings and motion trails (back-to-front: longest i=0 to shortest i=14)
+    ctx.save();
+    ctx.lineCap = 'round';
+    for (let i = 0; i < COUNT; i++) {
+      const p = pendulums[i];
+      const r = p.color.rgb;
+
+      // Tapered luminous arc trail behind each bob
+      const tLen = p.trail.length;
+      if (tLen > 2) {
+        for (let j = 1; j < tLen; j++) {
+          const frac = j / tLen;
+          const pt0 = p.trail[j - 1];
+          const pt1 = p.trail[j];
+          ctx.strokeStyle = `rgba(${r[0]}, ${r[1]}, ${r[2]}, ${frac * frac * 0.52})`;
+          ctx.lineWidth = p.bobRadius * (0.14 + frac * 0.65);
+          ctx.beginPath();
+          ctx.moveTo(pt0.x, pt0.y);
+          ctx.lineTo(pt1.x, pt1.y);
+          ctx.stroke();
+        }
+      }
+
+      // Pendulum string with vibrant gradient from pivot to bob
+      const strGrad = ctx.createLinearGradient(p.pivotX, p.pivotY, p.x, p.y);
+      strGrad.addColorStop(0, `rgba(${r[0]}, ${r[1]}, ${r[2]}, 0.28)`);
+      strGrad.addColorStop(0.65, `rgba(${r[0]}, ${r[1]}, ${r[2]}, 0.58)`);
+      strGrad.addColorStop(1, `rgba(${r[0]}, ${r[1]}, ${r[2]}, 0.95)`);
+
+      ctx.strokeStyle = strGrad;
+      ctx.lineWidth = Math.max(1.4, (2.2 + p.centerFlash * 1.1) * sceneScale);
+      ctx.beginPath();
+      ctx.moveTo(p.pivotX, p.pivotY);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // 5. Render inter-bob harmonic spline ribbon
+    drawWaveRibbon();
+
+    // 6. Render top suspension rig
+    drawSuspensionRig();
+
+    // 7. Render glowing 3D saturated bobs (back-to-front so foreground bobs sit cleanly in front)
+    ctx.save();
+    for (let i = 0; i < COUNT; i++) {
+      const p = pendulums[i];
+      const r = p.color.rgb;
+      const rad = p.bobRadius * (1 + p.centerFlash * 0.14 + p.peakFlash * 0.06);
+
+      // Outer bloom halo
+      const haloRad = rad * (2.5 + p.centerFlash * 0.9);
+      const haloGrad = ctx.createRadialGradient(p.x, p.y, rad * 0.25, p.x, p.y, haloRad);
+      haloGrad.addColorStop(0, `rgba(${r[0]}, ${r[1]}, ${r[2]}, ${0.58 + p.centerFlash * 0.25})`);
+      haloGrad.addColorStop(0.45, `rgba(${r[0]}, ${r[1]}, ${r[2]}, 0.22)`);
+      haloGrad.addColorStop(1, `rgba(${r[0]}, ${r[1]}, ${r[2]}, 0)`);
+
+      ctx.fillStyle = haloGrad;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, haloRad, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Center-crossing shockwave ring
+      if (p.centerFlash > 0.08) {
+        const ringRad = rad * (1.2 + (1 - p.centerFlash) * 1.7);
+        ctx.strokeStyle = `rgba(${r[0]}, ${r[1]}, ${r[2]}, ${p.centerFlash * 0.65})`;
+        ctx.lineWidth = Math.max(1.2, 2.2 * sceneScale);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, ringRad, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // Saturated sphere body
+      const sphereGrad = ctx.createRadialGradient(
+        p.x - rad * 0.32,
+        p.y - rad * 0.32,
+        rad * 0.1,
+        p.x,
+        p.y,
+        rad
+      );
+      sphereGrad.addColorStop(0, '#FFFFFF');
+      sphereGrad.addColorStop(0.26, p.color.core);
+      sphereGrad.addColorStop(0.72, p.color.main);
+      sphereGrad.addColorStop(1, `rgb(${Math.round(r[0] * 0.55)}, ${Math.round(r[1] * 0.55)}, ${Math.round(r[2] * 0.55)})`);
+
+      ctx.fillStyle = sphereGrad;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, rad, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Crisp rim light
+      ctx.strokeStyle = p.color.core;
+      ctx.lineWidth = Math.max(1, 1.4 * sceneScale);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, rad, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>

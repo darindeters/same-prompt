@@ -1,0 +1,1159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Ink in Water</title>
+<style>
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background-color: #070911;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('canvas');
+  const gl = canvas.getContext('webgl2', {
+    alpha: false,
+    depth: false,
+    stencil: false,
+    antialias: false,
+    preserveDrawingBuffer: false,
+    powerPreference: 'high-performance'
+  });
+
+  if (!gl) return;
+
+  // Enable floating-point render targets and linear filtering
+  gl.getExtension('EXT_color_buffer_float');
+  gl.getExtension('EXT_color_buffer_half_float');
+  const hasFloatLinear = !!gl.getExtension('OES_texture_float_linear');
+  gl.getExtension('OES_texture_half_float_linear');
+
+  // Simulation and dye grid resolutions tuned for crisp tendrils and smooth 60fps
+  const SIM_W = 288;
+  const SIM_H = 384;
+  const DYE_W = 864;
+  const DYE_H = 1152;
+
+  const baseVertexShader = `#version 300 es
+    precision highp float;
+    layout(location = 0) in vec2 aPosition;
+    out vec2 vUv;
+    void main() {
+      vUv = aPosition * 0.5 + 0.5;
+      gl_Position = vec4(aPosition, 0.0, 1.0);
+    }
+  `;
+
+  // Mask & signed distance field of the interior of the water glass in simulation space [0,1]^2
+  // Glass spans x in [0.14, 0.86] at top (y = 0.84, water surface), tapering slightly to [0.18, 0.82] at bottom (y = 0.11)
+  const glassGeometryChunk = `
+    // Returns signed distance inside water volume (positive inside water, negative outside)
+    float waterInteriorDist(vec2 uv) {
+      float yTop = 0.825;
+      float yBot = 0.115;
+      float t = clamp((uv.y - yBot) / (yTop - yBot), 0.0, 1.0);
+      float halfWidth = mix(0.305, 0.348, t);
+      float dx = halfWidth - abs(uv.x - 0.5);
+      // Curved bottom corners
+      float cornerRadius = 0.045;
+      float dyBot = uv.y - yBot;
+      float dyTop = yTop - uv.y;
+      if (dyBot < cornerRadius && dx < cornerRadius) {
+        vec2 c = vec2(cornerRadius - dx, cornerRadius - dyBot);
+        return cornerRadius - length(c);
+      }
+      return min(dx, min(dyBot, dyTop + 0.02));
+    }
+
+    float waterWallMask(vec2 uv) {
+      return smoothstep(-0.002, 0.012, waterInteriorDist(uv));
+    }
+  `;
+
+  // 1. Advection shader (MacCormack / Semi-Lagrangian with boundary clamping)
+  const advectionFrag = `#version 300 es
+    precision highp float;
+    in vec2 vUv;
+    out vec4 outColor;
+    uniform sampler2D uVelocity;
+    uniform sampler2D uSource;
+    uniform vec2 uTexelSize;
+    uniform float uDt;
+    uniform float uDissipation;
+    uniform float uIsVelocity;
+
+    ${glassGeometryChunk}
+
+    void main() {
+      float mask = waterWallMask(vUv);
+      if (mask <= 0.001) {
+        outColor = vec4(0.0);
+        return;
+      }
+      vec2 vel = texture(uVelocity, vUv).xy;
+      vec2 coord = vUv - uDt * vel * vec2(1.333, 1.0);
+      vec4 result = texture(uSource, coord) * uDissipation;
+      if (uIsVelocity > 0.5) {
+        // Dampen velocity softly right at glass walls
+        float wallDamp = smoothstep(0.0, 0.022, waterInteriorDist(vUv));
+        result.xy *= wallDamp;
+      } else {
+        // Keep dye strictly inside the water volume
+        float dyeMask = smoothstep(-0.002, 0.006, waterInteriorDist(vUv));
+        result *= dyeMask;
+      }
+      outColor = result;
+    }
+  `;
+
+  // 2. Drop injection shader (injects two 3-channel dye textures or velocity + heavy ink density)
+  const splatFrag = `#version 300 es
+    precision highp float;
+    in vec2 vUv;
+    out vec4 outColor;
+    uniform sampler2D uTarget;
+    uniform vec2 uPoint;
+    uniform vec4 uValue;
+    uniform float uRadius;
+    uniform float uRingness;
+    uniform float uNoisePhase;
+
+    ${glassGeometryChunk}
+
+    float hash(vec2 p) {
+      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+    }
+
+    float vnoise(vec2 p) {
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      return mix(
+        mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+        mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x),
+        f.y
+      );
+    }
+
+    void main() {
+      vec4 base = texture(uTarget, vUv);
+      float mask = smoothstep(-0.001, 0.008, waterInteriorDist(vUv));
+      vec2 p = vUv - uPoint;
+      p.x *= 0.75; // Aspect correction for water domain
+      float r2 = dot(p, p);
+      float r = sqrt(r2);
+
+      // Subtle azimuthal perturbation so ink drops form organic Rayleigh-Taylor lobes
+      float angle = atan(p.y, p.x);
+      float lobe = 1.0 + 0.16 * sin(angle * 5.0 + uNoisePhase)
+                       + 0.11 * cos(angle * 8.0 - uNoisePhase * 1.7)
+                       + 0.08 * (vnoise(p * 38.0 + uNoisePhase) - 0.5);
+      float rn = r / (uRadius * lobe);
+
+      // Combination of Gaussian core and vortex ring rim (like a real drop hitting water)
+      float core = exp(-rn * rn * 2.2);
+      float ring = exp(-pow(rn - 0.72, 2.0) * 14.0);
+      float shape = mix(core, max(core * 0.65, ring), uRingness);
+
+      outColor = base + uValue * shape * mask;
+    }
+  `;
+
+  // 3. Buoyancy & swirling shear force shader:
+  // Heavy ink sinks due to gravity (Rayleigh-Taylor instability), while bottom corners gently recirculate upward
+  const buoyancyFrag = `#version 300 es
+    precision highp float;
+    in vec2 vUv;
+    out vec4 outColor;
+    uniform sampler2D uVelocity;
+    uniform sampler2D uDyeA;
+    uniform sampler2D uDyeB;
+    uniform float uDt;
+    uniform float uTime;
+
+    ${glassGeometryChunk}
+
+    void main() {
+      vec2 vel = texture(uVelocity, vUv).xy;
+      vec4 dA = texture(uDyeA, vUv);
+      vec4 dB = texture(uDyeB, vUv);
+
+      // dA.w stores "freshness / heavy drop mass", plus total pigment concentration
+      float pigmentMass = (dA.r + dA.g + dA.b + dB.r + dB.g + dB.b) * 0.32;
+      float heavyMass = dA.a * 1.45 + pigmentMass * 0.38;
+
+      // Horizontal gradient of density creates baroclinic torque (rolling mushroom caps!)
+      vec2 eps = vec2(1.0 / 288.0, 1.0 / 384.0);
+      float massL = texture(uDyeA, vUv - vec2(eps.x, 0.0)).a + dot(texture(uDyeA, vUv - vec2(eps.x, 0.0)).rgb, vec3(0.25));
+      float massR = texture(uDyeA, vUv + vec2(eps.x, 0.0)).a + dot(texture(uDyeA, vUv + vec2(eps.x, 0.0)).rgb, vec3(0.25));
+      float dMassDx = (massR - massL) * 0.5;
+
+      // Downward gravitational acceleration on dense ink
+      float gravity = -0.34 * heavyMass;
+
+      // As ink approaches the lower third of the glass, gently deflect outward & upward along walls
+      float bottomCushion = smoothstep(0.28, 0.12, vUv.y);
+      float centerOffset = vUv.x - 0.5;
+      float outwardPush = sign(centerOffset) * (0.08 + 0.35 * abs(centerOffset)) * bottomCushion * heavyMass;
+
+      // Subtle large-scale convective stir in the water glass so tendrils never go static
+      vec2 p = vUv * vec2(3.2, 4.0);
+      vec2 gentleCurrent = vec2(
+        sin(p.y * 2.4 + uTime * 0.35) * cos(p.x * 2.1 - uTime * 0.22),
+        cos(p.x * 2.7 - uTime * 0.31) * sin(p.y * 2.0 + uTime * 0.25)
+      ) * 0.012;
+
+      vel.x += (outwardPush - dMassDx * 0.42 + gentleCurrent.x) * uDt;
+      vel.y += (gravity + bottomCushion * abs(centerOffset) * 0.45 * pigmentMass + gentleCurrent.y) * uDt;
+
+      float wallDamp = smoothstep(0.0, 0.02, waterInteriorDist(vUv));
+      outColor = vec4(vel * wallDamp, 0.0, 1.0);
+    }
+  `;
+
+  // 4. Curl (vorticity) calculation
+  const curlFrag = `#version 300 es
+    precision highp float;
+    in vec2 vUv;
+    out vec4 outColor;
+    uniform sampler2D uVelocity;
+    uniform vec2 uTexelSize;
+
+    void main() {
+      float L = texture(uVelocity, vUv - vec2(uTexelSize.x, 0.0)).y;
+      float R = texture(uVelocity, vUv + vec2(uTexelSize.x, 0.0)).y;
+      float T = texture(uVelocity, vUv + vec2(0.0, uTexelSize.y)).x;
+      float B = texture(uVelocity, vUv - vec2(0.0, uTexelSize.y)).x;
+      float vorticity = 0.5 * ((R - L) - (T - B));
+      outColor = vec4(vorticity, 0.0, 0.0, 1.0);
+    }
+  `;
+
+  // 5. Vorticity confinement shader (multi-scale curl preservation for delicate ink filaments)
+  const vorticityFrag = `#version 300 es
+    precision highp float;
+    in vec2 vUv;
+    out vec4 outColor;
+    uniform sampler2D uVelocity;
+    uniform sampler2D uCurl;
+    uniform vec2 uTexelSize;
+    uniform float uCurlStrength;
+    uniform float uDt;
+
+    ${glassGeometryChunk}
+
+    void main() {
+      float L = abs(texture(uCurl, vUv - vec2(uTexelSize.x, 0.0)).x);
+      float R = abs(texture(uCurl, vUv + vec2(uTexelSize.x, 0.0)).x);
+      float T = abs(texture(uCurl, vUv + vec2(0.0, uTexelSize.y)).x);
+      float B = abs(texture(uCurl, vUv - vec2(0.0, uTexelSize.y)).x);
+      float C = texture(uCurl, vUv).x;
+
+      vec2 force = 0.5 * vec2(T - B, L - R);
+      force /= length(force) + 1e-5;
+      force *= uCurlStrength * C;
+
+      vec2 vel = texture(uVelocity, vUv).xy + force * uDt;
+      float wallDamp = smoothstep(0.0, 0.022, waterInteriorDist(vUv));
+      outColor = vec4(vel * wallDamp, 0.0, 1.0);
+    }
+  `;
+
+  // 6. Divergence of velocity
+  const divergenceFrag = `#version 300 es
+    precision highp float;
+    in vec2 vUv;
+    out vec4 outColor;
+    uniform sampler2D uVelocity;
+    uniform vec2 uTexelSize;
+
+    ${glassGeometryChunk}
+
+    void main() {
+      float mC = waterWallMask(vUv);
+      if (mC <= 0.001) {
+        outColor = vec4(0.0);
+        return;
+      }
+      vec2 vC = texture(uVelocity, vUv).xy;
+
+      vec2 uvL = vUv - vec2(uTexelSize.x, 0.0);
+      vec2 uvR = vUv + vec2(uTexelSize.x, 0.0);
+      vec2 uvT = vUv + vec2(0.0, uTexelSize.y);
+      vec2 uvB = vUv - vec2(0.0, uTexelSize.y);
+
+      float L = waterWallMask(uvL) > 0.05 ? texture(uVelocity, uvL).x : -vC.x;
+      float R = waterWallMask(uvR) > 0.05 ? texture(uVelocity, uvR).x : -vC.x;
+      float T = waterWallMask(uvT) > 0.05 ? texture(uVelocity, uvT).y : -vC.y;
+      float B = waterWallMask(uvB) > 0.05 ? texture(uVelocity, uvB).y : -vC.y;
+
+      float div = 0.5 * (R - L + T - B);
+      outColor = vec4(div, 0.0, 0.0, 1.0);
+    }
+  `;
+
+  // 7. Jacobi pressure Poisson solver
+  const pressureFrag = `#version 300 es
+    precision highp float;
+    in vec2 vUv;
+    out vec4 outColor;
+    uniform sampler2D uPressure;
+    uniform sampler2D uDivergence;
+    uniform vec2 uTexelSize;
+
+    ${glassGeometryChunk}
+
+    void main() {
+      float L = texture(uPressure, vUv - vec2(uTexelSize.x, 0.0)).x;
+      float R = texture(uPressure, vUv + vec2(uTexelSize.x, 0.0)).x;
+      float T = texture(uPressure, vUv + vec2(0.0, uTexelSize.y)).x;
+      float B = texture(uPressure, vUv - vec2(0.0, uTexelSize.y)).x;
+      float divergence = texture(uDivergence, vUv).x;
+      float p = (L + R + B + T - divergence) * 0.25;
+      outColor = vec4(p * waterWallMask(vUv), 0.0, 0.0, 1.0);
+    }
+  `;
+
+  // 8. Subtract pressure gradient from velocity (incompressibility projection)
+  const gradientSubtractFrag = `#version 300 es
+    precision highp float;
+    in vec2 vUv;
+    out vec4 outColor;
+    uniform sampler2D uPressure;
+    uniform sampler2D uVelocity;
+    uniform vec2 uTexelSize;
+
+    ${glassGeometryChunk}
+
+    void main() {
+      float L = texture(uPressure, vUv - vec2(uTexelSize.x, 0.0)).x;
+      float R = texture(uPressure, vUv + vec2(uTexelSize.x, 0.0)).x;
+      float T = texture(uPressure, vUv + vec2(0.0, uTexelSize.y)).x;
+      float B = texture(uPressure, vUv - vec2(0.0, uTexelSize.y)).x;
+      vec2 vel = texture(uVelocity, vUv).xy;
+      vel -= 0.5 * vec2(R - L, T - B);
+      float wallDamp = smoothstep(0.0, 0.02, waterInteriorDist(vUv));
+      outColor = vec4(vel * wallDamp, 0.0, 1.0);
+    }
+  `;
+
+  // 9. Final high-dynamic-range studio optical rendering shader:
+  // Renders the backlit crystal glass vessel, dynamic meniscus surface ripples, 6-pigment Beer-Lambert
+  // volumetric ink transmission + luminous internal subsurface scattering, glass thickness refraction,
+  // Fresnel specular highlights, and caustic light projected onto the dark surface below the glass.
+  const displayFrag = `#version 300 es
+    precision highp float;
+    in vec2 vUv;
+    out vec4 outColor;
+
+    uniform sampler2D uDyeA;
+    uniform sampler2D uDyeB;
+    uniform sampler2D uVelocity;
+    uniform vec2 uResolution;
+    uniform vec2 uDyeTexelSize;
+    uniform float uTime;
+    uniform vec4 uDropRipples[4]; // (x, age, amplitude, colorHue)
+    uniform vec4 uFallingDrops[3]; // (x, y, radius, colorIndex)
+
+    // Pigment absorption & scattering palettes for 6 vivid, ultra-saturated inks:
+    // DyeA.rgb = [0] Magenta-Rose, [1] Cyan-Cerulean, [2] Amber-Gold
+    // DyeB.rgb = [3] Ultramarine-Violet, [4] Vermilion-Coral, [5] Emerald-Teal
+
+    void main() {
+      // Aspect-correct coordinate system centered on the 1:1 studio frame
+      vec2 aspect = vec2(uResolution.x / min(uResolution.x, uResolution.y),
+                         uResolution.y / min(uResolution.x, uResolution.y));
+      vec2 p = (vUv - 0.5) * aspect;
+
+      // Map into normalized glass coordinate space uvG in [0, 1]^2
+      vec2 uvG = p * 0.94 + 0.5;
+
+      // Studio backdrop: rich dark obsidian-sapphire studio cyclorama with a warm-cool luminous backlight halo
+      vec2 bgPos = p;
+      float radialDist = length(bgPos * vec2(0.95, 0.85) - vec2(0.0, -0.02));
+      vec3 darkStudio = vec3(0.022, 0.030, 0.052);
+      vec3 midGlow    = vec3(0.075, 0.125, 0.215);
+      vec3 coreLight  = vec3(0.92, 0.95, 1.00);
+
+      // Soft studio softbox behind the glass so both subtractive absorption & vivid glowing ink read with high contrast
+      float softbox = exp(-dot(bgPos * vec2(1.45, 1.15), bgPos * vec2(1.45, 1.15)) * 2.35);
+      vec3 bgCol = mix(darkStudio, midGlow, smoothstep(0.85, 0.1, radialDist));
+      bgCol = mix(bgCol, coreLight * 0.94, pow(softbox, 1.25) * 0.88);
+
+      // Table horizon & glossy studio surface beneath the glass (y = 0.095 in uvG space)
+      float tableY = 0.095;
+      float tablePlane = smoothstep(tableY + 0.015, tableY - 0.06, uvG.y);
+
+      // Sample integrated ink colors near bottom of glass to cast colorful caustic glow onto the table
+      vec3 bottomDyeA = texture(uDyeA, vec2(clamp(uvG.x, 0.22, 0.78), 0.16)).rgb;
+      vec3 bottomDyeB = texture(uDyeB, vec2(clamp(uvG.x, 0.22, 0.78), 0.16)).rgb;
+      vec3 causticTint =
+          bottomDyeA.r * vec3(1.00, 0.12, 0.55) +
+          bottomDyeA.g * vec3(0.00, 0.88, 1.00) +
+          bottomDyeA.b * vec3(1.00, 0.75, 0.05) +
+          bottomDyeB.r * vec3(0.48, 0.18, 1.00) +
+          bottomDyeB.g * vec3(1.00, 0.26, 0.08) +
+          bottomDyeB.b * vec3(0.05, 0.96, 0.58);
+
+      float underGlassX = exp(-pow((uvG.x - 0.5) * 3.4, 2.0));
+      float underGlassY = exp(-pow((uvG.y - 0.055) * 18.0, 2.0));
+      float causticWave = 0.75 + 0.25 * sin(uvG.x * 42.0 + uTime * 2.2) * cos(uvG.y * 60.0 - uTime * 1.5);
+      vec3 tableCaustic = (vec3(0.28, 0.42, 0.62) + causticTint * 0.85) * underGlassX * underGlassY * causticWave;
+      bgCol = mix(bgCol, bgCol * 0.42 + tableCaustic * 0.65, tablePlane);
+
+      // Outer glass silhouette geometry
+      float yTopGlass = 0.895;
+      float yBotGlass = 0.082;
+      float yWaterBase = 0.825;
+      float yWaterBot  = 0.115;
+
+      float tGlass = clamp((uvG.y - yBotGlass) / (yTopGlass - yBotGlass), 0.0, 1.0);
+      float outerHalfW = mix(0.324, 0.368, tGlass);
+      float innerHalfW = mix(0.305, 0.348, clamp((uvG.y - yWaterBot) / (yWaterBase - yWaterBot), 0.0, 1.0));
+
+      // Compute meniscus wave height at the water surface from recent ink drop impacts + fluid velocity
+      float surfaceWave = 0.0;
+      for (int i = 0; i < 4; i++) {
+        vec4 rep = uDropRipples[i];
+        float age = rep.y;
+        if (age > 0.0 && age < 6.0) {
+          float dx = abs(uvG.x - rep.x);
+          float wavePhase = dx * 48.0 - age * 11.5;
+          float envelope = exp(-dx * 8.5) * exp(-age * 0.85) * smoothstep(0.0, 0.08, age);
+          surfaceWave += sin(wavePhase) * rep.z * envelope;
+        }
+      }
+      // Subtle capillary climb (meniscus curve) right at the left and right inner glass walls
+      float wallProximity = clamp(1.0 - (innerHalfW - abs(uvG.x - 0.5)) / 0.028, 0.0, 1.0);
+      float meniscusClimb = pow(wallProximity, 2.6) * 0.011;
+      float ySurface = yWaterBase + surfaceWave + meniscusClimb;
+
+      // Signed distance to outer glass vessel (with rounded base corners and subtle perspective ellipse at top rim)
+      float dxOuter = outerHalfW - abs(uvG.x - 0.5);
+      float dyBotOuter = uvG.y - yBotGlass;
+      float dyTopOuter = yTopGlass - uvG.y;
+      float outerCornerR = 0.052;
+      float dOuter = min(dxOuter, min(dyBotOuter, dyTopOuter));
+      if (dyBotOuter < outerCornerR && dxOuter < outerCornerR) {
+        dOuter = outerCornerR - length(vec2(outerCornerR - dxOuter, outerCornerR - dyBotOuter));
+      }
+
+      // Signed distance to inner water volume
+      float dxInner = innerHalfW - abs(uvG.x - 0.5);
+      float dyBotInner = uvG.y - yWaterBot;
+      float dyTopWater = ySurface - uvG.y;
+      float innerCornerR = 0.045;
+      float dWater = min(dxInner, min(dyBotInner, dyTopWater));
+      if (dyBotInner < innerCornerR && dxInner < innerCornerR) {
+        dWater = innerCornerR - length(vec2(innerCornerR - dxInner, innerCornerR - dyBotInner));
+      }
+
+      // Inner air cavity above water surface (between ySurface and yTopGlass)
+      float dInnerCavity = min(dxInner, min(dyBotInner, yTopGlass - uvG.y));
+      if (dyBotInner < innerCornerR && dxInner < innerCornerR) {
+        dInnerCavity = innerCornerR - length(vec2(innerCornerR - dxInner, innerCornerR - dyBotInner));
+      }
+
+      float inOuterGlass = smoothstep(-0.002, 0.002, dOuter);
+      float inWater      = smoothstep(-0.002, 0.002, dWater);
+      float inInnerCav   = smoothstep(-0.002, 0.002, dInnerCavity);
+
+      vec3 finalColor = bgCol;
+
+      if (inOuterGlass > 0.001) {
+        // Cylindrical horizontal normal across glass for realistic cylindrical refraction & Fresnel
+        float xNorm = clamp((uvG.x - 0.5) / max(outerHalfW, 0.001), -1.0, 1.0);
+        float zNorm = sqrt(max(0.0, 1.0 - xNorm * xNorm));
+        float fresnel = pow(1.0 - zNorm, 3.2);
+
+        // Glass wall thickness mask (1 in the side walls and heavy crystal base, 0 in the interior)
+        float glassWall = clamp(inOuterGlass - inInnerCav * 0.92, 0.0, 1.0);
+
+        // Refract sample coordinates through cylindrical water + ink density gradients
+        vec2 sampleUv = uvG;
+        sampleUv.x = 0.5 + (uvG.x - 0.5) * (0.965 + 0.035 * zNorm);
+
+        // Compute dye gradient for refractive schlieren / 3D volumetric beveling of ink plumes
+        vec4 dA = texture(uDyeA, sampleUv);
+        vec4 dB = texture(uDyeB, sampleUv);
+
+        vec4 dAx = texture(uDyeA, sampleUv + vec2(uDyeTexelSize.x * 2.0, 0.0)) -
+                   texture(uDyeA, sampleUv - vec2(uDyeTexelSize.x * 2.0, 0.0));
+        vec4 dAy = texture(uDyeA, sampleUv + vec2(0.0, uDyeTexelSize.y * 2.0)) -
+                   texture(uDyeA, sampleUv - vec2(0.0, uDyeTexelSize.y * 2.0));
+        vec4 dBx = texture(uDyeB, sampleUv + vec2(uDyeTexelSize.x * 2.0, 0.0)) -
+                   texture(uDyeB, sampleUv - vec2(uDyeTexelSize.x * 2.0, 0.0));
+        vec4 dBy = texture(uDyeB, sampleUv + vec2(0.0, uDyeTexelSize.y * 2.0)) -
+                   texture(uDyeB, sampleUv - vec2(0.0, uDyeTexelSize.y * 2.0));
+
+        vec2 gradInk = vec2(
+          dot(dAx.rgb, vec3(1.0)) + dot(dBx.rgb, vec3(1.0)),
+          dot(dAy.rgb, vec3(1.0)) + dot(dBy.rgb, vec3(1.0))
+        );
+
+        // Slight refractive distortion of background through water and heavy crystal base
+        vec2 refractedBgUv = p + vec2(xNorm * 0.025, (uvG.y < yWaterBot ? -0.03 : 0.0)) + gradInk * 0.004;
+        float refSoftbox = exp(-dot(refractedBgUv * vec2(1.35, 1.1), refractedBgUv * vec2(1.35, 1.1)) * 2.1);
+        vec3 waterBacklight = mix(vec3(0.09, 0.15, 0.26), vec3(0.95, 0.98, 1.0), pow(refSoftbox, 1.15) * 0.92);
+
+        // Clear water tint inside the vessel
+        vec3 waterCol = waterBacklight * vec3(0.94, 0.98, 1.02);
+
+        if (inWater > 0.001) {
+          // 6 vivid pigments:
+          // c0: Electric Magenta / Ruby Rose
+          // c1: Vivid Cyan / Cerulean Blue
+          // c2: Luminous Marigold / Solar Gold
+          // c3: Deep Ultramarine / Royal Violet
+          // c4: Fiery Coral / Vermilion
+          // c5: Radiant Emerald / Peacock Teal
+          float c0 = max(0.0, dA.r);
+          float c1 = max(0.0, dA.g);
+          float c2 = max(0.0, dA.b);
+          float c3 = max(0.0, dB.r);
+          float c4 = max(0.0, dB.g);
+          float c5 = max(0.0, dB.b);
+
+          float totalDensity = c0 + c1 + c2 + c3 + c4 + c5;
+
+          // Beer-Lambert optical absorption coefficients (complementary wavelengths absorbed)
+          vec3 sigmaA =
+              c0 * vec3(0.06, 2.35, 1.15) + // Magenta absorbs green
+              c1 * vec3(2.40, 0.14, 0.05) + // Cyan absorbs red
+              c2 * vec3(0.04, 0.42, 2.55) + // Gold absorbs blue
+              c3 * vec3(1.55, 2.20, 0.06) + // Violet absorbs yellow-green
+              c4 * vec3(0.05, 1.75, 2.45) + // Coral-Vermilion absorbs cyan-blue
+              c5 * vec3(2.25, 0.08, 1.15);  // Emerald absorbs red/magenta
+
+          vec3 transmittance = exp(-sigmaA * 1.45);
+
+          // Vivid forward + side-lit pigment scattering colors (high saturation for OLED/phone screens)
+          vec3 scatterSum =
+              c0 * vec3(1.00, 0.08, 0.56) +
+              c1 * vec3(0.02, 0.88, 1.00) +
+              c2 * vec3(1.00, 0.72, 0.04) +
+              c3 * vec3(0.46, 0.16, 1.00) +
+              c4 * vec3(1.00, 0.24, 0.06) +
+              c5 * vec3(0.02, 0.95, 0.54);
+
+          vec3 pigmentAlbedo = scatterSum / (totalDensity + 1e-4);
+
+          // 3D normal approximation of ink cloud plumes for studio rim lighting & subsurface glow
+          vec3 inkNormal = normalize(vec3(-gradInk.x * 2.4, -gradInk.y * 2.4, 1.0));
+          vec3 keyLightDir = normalize(vec3(-0.45, 0.62, 0.64));
+          vec3 rimLightDir = normalize(vec3(0.55, 0.40, 0.73));
+
+          float keyDiff = max(0.0, dot(inkNormal, keyLightDir));
+          float rimDiff = max(0.0, dot(inkNormal, rimLightDir));
+          float edgeRelief = clamp(length(gradInk) * 1.65, 0.0, 1.0);
+
+          // Rich velvety dark core inside ultra-dense ink heads + glowing translucent tendrils at edges
+          float selfShadow = exp(-totalDensity * 0.32);
+          float inScatter = 1.0 - exp(-totalDensity * 1.65);
+
+          vec3 inkBody = pigmentAlbedo * (
+            0.38 +
+            0.56 * selfShadow +
+            0.45 * keyDiff * (0.4 + 0.6 * selfShadow) +
+            0.35 * rimDiff * edgeRelief
+          );
+
+          // Subsurface luminous edge bloom on thin ink veils
+          float veilFactor = totalDensity * exp(-totalDensity * 1.15);
+          inkBody += pigmentAlbedo * veilFactor * 0.52;
+
+          // Specular sheen on freshly injected dense ink lobes
+          float lobeSpec = pow(max(0.0, dot(inkNormal, normalize(vec3(-0.2, 0.7, 0.68)))), 18.0);
+          inkBody += (pigmentAlbedo * 0.5 + vec3(0.5)) * lobeSpec * edgeRelief * min(totalDensity, 1.0) * 0.35;
+
+          // Combine Beer-Lambert transmitted background with scattered ink radiance
+          waterCol = waterCol * transmittance + inkBody * inScatter;
+        }
+
+        // Meniscus line at the top water surface (with dynamic ripple highlights and under-surface total internal reflection)
+        float distToMeniscus = abs(uvG.y - ySurface);
+        float meniscusBand = exp(-pow(distToMeniscus / 0.0042, 2.0)) * inInnerCav;
+        // Sample dye right below the water surface so impacting ink colors the meniscus rim!
+        vec3 surfDyeA = texture(uDyeA, vec2(uvG.x, yWaterBase - 0.012)).rgb;
+        vec3 surfDyeB = texture(uDyeB, vec2(uvG.x, yWaterBase - 0.012)).rgb;
+        vec3 surfInkTint =
+            surfDyeA.r * vec3(1.0, 0.2, 0.6) +
+            surfDyeA.g * vec3(0.1, 0.9, 1.0) +
+            surfDyeA.b * vec3(1.0, 0.8, 0.1) +
+            surfDyeB.r * vec3(0.5, 0.3, 1.0) +
+            surfDyeB.g * vec3(1.0, 0.3, 0.1) +
+            surfDyeB.b * vec3(0.1, 1.0, 0.6);
+
+        // Subtle perspective ellipse of the water surface plane
+        float meniscusEllipse = exp(-pow((uvG.y - (ySurface - 0.006 * (1.0 - xNorm * xNorm))) / 0.008, 2.0)) * inInnerCav;
+        vec3 meniscusCol = vec3(0.78, 0.90, 1.00) + surfInkTint * 0.65;
+        waterCol = mix(waterCol, meniscusCol, meniscusBand * 0.75 + meniscusEllipse * 0.25);
+
+        // Heavy crystal glass base (between yBotGlass and yWaterBot) with internal caustics and dark refractive bands
+        if (uvG.y < yWaterBot + 0.01) {
+          float baseMask = smoothstep(yWaterBot + 0.008, yWaterBot - 0.006, uvG.y);
+          float baseBand = sin((uvG.y - yBotGlass) * 210.0 + xNorm * xNorm * 6.0);
+          vec3 crystalBase = mix(
+            vec3(0.08, 0.13, 0.22) + causticTint * 0.38,
+            vec3(0.65, 0.78, 0.92) + causticTint * 0.55,
+            0.5 + 0.5 * baseBand
+          );
+          waterCol = mix(waterCol, crystalBase, baseMask * 0.82);
+        }
+
+        // Studio vertical rim specular reflections on left and right glass walls
+        float leftSpec  = exp(-pow((xNorm + 0.86) / 0.055, 2.0));
+        float rightSpec = exp(-pow((xNorm - 0.88) / 0.045, 2.0));
+        float innerEdgeGlow = exp(-pow((abs(xNorm) - 0.935) / 0.032, 2.0));
+        float topRimGlow = exp(-pow((uvG.y - yTopGlass + 0.005) / 0.0045, 2.0));
+
+        vec3 glassHighlights =
+            vec3(0.88, 0.94, 1.00) * leftSpec * 0.52 +
+            vec3(0.75, 0.86, 1.00) * rightSpec * 0.38 +
+            vec3(0.45, 0.65, 0.90) * innerEdgeGlow * 0.35 +
+            vec3(0.85, 0.92, 1.00) * topRimGlow * 0.70 +
+            vec3(0.22, 0.34, 0.52) * fresnel * glassWall * 0.65;
+
+        // Slight dark total-internal-reflection line along the outer silhouette of the glass
+        float outerDarkRim = exp(-pow((abs(xNorm) - 0.985) / 0.018, 2.0));
+        waterCol *= (1.0 - 0.42 * outerDarkRim);
+
+        finalColor = mix(bgCol, waterCol + glassHighlights, inOuterGlass);
+      }
+
+      // Render airborne ink droplets falling toward the water surface just before impact
+      for (int i = 0; i < 3; i++) {
+        vec4 drop = uFallingDrops[i];
+        float rad = drop.z;
+        if (rad > 0.0001) {
+          vec2 dp = uvG - drop.xy;
+          // Teardrop elongation along vertical axis
+          dp.y *= (dp.y > 0.0) ? 0.72 : 1.15;
+          float d = length(dp);
+          float dropMask = smoothstep(rad, rad * 0.65, d);
+          if (dropMask > 0.001) {
+            int cIdx = int(drop.w + 0.5);
+            vec3 dCol = vec3(1.0, 0.1, 0.55);
+            if (cIdx == 1) dCol = vec3(0.02, 0.88, 1.00);
+            else if (cIdx == 2) dCol = vec3(1.00, 0.72, 0.04);
+            else if (cIdx == 3) dCol = vec3(0.46, 0.16, 1.00);
+            else if (cIdx == 4) dCol = vec3(1.00, 0.24, 0.06);
+            else if (cIdx == 5) dCol = vec3(0.02, 0.95, 0.54);
+
+            vec2 n2 = dp / max(rad, 1e-4);
+            float nz = sqrt(max(0.0, 1.0 - dot(n2, n2)));
+            float spec = pow(max(0.0, dot(vec3(n2, nz), normalize(vec3(-0.4, 0.5, 0.75)))), 16.0);
+            vec3 shadedDrop = dCol * (0.45 + 0.55 * nz) + vec3(0.95) * spec * 0.75;
+            finalColor = mix(finalColor, shadedDrop, dropMask);
+          }
+        }
+      }
+
+      // ACES-inspired filmic tone mapping & subtle vibrancy boost so saturated colors pop on phone screens
+      vec3 x = max(vec3(0.0), finalColor);
+      vec3 mapped = (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14);
+
+      // Gentle saturation boost in midtones
+      float luma = dot(mapped, vec3(0.2126, 0.7152, 0.0722));
+      mapped = mix(vec3(luma), mapped, 1.16);
+
+      // Subtle vignette around the outer corners of the frame
+      float vig = 1.0 - 0.22 * dot(p, p);
+      mapped *= clamp(vig, 0.0, 1.0);
+
+      outColor = vec4(pow(clamp(mapped, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0);
+    }
+  `;
+
+  function compileShader(type, source) {
+    const shader = gl.createShader(type);
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    return shader;
+  }
+
+  function createProgram(fragSource) {
+    const vs = compileShader(gl.VERTEX_SHADER, baseVertexShader);
+    const fs = compileShader(gl.FRAGMENT_SHADER, fragSource);
+    const prog = gl.createProgram();
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+
+    const uniforms = {};
+    const count = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS);
+    for (let i = 0; i < count; i++) {
+      const info = gl.getActiveUniform(prog, i);
+      const name = info.name.replace(/\[0\]$/, '');
+      uniforms[name] = gl.getUniformLocation(prog, info.name);
+    }
+    return { program: prog, uniforms };
+  }
+
+  const advectionProgram        = createProgram(advectionFrag);
+  const splatProgram            = createProgram(splatFrag);
+  const buoyancyProgram         = createProgram(buoyancyFrag);
+  const curlProgram             = createProgram(curlFrag);
+  const vorticityProgram        = createProgram(vorticityFrag);
+  const divergenceProgram       = createProgram(divergenceFrag);
+  const pressureProgram         = createProgram(pressureFrag);
+  const gradientSubtractProgram = createProgram(gradientSubtractFrag);
+  const displayProgram          = createProgram(displayFrag);
+
+  // Fullscreen quad VAO
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  const vbo = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+    -1, -1,
+     1, -1,
+    -1,  1,
+    -1,  1,
+     1, -1,
+     1,  1
+  ]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+  function createFBO(w, h, internalFormat, format, type, filter) {
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, w, h, 0, format, type, null);
+
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    gl.viewport(0, 0, w, h);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    return {
+      tex,
+      fbo,
+      w,
+      h,
+      attach(unit) {
+        gl.activeTexture(gl.TEXTURE0 + unit);
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        return unit;
+      }
+    };
+  }
+
+  function createDoubleFBO(w, h, internalFormat, format, type, filter) {
+    let fbo1 = createFBO(w, h, internalFormat, format, type, filter);
+    let fbo2 = createFBO(w, h, internalFormat, format, type, filter);
+    return {
+      w,
+      h,
+      get read() { return fbo1; },
+      get write() { return fbo2; },
+      swap() {
+        const tmp = fbo1;
+        fbo1 = fbo2;
+        fbo2 = tmp;
+      }
+    };
+  }
+
+  const filterMode = gl.LINEAR;
+  const velocity   = createDoubleFBO(SIM_W, SIM_H, gl.RG16F,   gl.RG,   gl.HALF_FLOAT, filterMode);
+  const dyeA       = createDoubleFBO(DYE_W, DYE_H, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT, filterMode);
+  const dyeB       = createDoubleFBO(DYE_W, DYE_H, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT, filterMode);
+  const divergence = createFBO      (SIM_W, SIM_H, gl.R16F,    gl.RED,  gl.HALF_FLOAT, gl.NEAREST);
+  const curl       = createFBO      (SIM_W, SIM_H, gl.R16F,    gl.RED,  gl.HALF_FLOAT, gl.NEAREST);
+  const pressure   = createDoubleFBO(SIM_W, SIM_H, gl.R16F,    gl.RED,  gl.HALF_FLOAT, gl.NEAREST);
+
+  function blit(target) {
+    if (target == null) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, canvas.width, canvas.height);
+    } else {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, target.fbo);
+      gl.viewport(0, 0, target.w, target.h);
+    }
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.floor(window.innerWidth * dpr);
+    const h = Math.floor(window.innerHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Inject a splash of ink and downward momentum
+  function injectSplat(x, y, vx, vy, colorIdx, strength, radius, ringness, phase) {
+    gl.useProgram(splatProgram.program);
+    gl.uniform2f(splatProgram.uniforms.uPoint, x, y);
+    gl.uniform1f(splatProgram.uniforms.uRadius, radius * 1.15);
+    gl.uniform1f(splatProgram.uniforms.uRingness, ringness);
+    gl.uniform1f(splatProgram.uniforms.uNoisePhase, phase);
+
+    // 1. Velocity impulse
+    gl.uniform1i(splatProgram.uniforms.uTarget, velocity.read.attach(0));
+    gl.uniform4f(splatProgram.uniforms.uValue, vx, vy, 0.0, 0.0);
+    blit(velocity.write);
+    velocity.swap();
+
+    // 2. DyeA (channels 0, 1, 2 + heavy drop density in alpha)
+    gl.uniform1f(splatProgram.uniforms.uRadius, radius);
+    gl.uniform1i(splatProgram.uniforms.uTarget, dyeA.read.attach(0));
+    const aR = colorIdx === 0 ? strength : 0.0;
+    const aG = colorIdx === 1 ? strength : 0.0;
+    const aB = colorIdx === 2 ? strength : 0.0;
+    const heavy = strength * 0.72;
+    gl.uniform4f(splatProgram.uniforms.uValue, aR, aG, aB, heavy);
+    blit(dyeA.write);
+    dyeA.swap();
+
+    // 3. DyeB (channels 3, 4, 5)
+    gl.uniform1i(splatProgram.uniforms.uTarget, dyeB.read.attach(0));
+    const bR = colorIdx === 3 ? strength : 0.0;
+    const bG = colorIdx === 4 ? strength : 0.0;
+    const bB = colorIdx === 5 ? strength : 0.0;
+    gl.uniform4f(splatProgram.uniforms.uValue, bR, bG, bB, 0.0);
+    blit(dyeB.write);
+    dyeB.swap();
+  }
+
+  // Track surface ripples and airborne falling droplets
+  const ripples = [
+    { x: 0.44, age: 0.15, amp: 0.0055, hue: 0 },
+    { x: 0.57, age: 0.05, amp: 0.0050, hue: 1 },
+    { x: 0.50, age: 99.0, amp: 0.0,    hue: 2 },
+    { x: 0.50, age: 99.0, amp: 0.0,    hue: 3 }
+  ];
+  let nextRippleIdx = 2;
+
+  function triggerRipple(x, amp, colorIdx) {
+    ripples[nextRippleIdx] = { x, age: 0.01, amp, hue: colorIdx };
+    nextRippleIdx = (nextRippleIdx + 1) % ripples.length;
+  }
+
+  // Active ink nozzles (a drop hitting the water continues feeding a fine trailing stem for ~0.9s)
+  const activePlumes = [];
+  const fallingDrops = [];
+
+  function spawnPlume(x, yStart, vx, vy, colorIdx, strength, radius, duration) {
+    activePlumes.push({
+      x,
+      y: yStart,
+      vx,
+      vy,
+      colorIdx,
+      strength,
+      radius,
+      age: 0,
+      duration,
+      phase: Math.random() * 100.0
+    });
+  }
+
+  // Schedule an airborne drop that falls from top of glass into water at (x, 0.815)
+  function scheduleFallingDrop(x, colorIdx, strength, radius, vx, vy, duration) {
+    fallingDrops.push({
+      x,
+      y: 0.94,
+      vyDrop: -0.52,
+      radius: 0.013,
+      colorIdx,
+      strength,
+      plumeRadius: radius,
+      vx,
+      vy,
+      duration
+    });
+  }
+
+  // Seed initial instantaneous ink blooms at t=0 so the very first frame is already alive and blooming!
+  function seedInitialDrops() {
+    // Primary Magenta-Rose mushroom bloom already sinking through upper-middle water
+    injectSplat(0.43, 0.72, -0.05, -0.78, 0, 2.35, 0.036, 0.85, 1.2);
+    injectSplat(0.425, 0.65, 0.04, -0.92, 0, 2.65, 0.044, 0.92, 2.5);
+    injectSplat(0.435, 0.77, -0.02, -0.45, 0, 1.55, 0.024, 0.35, 3.8);
+
+    // Secondary Cyan-Cerulean counter-swirling drop slightly higher on the right
+    injectSplat(0.575, 0.74, 0.06, -0.74, 1, 2.40, 0.038, 0.88, 4.1);
+    injectSplat(0.585, 0.68, -0.05, -0.88, 1, 2.55, 0.042, 0.90, 5.4);
+
+    // Warm Solar Gold accent filament curling between them
+    injectSplat(0.50, 0.76, 0.02, -0.68, 2, 2.15, 0.032, 0.82, 0.7);
+
+    // Run 18 fast warm-up substeps so real Navier-Stokes vortex rings & tendrils are already formed on frame 1
+    for (let i = 0; i < 18; i++) {
+      stepSimulation(0.016, i * 0.016);
+    }
+
+    // Also attach active trailing stems to the initial drops so they continue pouring smoothly
+    spawnPlume(0.43, 0.805,  0.03, -0.62, 0, 1.45, 0.025, 0.85);
+    spawnPlume(0.575, 0.808, -0.04, -0.58, 1, 1.50, 0.026, 0.95);
+    spawnPlume(0.50, 0.810,  0.01, -0.52, 2, 1.35, 0.022, 0.70);
+  }
+
+  function stepSimulation(dt, elapsed) {
+    const simTexelX = 1.0 / SIM_W;
+    const simTexelY = 1.0 / SIM_H;
+    const dyeTexelX = 1.0 / DYE_W;
+    const dyeTexelY = 1.0 / DYE_H;
+
+    // 1. Feed active ink plumes (trailing stems and secondary vortex rings)
+    for (let i = activePlumes.length - 1; i >= 0; i--) {
+      const p = activePlumes[i];
+      p.age += dt;
+      if (p.age >= p.duration) {
+        activePlumes.splice(i, 1);
+        continue;
+      }
+      const progress = p.age / p.duration;
+      // Envelope: strong initial vortex ring impact followed by delicate trailing filament
+      const env = Math.pow(1.0 - progress, 1.35);
+      const wobble = Math.sin(p.age * 16.0 + p.phase) * 0.0035;
+      p.x = Math.max(0.24, Math.min(0.76, p.x + p.vx * dt * 0.12 + wobble));
+      p.y = Math.max(0.22, p.y + p.vy * dt * 0.20);
+
+      const curRadius = p.radius * (0.58 + 0.42 * (1.0 - progress));
+      const ringness = progress < 0.28 ? 0.90 : 0.35;
+
+      injectSplat(
+        p.x,
+        p.y,
+        p.vx * env * 0.45 + Math.cos(p.age * 12.0 + p.phase) * 0.08,
+        p.vy * env * 0.52,
+        p.colorIdx,
+        p.strength * env * dt * 5.8,
+        curRadius,
+        ringness,
+        p.phase + p.age * 4.0
+      );
+    }
+
+    // 2. Buoyancy & baroclinic torque
+    gl.useProgram(buoyancyProgram.program);
+    gl.uniform1i(buoyancyProgram.uniforms.uVelocity, velocity.read.attach(0));
+    gl.uniform1i(buoyancyProgram.uniforms.uDyeA, dyeA.read.attach(1));
+    gl.uniform1i(buoyancyProgram.uniforms.uDyeB, dyeB.read.attach(2));
+    gl.uniform1f(buoyancyProgram.uniforms.uDt, dt);
+    gl.uniform1f(buoyancyProgram.uniforms.uTime, elapsed);
+    blit(velocity.write);
+    velocity.swap();
+
+    // 3. Curl computation
+    gl.useProgram(curlProgram.program);
+    gl.uniform2f(curlProgram.uniforms.uTexelSize, simTexelX, simTexelY);
+    gl.uniform1i(curlProgram.uniforms.uVelocity, velocity.read.attach(0));
+    blit(curl);
+
+    // 4. Vorticity confinement (high curl strength for intricate billowing plumes)
+    gl.useProgram(vorticityProgram.program);
+    gl.uniform2f(vorticityProgram.uniforms.uTexelSize, simTexelX, simTexelY);
+    gl.uniform1i(vorticityProgram.uniforms.uVelocity, velocity.read.attach(0));
+    gl.uniform1i(vorticityProgram.uniforms.uCurl, curl.attach(1));
+    gl.uniform1f(vorticityProgram.uniforms.uCurlStrength, 31.0);
+    gl.uniform1f(vorticityProgram.uniforms.uDt, dt);
+    blit(velocity.write);
+    velocity.swap();
+
+    // 5. Divergence
+    gl.useProgram(divergenceProgram.program);
+    gl.uniform2f(divergenceProgram.uniforms.uTexelSize, simTexelX, simTexelY);
+    gl.uniform1i(divergenceProgram.uniforms.uVelocity, velocity.read.attach(0));
+    blit(divergence);
+
+    // 6. Jacobi pressure iterations (36 iterations for crisp incompressible vortex roll-up)
+    gl.useProgram(pressureProgram.program);
+    gl.uniform2f(pressureProgram.uniforms.uTexelSize, simTexelX, simTexelY);
+    gl.uniform1i(pressureProgram.uniforms.uDivergence, divergence.attach(0));
+    for (let i = 0; i < 36; i++) {
+      gl.uniform1i(pressureProgram.uniforms.uPressure, pressure.read.attach(1));
+      blit(pressure.write);
+      pressure.swap();
+    }
+
+    // 7. Subtract pressure gradient
+    gl.useProgram(gradientSubtractProgram.program);
+    gl.uniform2f(gradientSubtractProgram.uniforms.uTexelSize, simTexelX, simTexelY);
+    gl.uniform1i(gradientSubtractProgram.uniforms.uPressure, pressure.read.attach(0));
+    gl.uniform1i(gradientSubtractProgram.uniforms.uVelocity, velocity.read.attach(1));
+    blit(velocity.write);
+    velocity.swap();
+
+    // 8. Advect velocity
+    gl.useProgram(advectionProgram.program);
+    gl.uniform2f(advectionProgram.uniforms.uTexelSize, simTexelX, simTexelY);
+    gl.uniform1i(advectionProgram.uniforms.uVelocity, velocity.read.attach(0));
+    gl.uniform1i(advectionProgram.uniforms.uSource, velocity.read.attach(0));
+    gl.uniform1f(advectionProgram.uniforms.uDt, dt);
+    gl.uniform1f(advectionProgram.uniforms.uDissipation, Math.pow(0.992, dt * 60.0));
+    gl.uniform1f(advectionProgram.uniforms.uIsVelocity, 1.0);
+    blit(velocity.write);
+    velocity.swap();
+
+    // 9. Advect DyeA and DyeB with very slow dissipation so plumes hang, billow, and ribbon gracefully
+    const dyeDecay = Math.pow(0.9968, dt * 60.0);
+    gl.uniform2f(advectionProgram.uniforms.uTexelSize, dyeTexelX, dyeTexelY);
+    gl.uniform1i(advectionProgram.uniforms.uVelocity, velocity.read.attach(0));
+    gl.uniform1f(advectionProgram.uniforms.uDissipation, dyeDecay);
+    gl.uniform1f(advectionProgram.uniforms.uIsVelocity, 0.0);
+
+    gl.uniform1i(advectionProgram.uniforms.uSource, dyeA.read.attach(1));
+    blit(dyeA.write);
+    dyeA.swap();
+
+    gl.uniform1i(advectionProgram.uniforms.uSource, dyeB.read.attach(1));
+    blit(dyeB.write);
+    dyeB.swap();
+  }
+
+  // Choreographed endless sequence of ink drops with varied colors, entry angles, and twin-drop collisions
+  let dropCounter = 3;
+  let nextDropTimer = 1.15;
+
+  // Sequence of curated color pairings so adjacent drops create gorgeous secondary mixes without turning muddy
+  const colorSequence = [4, 3, 5, 0, 2, 1, 3, 4, 1, 5, 2, 0];
+
+  function updateChoreography(dt) {
+    // Advance surface ripples
+    for (let i = 0; i < ripples.length; i++) {
+      ripples[i].age += dt;
+    }
+
+    // Advance airborne falling drops and trigger water entry when they cross y = 0.818
+    for (let i = fallingDrops.length - 1; i >= 0; i--) {
+      const fd = fallingDrops[i];
+      fd.vyDrop -= 1.35 * dt;
+      fd.y += fd.vyDrop * dt;
+      if (fd.y <= 0.818) {
+        // Impact water surface!
+        triggerRipple(fd.x, 0.0058, fd.colorIdx);
+        injectSplat(
+          fd.x,
+          0.805,
+          fd.vx,
+          fd.vy,
+          fd.colorIdx,
+          fd.strength,
+          fd.plumeRadius,
+          0.92,
+          Math.random() * 50.0
+        );
+        spawnPlume(
+          fd.x,
+          0.805,
+          fd.vx * 0.65,
+          fd.vy * 0.72,
+          fd.colorIdx,
+          fd.strength * 0.78,
+          fd.plumeRadius * 0.78,
+          fd.duration
+        );
+        fallingDrops.splice(i, 1);
+      }
+    }
+
+    nextDropTimer -= dt;
+    if (nextDropTimer <= 0.0) {
+      const cIdx = colorSequence[dropCounter % colorSequence.length];
+      dropCounter++;
+
+      // Alternate between left-center, right-center, center, and occasional synchronized duet drops
+      const pattern = dropCounter % 5;
+      if (pattern === 0) {
+        // Twin colliding duet drops of complementary vivid colors
+        const cIdx2 = colorSequence[(dropCounter + 1) % colorSequence.length];
+        scheduleFallingDrop(0.39, cIdx,  2.25, 0.035,  0.14, -0.78, 1.05);
+        scheduleFallingDrop(0.61, cIdx2, 2.25, 0.035, -0.14, -0.78, 1.05);
+        nextDropTimer = 2.05;
+      } else {
+        const laneOffsets = [0.48, 0.37, 0.63, 0.43, 0.57];
+        const baseX = laneOffsets[dropCounter % laneOffsets.length] + (Math.random() - 0.5) * 0.06;
+        const inwardVx = (0.5 - baseX) * 0.45 + (Math.random() - 0.5) * 0.08;
+        const plungeVy = -0.74 - Math.random() * 0.24;
+        const radius = 0.033 + Math.random() * 0.008;
+        scheduleFallingDrop(baseX, cIdx, 2.35, radius, inwardVx, plungeVy, 0.95 + Math.random() * 0.35);
+        nextDropTimer = 1.35 + Math.random() * 0.55;
+      }
+    }
+  }
+
+  seedInitialDrops();
+
+  let lastTime = performance.now();
+  let totalElapsed = 0.0;
+
+  function render(now) {
+    const rawDt = Math.min((now - lastTime) * 0.001, 0.033);
+    lastTime = now;
+    const dt = Math.max(0.008, rawDt);
+    totalElapsed += dt;
+
+    updateChoreography(dt);
+    stepSimulation(dt, totalElapsed);
+
+    // Final composite pass
+    gl.useProgram(displayProgram.program);
+    gl.uniform1i(displayProgram.uniforms.uDyeA, dyeA.read.attach(0));
+    gl.uniform1i(displayProgram.uniforms.uDyeB, dyeB.read.attach(1));
+    gl.uniform1i(displayProgram.uniforms.uVelocity, velocity.read.attach(2));
+    gl.uniform2f(displayProgram.uniforms.uResolution, canvas.width, canvas.height);
+    gl.uniform2f(displayProgram.uniforms.uDyeTexelSize, 1.0 / DYE_W, 1.0 / DYE_H);
+    gl.uniform1f(displayProgram.uniforms.uTime, totalElapsed);
+
+    const rippleArr = new Float32Array(16);
+    for (let i = 0; i < 4; i++) {
+      rippleArr[i * 4 + 0] = ripples[i].x;
+      rippleArr[i * 4 + 1] = ripples[i].age;
+      rippleArr[i * 4 + 2] = ripples[i].amp;
+      rippleArr[i * 4 + 3] = ripples[i].hue;
+    }
+    gl.uniform4fv(displayProgram.uniforms.uDropRipples, rippleArr);
+
+    const dropArr = new Float32Array(12);
+    for (let i = 0; i < 3; i++) {
+      if (i < fallingDrops.length) {
+        dropArr[i * 4 + 0] = fallingDrops[i].x;
+        dropArr[i * 4 + 1] = fallingDrops[i].y;
+        dropArr[i * 4 + 2] = fallingDrops[i].radius;
+        dropArr[i * 4 + 3] = fallingDrops[i].colorIdx;
+      }
+    }
+    gl.uniform4fv(displayProgram.uniforms.uFallingDrops, dropArr);
+
+    blit(null);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>

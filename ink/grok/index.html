@@ -1,0 +1,1006 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ink</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #e4f2f6;
+    overflow: hidden;
+  }
+  canvas {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+
+const VW = 1080;
+const CX = 540;
+const RIM_Y = 142;
+const RIM_RX = 338;
+const RIM_RY = 48;
+const WALL_BOT = 904;
+const BASE_RX = 276;
+const BASE_RY = 46;
+const WALL = 22;
+const WALL_BOW = 12;
+const WATER_Y = 386;
+
+const COLORS = [
+  [255, 23, 68],
+  [255, 109, 0],
+  [255, 196, 0],
+  [132, 255, 36],
+  [0, 224, 255],
+  [47, 92, 255],
+  [180, 43, 255],
+  [255, 41, 171]
+];
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d', { alpha: false });
+
+const particles = [];
+const vortices = [];
+const drops = [];
+const ripples = [];
+let simT = 0;
+let nextDropAt = 0.15;
+let colorCursor = (Math.random() * COLORS.length) | 0;
+let lastSpawnX = CX;
+let view = { w: 1080, h: 1080, dpr: 1 };
+const brushes = [];
+
+function clamp(v, a, b) {
+  return v < a ? a : v > b ? b : v;
+}
+
+function hash2(ix, iy) {
+  let n = Math.imul(ix, 374761393) + Math.imul(iy, 668265263);
+  n = Math.imul(n ^ (n >>> 13), 1274126177);
+  return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
+}
+
+function vnoise(x, y) {
+  const x0 = x + 48;
+  const y0 = y + 48;
+  const ix = Math.floor(x0);
+  const iy = Math.floor(y0);
+  const fx = x0 - ix;
+  const fy = y0 - iy;
+  const ux = fx * fx * (3 - 2 * fx);
+  const uy = fy * fy * (3 - 2 * fy);
+  const a = hash2(ix, iy);
+  const b = hash2(ix + 1, iy);
+  const c = hash2(ix, iy + 1);
+  const d = hash2(ix + 1, iy + 1);
+  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+}
+
+function outerRx(y) {
+  const t = clamp((y - RIM_Y) / (WALL_BOT - RIM_Y), 0, 1);
+  return RIM_RX + (BASE_RX - RIM_RX) * t + WALL_BOW * Math.sin(Math.PI * t);
+}
+
+function innerBaseRy() {
+  return BASE_RY * (BASE_RX - WALL) / BASE_RX;
+}
+
+function innerRx(y) {
+  if (y <= WALL_BOT) return Math.max(0, outerRx(y) - WALL);
+  const ry = innerBaseRy();
+  const ny = (y - WALL_BOT) / ry;
+  if (ny >= 1) return 0;
+  return (BASE_RX - WALL) * Math.sqrt(1 - ny * ny);
+}
+
+function floorY() {
+  return WALL_BOT + innerBaseRy() - 8;
+}
+
+function sinkSpeed(age) {
+  return 105.6 * Math.exp(-0.22 * age) + 16;
+}
+
+function tangential(x, y, cx, cy, strength, radius) {
+  const dx = x - cx;
+  const dy = y - cy;
+  const d2 = dx * dx + dy * dy;
+  const fall = Math.exp(-d2 / (radius * radius));
+  const inv = 1 / (Math.sqrt(d2) + 8);
+  const s = strength * fall;
+  return { x: -dy * inv * s, y: dx * inv * s, fall: fall };
+}
+
+function ambientFlow(x, y, t) {
+  const e = 14;
+  function curl(scale, tt) {
+    const n = function (px, py) {
+      return vnoise(px * scale + tt, py * scale - tt * 0.65);
+    };
+    return {
+      x: n(x, y + e) - n(x, y - e),
+      y: -(n(x + e, y) - n(x - e, y))
+    };
+  }
+  const a = curl(0.0062, t * 0.04);
+  const b = curl(0.014, t * 0.07 + 4);
+  let vx = a.x * 1.15 + b.x * 0.55;
+  let vy = a.y * 1.15 + b.y * 0.55;
+  const mag = Math.hypot(vx, vy) || 1;
+  const speed = 16 + 20 * vnoise(x * 0.0025 + t * 0.02, y * 0.0025);
+  return { x: (vx / mag) * speed, y: (vy / mag) * speed * 0.8 };
+}
+
+function convection(x, y) {
+  const half = innerRx(y) || 1;
+  const dx = (x - CX) / half;
+  let vy = (dx * dx - 0.34) * -18;
+  const vx = dx * 10;
+  const lift = floorY() - 80;
+  if (y > lift) {
+    const u = clamp((y - lift) / 80, 0, 1);
+    vy -= 48 * u;
+  }
+  return { x: vx, y: vy };
+}
+
+function sampleField(x, y) {
+  const amb = ambientFlow(x, y, simT);
+  const conv = convection(x, y);
+  let vx = amb.x + conv.x;
+  let vy = amb.y + conv.y;
+  const g1 = tangential(
+    x, y,
+    CX - 76 + Math.sin(simT * 0.17) * 48,
+    WATER_Y + 210 + Math.cos(simT * 0.13) * 34,
+    44, 240
+  );
+  const g2 = tangential(
+    x, y,
+    CX + 88 + Math.cos(simT * 0.12) * 42,
+    WATER_Y + 430 + Math.sin(simT * 0.15) * 28,
+    -36, 260
+  );
+  vx += g1.x + g2.x;
+  vy += g1.y + g2.y;
+  for (let i = 0; i < vortices.length; i++) {
+    const v = vortices[i];
+    const dx = x - v.x;
+    const dy = y - v.y;
+    const reach = v.radius * v.radius * 6.5;
+    if (dx * dx + dy * dy > reach) continue;
+    const decay = Math.max(0.3, Math.exp(-v.age / v.decay));
+    const u = tangential(x, y, v.x, v.y, v.strength * decay, v.radius);
+    let carry = u.fall * u.fall;
+    if (v.ty > 0 && y > v.y + 16) carry *= 0.12;
+    vx += u.x + v.tx * carry;
+    vy += u.y + v.ty * carry;
+  }
+  return { x: vx, y: vy };
+}
+
+function polyArc(ctx2, cx, cy, rx, ry, a0, a1, steps) {
+  for (let i = 0; i <= steps; i++) {
+    const a = a0 + (a1 - a0) * (i / steps);
+    ctx2.lineTo(cx + rx * Math.cos(a), cy + ry * Math.sin(a));
+  }
+}
+
+function pathWater(ctx2) {
+  const y0 = WATER_Y;
+  const y1 = WALL_BOT;
+  const steps = 22;
+  ctx2.beginPath();
+  for (let i = 0; i <= steps; i++) {
+    const y = y0 + (y1 - y0) * (i / steps);
+    const x = CX - innerRx(y);
+    if (i === 0) ctx2.moveTo(x, y);
+    else ctx2.lineTo(x, y);
+  }
+  polyArc(ctx2, CX, y1, BASE_RX - WALL, innerBaseRy(), Math.PI, 0, 16);
+  for (let i = steps; i >= 0; i--) {
+    const y = y0 + (y1 - y0) * (i / steps);
+    ctx2.lineTo(CX + innerRx(y), y);
+  }
+  polyArc(ctx2, CX, y0, innerRx(y0), 6, 0, Math.PI, 14);
+  ctx2.closePath();
+}
+
+function pathOuter(ctx2) {
+  const steps = 22;
+  ctx2.beginPath();
+  ctx2.moveTo(CX - outerRx(RIM_Y), RIM_Y);
+  for (let i = 1; i <= steps; i++) {
+    const y = RIM_Y + (WALL_BOT - RIM_Y) * (i / steps);
+    ctx2.lineTo(CX - outerRx(y), y);
+  }
+  polyArc(ctx2, CX, WALL_BOT, BASE_RX, BASE_RY, Math.PI, 0, 16);
+  for (let i = steps; i >= 0; i--) {
+    const y = RIM_Y + (WALL_BOT - RIM_Y) * (i / steps);
+    ctx2.lineTo(CX + outerRx(y), y);
+  }
+  polyArc(ctx2, CX, RIM_Y, RIM_RX, RIM_RY, 0, -Math.PI, 18);
+  ctx2.closePath();
+}
+
+function pathMouth(ctx2) {
+  const y0 = RIM_Y;
+  const y1 = WATER_Y + 4;
+  const steps = 10;
+  const rx0 = innerRx(y0);
+  ctx2.beginPath();
+  ctx2.moveTo(CX - rx0, y0);
+  for (let i = 1; i <= steps; i++) {
+    const y = y0 + (y1 - y0) * (i / steps);
+    ctx2.lineTo(CX - innerRx(y), y);
+  }
+  for (let i = steps; i >= 0; i--) {
+    const y = y0 + (y1 - y0) * (i / steps);
+    ctx2.lineTo(CX + innerRx(y), y);
+  }
+  polyArc(ctx2, CX, y0, rx0, RIM_RY * (rx0 / RIM_RX), 0, -Math.PI, 12);
+  ctx2.closePath();
+}
+
+function strokeCenterline(ctx2, side, y0, y1) {
+  const steps = 20;
+  ctx2.beginPath();
+  for (let i = 0; i <= steps; i++) {
+    const y = y0 + (y1 - y0) * (i / steps);
+    const x = CX + side * (outerRx(y) - WALL * 0.5);
+    if (i === 0) ctx2.moveTo(x, y);
+    else ctx2.lineTo(x, y);
+  }
+  ctx2.stroke();
+}
+
+function buildBrushes() {
+  for (let i = 0; i < COLORS.length; i++) {
+    brushes.push(makeBrush(COLORS[i], false));
+    brushes.push(makeBrush(COLORS[i], true));
+  }
+}
+
+function makeBrush(rgb, dark) {
+  const size = 96;
+  const c = document.createElement('canvas');
+  c.width = size;
+  c.height = size;
+  const g = c.getContext('2d');
+  const col = dark
+    ? [rgb[0] * 0.62 | 0, rgb[1] * 0.62 | 0, rgb[2] * 0.62 | 0]
+    : rgb;
+  const mid = size * 0.5;
+  const grad = g.createRadialGradient(mid, mid, 0, mid, mid, mid);
+  const rgba = function (a) {
+    return 'rgba(' + col[0] + ',' + col[1] + ',' + col[2] + ',' + a + ')';
+  };
+  if (dark) {
+    grad.addColorStop(0, rgba(1));
+    grad.addColorStop(0.18, rgba(0.85));
+    grad.addColorStop(0.45, rgba(0.28));
+    grad.addColorStop(1, rgba(0));
+  } else {
+    grad.addColorStop(0, rgba(1));
+    grad.addColorStop(0.2, rgba(0.7));
+    grad.addColorStop(0.48, rgba(0.24));
+    grad.addColorStop(0.75, rgba(0.06));
+    grad.addColorStop(1, rgba(0));
+  }
+  g.fillStyle = grad;
+  g.fillRect(0, 0, size, size);
+  return c;
+}
+
+function pickX() {
+  const half = innerRx(WATER_Y) - 86;
+  let x = CX + (Math.random() * 2 - 1) * half * 0.92;
+  if (Math.abs(x - lastSpawnX) < 96) {
+    const dir = lastSpawnX < CX ? 1 : -1;
+    x = CX + dir * half * (0.35 + Math.random() * 0.55);
+  }
+  x = clamp(x, CX - half, CX + half);
+  lastSpawnX = x;
+  return x;
+}
+
+function makeDrop(born, x, colorIndex, spin) {
+  return {
+    born: born,
+    x: x,
+    colorIndex: colorIndex,
+    spin: spin,
+    fall: 0.76 + Math.random() * 0.3,
+    hit: false,
+    emitted: 0,
+    budget: 118 + (Math.random() * 36 | 0),
+    emitDuration: 5.1 + Math.random() * 1.3,
+    emitAcc: 0,
+    vL: null,
+    vR: null
+  };
+}
+
+function addVortex(x, y, strength, spread0, targetY) {
+  const v = {
+    x: x,
+    y: y,
+    strength: strength,
+    spread0: spread0,
+    radius: 136 + Math.random() * 42,
+    age: 0,
+    life: 20,
+    decay: 12,
+    targetY: targetY,
+    tx: spread0,
+    ty: sinkSpeed(0)
+  };
+  vortices.push(v);
+  return v;
+}
+
+function kindRoll() {
+  const r = Math.random();
+  if (r < 0.2) return 0;
+  if (r < 0.55) return 1;
+  return 2;
+}
+
+function addParticle(drop, x, y, kind, kick) {
+  if (particles.length >= 1650) return;
+  const field = sampleField(x, y);
+  const ang = Math.random() * Math.PI * 2;
+  let r0;
+  let grow;
+  let peak;
+  let life;
+  let follow;
+  if (kind === 0) {
+    r0 = 44 + Math.random() * 30;
+    grow = 1.25;
+    peak = 0.2 + Math.random() * 0.06;
+    life = 15 + Math.random() * 4;
+    follow = 5;
+  } else if (kind === 1) {
+    r0 = 22 + Math.random() * 16;
+    grow = 1.45;
+    peak = 0.34 + Math.random() * 0.08;
+    life = 11 + Math.random() * 4;
+    follow = 4.4;
+  } else {
+    r0 = 13 + Math.random() * 8;
+    grow = 0.65;
+    peak = 0.5 + Math.random() * 0.12;
+    life = 8 + Math.random() * 3.5;
+    follow = 3.1;
+  }
+  const spinKick = drop.spin * 26;
+  particles.push({
+    x: x,
+    y: y,
+    vx: field.x * 0.75 + Math.cos(ang) * kick + -Math.sin(ang) * spinKick * 0.35,
+    vy: field.y * 0.75 + Math.sin(ang) * kick * 0.55,
+    born: simT,
+    life: life,
+    r0: r0,
+    grow: grow,
+    peak: peak,
+    follow: follow,
+    kind: kind,
+    brush: drop.colorIndex * 2 + (kind === 2 ? 1 : 0),
+    seed: Math.random() * 80
+  });
+}
+
+function burst(drop) {
+  const y = WATER_Y + 18;
+  for (let i = 0; i < 58; i++) {
+    const ang = (i / 58) * Math.PI * 2 + Math.random() * 0.18;
+    const rad = 14 + (i % 6) * 3.2;
+    addParticle(
+      drop,
+      drop.x + Math.cos(ang) * rad,
+      y + Math.sin(ang) * rad * 0.5,
+      kindRoll(),
+      18
+    );
+  }
+  for (let i = 0; i < 16; i++) {
+    const ang = (Math.random() - 0.5) * Math.PI * 1.3;
+    addParticle(
+      drop,
+      drop.x + Math.cos(ang) * 8,
+      y + 4,
+      2,
+      70
+    );
+  }
+}
+
+function impact(drop) {
+  const y = WATER_Y + 24 + Math.random() * 8;
+  const sep = 26 + Math.random() * 10;
+  const base = 108 + Math.random() * 28;
+  const lean = drop.spin > 0 ? 1 : 0.72;
+  const leanR = drop.spin > 0 ? 0.72 : 1;
+  const depth = 0.34 + Math.random() * 0.58;
+  const targetY = WATER_Y + 48 + depth * (floorY() - WATER_Y - 100);
+  drop.vL = addVortex(drop.x - sep, y, base * lean, -9, targetY);
+  drop.vR = addVortex(drop.x + sep, y + (Math.random() - 0.5) * 10, -base * leanR, 9, targetY);
+  burst(drop);
+  ripples.push({ x: drop.x, born: simT, power: 1 });
+  ripples.push({ x: drop.x, born: simT + 0.2, power: 0.55 });
+}
+
+function headOf(drop) {
+  if (drop.vL && drop.vR) {
+    return {
+      x: (drop.vL.x + drop.vR.x) * 0.5,
+      y: (drop.vL.y + drop.vR.y) * 0.5
+    };
+  }
+  const age = Math.max(0, simT - drop.born - drop.fall);
+  const traveled = 480 * (1 - Math.exp(-0.22 * age)) + 16 * age;
+  return {
+    x: drop.x,
+    y: Math.min(floorY() - 24, WATER_Y + 16 + traveled)
+  };
+}
+
+function containPoint(x, y, pad) {
+  let nx = x;
+  let ny = y;
+  const top = WATER_Y + 10;
+  const bot = floorY();
+  if (ny < top) ny = top;
+  if (ny > bot) ny = bot;
+  const lim = Math.max(8, innerRx(ny) - pad);
+  const dx = nx - CX;
+  if (dx > lim) nx = CX + lim;
+  else if (dx < -lim) nx = CX - lim;
+  return { x: nx, y: ny };
+}
+
+function updateVortex(v, dt) {
+  v.age += dt;
+  const amb = ambientFlow(v.x, v.y, simT);
+  const cruise = Math.min(72, sinkSpeed(v.age));
+  const approach = v.targetY - v.y;
+  let ty;
+  if (approach > 110) ty = cruise + amb.y * 0.12;
+  else ty = approach * 1.35 + amb.y * 0.22;
+  const tx = v.spread0 * Math.exp(-v.age * 0.18) + amb.x * 0.42;
+  v.tx = tx;
+  v.ty = ty;
+  v.x += tx * dt;
+  v.y += ty * dt;
+  const held = containPoint(v.x, v.y, 18);
+  v.x = held.x;
+  v.y = held.y;
+}
+
+function updateDrop(drop, dt) {
+  const age = simT - drop.born;
+  if (age < drop.fall) return;
+  if (!drop.hit) {
+    drop.hit = true;
+    impact(drop);
+  }
+  const sinkAge = age - drop.fall;
+  if (drop.emitted >= drop.budget || sinkAge > drop.emitDuration) return;
+  const weight = drop.emitDuration + 1.35;
+  const rate = (drop.budget / weight) * (sinkAge < 1.35 ? 2 : 1);
+  drop.emitAcc += rate * dt;
+  let n = Math.floor(drop.emitAcc);
+  drop.emitAcc -= n;
+  if (n > drop.budget - drop.emitted) n = drop.budget - drop.emitted;
+  const head = headOf(drop);
+  for (let i = 0; i < n; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const rad = Math.pow(Math.random(), 0.6) * (15 + Math.min(sinkAge, 3.2) * 8);
+    addParticle(
+      drop,
+      head.x + Math.cos(ang) * rad,
+      head.y + Math.sin(ang) * rad * 0.6,
+      kindRoll(),
+      12
+    );
+  }
+  drop.emitted += n;
+}
+
+function updateParticle(p, dt) {
+  const age = simT - p.born;
+  const field = sampleField(p.x, p.y);
+  const personal = age < 2.4 ? 32 * (1 - age / 2.4) : 0;
+  const jx = Math.sin(simT * 1.6 + p.seed) * 7;
+  const jy = Math.cos(simT * 1.25 + p.seed * 1.4) * 7;
+  const targetX = field.x + jx;
+  const targetY = field.y + personal + jy;
+  const k = 1 - Math.exp(-p.follow * dt);
+  p.vx += (targetX - p.vx) * k;
+  p.vy += (targetY - p.vy) * k;
+  p.x += p.vx * dt;
+  p.y += p.vy * dt;
+  const held = containPoint(p.x, p.y, 5);
+  if (held.x !== p.x) p.vx *= -0.35;
+  if (held.y !== p.y) {
+    if (p.y > floorY() - 1) p.vy = Math.min(0, p.vy) * 0.45;
+    else p.vy = Math.max(0, p.vy) * 0.35;
+  }
+  p.x = held.x;
+  p.y = held.y;
+}
+
+function spawnEvent(t) {
+  const x = pickX();
+  const colorIndex = colorCursor % COLORS.length;
+  colorCursor += 1;
+  const spin = Math.random() < 0.5 ? 1 : -1;
+  drops.push(makeDrop(t, x, colorIndex, spin));
+  if (Math.random() < 0.42) {
+    const half = innerRx(WATER_Y) - 86;
+    const dir = x < CX ? 1 : -1;
+    const x2 = clamp(x + dir * (68 + Math.random() * 48), CX - half, CX + half);
+    if (Math.abs(x2 - x) > 48) {
+      drops.push(makeDrop(t + 0.14, x2, (colorIndex + 4) % COLORS.length, -spin));
+    }
+  }
+}
+
+function maybeSpawn() {
+  while (simT >= nextDropAt) {
+    const when = nextDropAt;
+    nextDropAt += 2.35 + Math.random() * 1.25;
+    spawnEvent(when);
+  }
+}
+
+function prune(list, keep) {
+  let w = 0;
+  for (let i = 0; i < list.length; i++) {
+    if (keep(list[i])) list[w++] = list[i];
+  }
+  list.length = w;
+}
+
+function step(dt) {
+  simT += dt;
+  maybeSpawn();
+  for (let i = 0; i < vortices.length; i++) updateVortex(vortices[i], dt);
+  for (let i = 0; i < drops.length; i++) updateDrop(drops[i], dt);
+  for (let i = 0; i < particles.length; i++) updateParticle(particles[i], dt);
+  prune(vortices, function (v) { return v.age <= v.life; });
+  prune(drops, function (d) { return simT - d.born <= d.fall + d.emitDuration + 0.25; });
+  prune(particles, function (p) { return simT - p.born <= p.life; });
+  prune(ripples, function (r) { return simT - r.born <= 2; });
+}
+
+function anyFalling() {
+  for (let i = 0; i < drops.length; i++) {
+    const age = simT - drops[i].born;
+    if (age >= 0 && age < drops[i].fall) return true;
+  }
+  return false;
+}
+
+function seedOpeningDrop() {
+  if (anyFalling()) return;
+  const half = innerRx(RIM_Y + RIM_RY + 20) - 70;
+  const x = clamp(CX + (Math.random() * 2 - 1) * half * 0.55, CX - half, CX + half);
+  const colorIndex = colorCursor % COLORS.length;
+  colorCursor += 1;
+  const spin = Math.random() < 0.5 ? 1 : -1;
+  drops.push(makeDrop(simT - 0.28, x, colorIndex, spin));
+  nextDropAt = Math.max(nextDropAt, simT + 1.7);
+}
+
+function drawBackground(w, h) {
+  const g = ctx.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, '#eaf6f8');
+  g.addColorStop(0.5, '#d5e8ef');
+  g.addColorStop(1, '#c5dbe4');
+  ctx.fillStyle = g;
+  ctx.fillRect(-2, -2, w + 4, h + 4);
+  const cx = w * 0.5;
+  const cy = h * 0.46;
+  const rad = Math.min(w, h) * 0.62;
+  const glow = ctx.createRadialGradient(cx, cy, rad * 0.12, cx, cy, rad);
+  glow.addColorStop(0, 'rgba(255,255,255,0.55)');
+  glow.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(-2, -2, w + 4, h + 4);
+  const vig = ctx.createRadialGradient(cx, h * 0.5, Math.min(w, h) * 0.32, cx, h * 0.5, Math.max(w, h) * 0.72);
+  vig.addColorStop(0, 'rgba(40,80,96,0)');
+  vig.addColorStop(1, 'rgba(40,80,96,0.16)');
+  ctx.fillStyle = vig;
+  ctx.fillRect(-2, -2, w + 4, h + 4);
+}
+
+function drawShadow() {
+  const y = WALL_BOT + BASE_RY + 16;
+  const layers = [[230, 20, 0.05], [168, 12, 0.06], [112, 7, 0.07], [64, 4, 0.08]];
+  for (let i = 0; i < layers.length; i++) {
+    ctx.beginPath();
+    ctx.ellipse(CX, y, layers[i][0], layers[i][1], 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(58,102,118,' + layers[i][2] + ')';
+    ctx.fill();
+  }
+}
+
+function drawCaustics() {
+  ctx.save();
+  pathWater(ctx);
+  ctx.clip();
+  ctx.lineCap = 'round';
+  for (let i = 0; i < 4; i++) {
+    ctx.beginPath();
+    const amp = 28 + i * 16;
+    for (let y = WATER_Y; y <= floorY(); y += 10) {
+      const x = CX + Math.sin(y * 0.018 + simT * 0.55 + i * 1.7) * amp + (i - 1.5) * 36;
+      if (y === WATER_Y) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = 'rgba(255,255,255,' + (0.035 + i * 0.008) + ')';
+    ctx.lineWidth = 22 + i * 6;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function paintParticle(p) {
+  const age = simT - p.born;
+  if (age <= 0) return;
+  const k = age / p.life;
+  if (k >= 1) return;
+  const fadeIn = age < 0.1 ? age / 0.1 : 1;
+  const fadeOut = Math.pow(1 - k, 0.72);
+  let alpha = p.peak * fadeIn * fadeOut;
+  const lim = innerRx(p.y);
+  const edge = lim - Math.abs(p.x - CX);
+  const edgeFade = clamp(edge / 26, 0, 1);
+  const topFade = clamp((p.y - (WATER_Y + 6)) / 20, 0, 1);
+  const botFade = clamp((floorY() - p.y) / 22, 0, 1);
+  alpha *= edgeFade * topFade * botFade;
+  if (alpha < 0.012) return;
+  const r = p.r0 * (1 + p.grow * k);
+  const brush = brushes[p.brush];
+  const sp = Math.hypot(p.vx, p.vy);
+  const align = clamp((sp - 10) / 70, 0, 1);
+  const baseStretch = p.kind === 2 ? 2.05 : p.kind === 1 ? 1.22 : 1.04;
+  const stretch = 1 + (baseStretch - 1) * align;
+  if (stretch > 1.04) {
+    const skinny = p.kind === 2 ? 0.5 + (1 - align) * 0.5 : 0.82;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(p.x, p.y);
+    ctx.rotate(Math.atan2(p.vy, p.vx));
+    ctx.scale(stretch, skinny);
+    ctx.drawImage(brush, -r, -r, r * 2, r * 2);
+    ctx.restore();
+  } else {
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(brush, p.x - r, p.y - r, r * 2, r * 2);
+  }
+}
+
+function drawInk() {
+  ctx.save();
+  pathWater(ctx);
+  ctx.clip();
+  for (let pass = 0; pass < 3; pass++) {
+    for (let i = 0; i < particles.length; i++) {
+      if (particles[i].kind === pass) paintParticle(particles[i]);
+    }
+  }
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+function drawVolume() {
+  ctx.save();
+  pathWater(ctx);
+  ctx.clip();
+  const right = CX + innerRx((WATER_Y + WALL_BOT) * 0.5);
+  const shade = ctx.createLinearGradient(CX + 40, 0, right, 0);
+  shade.addColorStop(0, 'rgba(30,80,100,0)');
+  shade.addColorStop(1, 'rgba(30,80,100,0.1)');
+  ctx.fillStyle = shade;
+  ctx.fillRect(CX, WATER_Y, 420, 700);
+  const left = CX - innerRx(WATER_Y);
+  const light = ctx.createLinearGradient(left, 0, CX - 30, 0);
+  light.addColorStop(0, 'rgba(255,255,255,0.16)');
+  light.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = light;
+  ctx.fillRect(left - 10, WATER_Y, CX - left, 700);
+  const sheen = ctx.createLinearGradient(0, WATER_Y - 6, 0, WATER_Y + 42);
+  sheen.addColorStop(0, 'rgba(255,255,255,0.32)');
+  sheen.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = sheen;
+  ctx.fillRect(CX - 400, WATER_Y - 6, 800, 56);
+  ctx.restore();
+}
+
+function drawMeniscus() {
+  const rx = innerRx(WATER_Y);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  const back = 18;
+  ctx.moveTo(CX - rx * 0.96, WATER_Y - 6);
+  for (let i = 1; i <= back; i++) {
+    const a = Math.PI + Math.PI * (i / back);
+    ctx.lineTo(CX + rx * 0.96 * Math.cos(a), WATER_Y - 6 + 11 * Math.sin(a));
+  }
+  ctx.strokeStyle = 'rgba(255,255,255,0.32)';
+  ctx.lineWidth = 2.5;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(CX + rx, WATER_Y + 1);
+  for (let i = 1; i <= 18; i++) {
+    const a = 0 + Math.PI * (i / 18);
+    ctx.lineTo(CX + rx * Math.cos(a), WATER_Y + 1 + 15 * Math.sin(a));
+  }
+  ctx.strokeStyle = 'rgba(255,255,255,0.82)';
+  ctx.lineWidth = 3.5;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(CX + rx * 0.98, WATER_Y + 5);
+  for (let i = 1; i <= 18; i++) {
+    const a = Math.PI * (i / 18);
+    ctx.lineTo(CX + rx * 0.98 * Math.cos(a), WATER_Y + 5 + 12 * Math.sin(a));
+  }
+  ctx.strokeStyle = 'rgba(70,140,160,0.28)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+function drawRipples() {
+  ctx.save();
+  pathWater(ctx);
+  ctx.clip();
+  const maxR = innerRx(WATER_Y) - 6;
+  ctx.lineCap = 'round';
+  for (let i = 0; i < ripples.length; i++) {
+    const r = ripples[i];
+    const age = simT - r.born;
+    if (age < 0 || age > 1.7) continue;
+    const k = age / 1.7;
+    const rx = Math.min(maxR, 10 + k * 190);
+    const edge = clamp((maxR - rx) / 36, 0, 1);
+    const alpha = (1 - k) * (1 - k) * r.power * 0.65 * edge;
+    if (alpha < 0.02) continue;
+    ctx.beginPath();
+    ctx.ellipse(r.x, WATER_Y + 2, rx, Math.max(3, rx * 0.055), 0, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255,255,255,' + alpha + ')';
+    ctx.lineWidth = 2.4 * (1 - k) + 0.6;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function glassGradient() {
+  const g = ctx.createLinearGradient(CX - RIM_RX, 0, CX + RIM_RX, 0);
+  g.addColorStop(0, 'rgba(255,255,255,0.78)');
+  g.addColorStop(0.14, 'rgba(255,255,255,0.22)');
+  g.addColorStop(0.48, 'rgba(255,255,255,0.08)');
+  g.addColorStop(0.84, 'rgba(186,220,230,0.16)');
+  g.addColorStop(1, 'rgba(255,255,255,0.62)');
+  return g;
+}
+
+function drawGlass() {
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = glassGradient();
+  ctx.lineWidth = WALL;
+  strokeCenterline(ctx, -1, RIM_Y + 4, WALL_BOT);
+  strokeCenterline(ctx, 1, RIM_Y + 4, WALL_BOT);
+  const rimRx = RIM_RX - WALL * 0.5;
+  const rimRy = RIM_RY * (rimRx / RIM_RX);
+  ctx.beginPath();
+  ctx.ellipse(CX, RIM_Y, rimRx, rimRy, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  const baseRx = BASE_RX - WALL * 0.5;
+  const baseRy = BASE_RY * (baseRx / BASE_RX);
+  ctx.beginPath();
+  ctx.ellipse(CX, WALL_BOT, baseRx, baseRy, 0, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.lineWidth = 2.6;
+  ctx.strokeStyle = 'rgba(78,126,146,0.4)';
+  pathOuter(ctx);
+  ctx.stroke();
+
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = 'rgba(255,255,255,0.88)';
+  ctx.beginPath();
+  ctx.moveTo(CX + rimRx, RIM_Y);
+  for (let i = 1; i <= 16; i++) {
+    const a = Math.PI * (i / 16);
+    ctx.lineTo(CX + rimRx * Math.cos(a), RIM_Y + rimRy * Math.sin(a));
+  }
+  ctx.stroke();
+
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+  ctx.beginPath();
+  ctx.moveTo(CX - rimRx, RIM_Y);
+  for (let i = 1; i <= 16; i++) {
+    const a = Math.PI + Math.PI * (i / 16);
+    ctx.lineTo(CX + rimRx * Math.cos(a), RIM_Y + rimRy * Math.sin(a));
+  }
+  ctx.stroke();
+
+  ctx.lineWidth = 9;
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.beginPath();
+  const yA = RIM_Y + 28;
+  const yB = WALL_BOT - 8;
+  ctx.moveTo(CX - outerRx(yA) + 15, yA);
+  ctx.lineTo(CX - outerRx((yA + yB) * 0.5) + 13, (yA + yB) * 0.5);
+  ctx.lineTo(CX - outerRx(yB) + 12, yB);
+  ctx.stroke();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+  ctx.stroke();
+
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = 'rgba(140,188,204,0.4)';
+  ctx.beginPath();
+  ctx.moveTo(CX + outerRx(yA) - 12, yA);
+  ctx.lineTo(CX + outerRx(yB) - 10, yB);
+  ctx.stroke();
+
+  const gy = RIM_Y + 92 + Math.sin(simT * 0.4) * 16;
+  const gx = CX - outerRx(gy) + WALL * 0.42;
+  const gg = ctx.createRadialGradient(gx, gy, 1, gx, gy, 30);
+  gg.addColorStop(0, 'rgba(255,255,255,0.8)');
+  gg.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = gg;
+  ctx.beginPath();
+  ctx.ellipse(gx, gy, 9, 24, 0.04, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function fillBlob(x, y, rx, ry, rgb, alpha) {
+  if (alpha <= 0 || rx <= 0.2) return;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(x, y);
+  ctx.scale(1, ry / rx);
+  const g = ctx.createRadialGradient(-rx * 0.28, -rx * 0.32, rx * 0.08, 0, 0, rx);
+  g.addColorStop(0, 'rgba(255,255,255,0.95)');
+  g.addColorStop(0.38, 'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')');
+  g.addColorStop(1, 'rgb(' + (rgb[0] * 0.65 | 0) + ',' + (rgb[1] * 0.65 | 0) + ',' + (rgb[2] * 0.65 | 0) + ')');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(0, 0, rx, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawFalling() {
+  ctx.save();
+  pathMouth(ctx);
+  ctx.clip();
+
+  const yStart = RIM_Y + RIM_RY + 18;
+  for (let i = 0; i < drops.length; i++) {
+    const drop = drops[i];
+    const age = simT - drop.born;
+    if (age < 0 || age > drop.fall) continue;
+    const rgb = COLORS[drop.colorIndex];
+    const blobs = [
+      { delay: 0.12, ox: 14 * drop.spin, s: 0.36 },
+      { delay: 0.07, ox: -18 * drop.spin, s: 0.55 },
+      { delay: 0, ox: 0, s: 1 }
+    ];
+    for (let b = 0; b < blobs.length; b++) {
+      const blob = blobs[b];
+      const local = age - blob.delay;
+      if (local <= 0) continue;
+      const k = local / drop.fall;
+      if (k >= 1) continue;
+      const ease = k * k;
+      const y = yStart + (WATER_Y - yStart) * ease;
+      const fade = (k > 0.84 ? 1 - (k - 0.84) / 0.16 : 1) * Math.min(1, (WATER_Y - y) / 20 + 0.15);
+      const squash = k > 0.8 ? (k - 0.8) / 0.2 : 0;
+      const rx = (18 + squash * 12) * blob.s;
+      const ry = (22 * (1 + ease * 0.35) * (1 - squash * 0.65)) * blob.s;
+      const x = drop.x + blob.ox + Math.sin(k * 4 + blob.ox) * 2;
+      if (blob.s === 1) {
+        for (let t = 3; t >= 1; t--) {
+          const k2 = Math.max(0, k - t * 0.055);
+          const y2 = yStart + (WATER_Y - yStart) * k2 * k2;
+          fillBlob(x, y2, rx * (1 - t * 0.16), ry * 0.7, rgb, fade * 0.16 * (1 - t / 4));
+        }
+      }
+      fillBlob(x, y, rx, Math.max(rx * 0.45, ry), rgb, Math.max(0, fade));
+    }
+  }
+  ctx.restore();
+}
+
+function drawScene() {
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+  drawShadow();
+  const water = ctx.createLinearGradient(0, WATER_Y, 0, floorY());
+  water.addColorStop(0, 'rgba(232,249,252,0.94)');
+  water.addColorStop(0.42, 'rgba(186,228,236,0.95)');
+  water.addColorStop(1, 'rgba(118,190,206,0.97)');
+  pathWater(ctx);
+  ctx.fillStyle = water;
+  ctx.fill();
+  drawCaustics();
+  drawInk();
+  drawVolume();
+  drawMeniscus();
+  drawRipples();
+  drawGlass();
+  drawFalling();
+}
+
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.max(1, window.innerWidth);
+  const h = Math.max(1, window.innerHeight);
+  canvas.width = Math.max(1, Math.round(w * dpr));
+  canvas.height = Math.max(1, Math.round(h * dpr));
+  view.w = w;
+  view.h = h;
+  view.dpr = dpr;
+}
+
+function draw() {
+  const w = view.w;
+  const h = view.h;
+  const dpr = view.dpr;
+  const scale = Math.min(w / VW, h / VW);
+  const ox = (w - VW * scale) * 0.5;
+  const oy = (h - VW * scale) * 0.5;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawBackground(w, h);
+  ctx.setTransform(dpr * scale, 0, 0, dpr * scale, ox * dpr, oy * dpr);
+  drawScene();
+}
+
+buildBrushes();
+while (simT < 15) step(0.05);
+seedOpeningDrop();
+resize();
+draw();
+
+let last = performance.now();
+function loop(now) {
+  let dt = (now - last) / 1000;
+  last = now;
+  if (dt < 0) dt = 0;
+  if (dt > 0.05) dt = 0.05;
+  if (!document.hidden) step(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+window.addEventListener('resize', function () {
+  resize();
+  draw();
+});
+</script>
+</body>
+</html>

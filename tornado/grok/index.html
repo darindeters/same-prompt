@@ -1,0 +1,1352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tornado</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #120218;
+    overflow: hidden;
+    touch-action: none;
+    overscroll-behavior: none;
+  }
+  body { position: fixed; inset: 0; }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+</style>
+</head>
+<body>
+<canvas id="c" role="img" aria-label="A tornado tearing across farmland at dusk"></canvas>
+<script>
+(function () {
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d", { alpha: false });
+  const TAU = Math.PI * 2;
+
+  let DPR = 1, W = 1, H = 1, S = 1;
+  let viewW = -1, viewH = -1, rawDpr = -1;
+  let time = 0, scroll = 0, last = 0;
+  let horizon, tornadoX, anvilBase, funnelTop, baseY, funnelH, maxR, lean, cloudY, cloudRx, cloudRy;
+  let bolt = null;
+  let nextBolt = 1.4;
+
+  const dust = [];
+  const chunks = [];
+  const inflow = [];
+  const back = [];
+  const front = [];
+
+  const BANDS = [
+    [12, 196, 72],
+    [255, 198, 0],
+    [0, 158, 64],
+    [255, 132, 16],
+    [18, 176, 108],
+    [255, 176, 24],
+    [0, 142, 78],
+    [242, 104, 28]
+  ];
+
+  const DEBRIS = [
+    [255, 122, 24],
+    [255, 198, 36],
+    [255, 236, 170],
+    [235, 28, 64],
+    [70, 210, 80],
+    [196, 36, 176],
+    [120, 64, 24]
+  ];
+
+  function hash(n) {
+    n |= 0;
+    n = Math.imul(n ^ (n >>> 16), 0x7feb352d);
+    n = Math.imul(n ^ (n >>> 15), 0x846ca68b);
+    return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
+  }
+
+  function mod(a, b) {
+    return ((a % b) + b) % b;
+  }
+
+  function mix(a, b, t) {
+    return a + (b - a) * t;
+  }
+
+  function rgba(r, g, b, a) {
+    return "rgba(" + (r | 0) + "," + (g | 0) + "," + (b | 0) + "," + a + ")";
+  }
+
+  function resize() {
+    const cssW = Math.max(1, window.innerWidth);
+    const cssH = Math.max(1, window.innerHeight);
+    let dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const longest = Math.max(cssW, cssH);
+    if (longest * dpr > 2400) dpr = 2400 / longest;
+    DPR = dpr;
+    W = cssW;
+    H = cssH;
+    canvas.width = Math.max(1, Math.floor(W * DPR));
+    canvas.height = Math.max(1, Math.floor(H * DPR));
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+
+  function layout() {
+    S = Math.min(W, H) / 1080;
+    horizon = H * 0.6;
+    tornadoX = W * 0.44 + Math.sin(time * 0.22) * 34 * S;
+    anvilBase = horizon * 0.38;
+    const hang = anvilY(tornadoX);
+    funnelTop = hang + 28 * S;
+    baseY = horizon + (H - horizon) * 0.5;
+    const floorY = H - 78 * S;
+    if (baseY > floorY) baseY = floorY;
+    if (baseY < funnelTop + 160 * S) baseY = funnelTop + 160 * S;
+    funnelH = Math.max(40 * S, baseY - funnelTop);
+    maxR = Math.min(W * 0.3, Math.min(W, H) * 0.22);
+    lean = (72 + Math.sin(time * 0.37) * 22) * S;
+    cloudY = hang + 10 * S;
+    cloudRx = Math.min(W * 0.46, 500 * S);
+    cloudRy = 72 * S;
+  }
+
+  function anvilY(x) {
+    return anvilBase
+      + Math.sin(x * 0.0075 + time * 0.65) * 18 * S
+      + Math.sin(x * 0.016 - time * 1.05) * 11 * S
+      + Math.sin(x * 0.0037 + 2.1) * 28 * S;
+  }
+
+  function profile(h) {
+    const pulse = 0.88 + 0.12 * Math.sin(time * 0.55);
+    const flare = Math.pow(h, 1.7);
+    const skirt = Math.pow(Math.max(0, 1 - h * 2.15), 2);
+    const wall = 0.15 + flare * 0.98;
+    const turb = Math.sin(h * 10.5 + time * 4.1) * 0.028
+      + Math.sin(h * 5.2 - time * 2.2) * 0.022;
+    return Math.max(0.08, wall * pulse + skirt * 0.9 + turb);
+  }
+
+  function axisX(h) {
+    const sway = Math.sin(time * 1.45 + h * 6.8) * 18 * S
+      + Math.sin(time * 0.52 + h * 2.8) * 30 * S;
+    return tornadoX + lean * h + sway * h;
+  }
+
+  function axisY(h) {
+    return baseY - h * funnelH;
+  }
+
+  function influence(x, y, sigmaX, sigmaY) {
+    const dx = (x - tornadoX) / S;
+    const dy = (y - baseY) / S;
+    return Math.exp(-(dx * dx) / (2 * sigmaX * sigmaX) - (dy * dy) / (2 * sigmaY * sigmaY));
+  }
+
+  function makeOrbit(core) {
+    return {
+      h: Math.random(),
+      th: Math.random() * TAU,
+      rad: core ? 0.08 + Math.random() * 0.22 : 0.5 + Math.random() * 0.68,
+      sz: Math.random(),
+      sp: 0.75 + Math.random() * 0.95,
+      rise: core ? 0.32 + Math.random() * 0.38 : 0.11 + Math.random() * 0.16,
+      core: core,
+      kind: Math.random(),
+      rot: Math.random() * TAU,
+      spin: (Math.random() - 0.5) * 9,
+      hue: Math.random()
+    };
+  }
+
+  function makeInflow() {
+    return {
+      dist: Math.random() * 1.2,
+      th: Math.random() * TAU,
+      sp: 0.65 + Math.random() * 1.15,
+      sz: Math.random(),
+      kind: Math.random(),
+      yBias: Math.random(),
+      rot: Math.random() * TAU,
+      spin: (Math.random() - 0.5) * 7,
+      hue: Math.random()
+    };
+  }
+
+  function initParticles() {
+    dust.length = 0;
+    chunks.length = 0;
+    inflow.length = 0;
+    for (let i = 0; i < 280; i++) dust.push(makeOrbit(false));
+    for (let i = 0; i < 90; i++) dust.push(makeOrbit(true));
+    for (let i = 0; i < 64; i++) chunks.push(makeOrbit(false));
+    for (let i = 0; i < 110; i++) inflow.push(makeInflow());
+  }
+
+  function updateOrbit(p, dt) {
+    p.th += dt * p.sp * (2.15 + (1 - p.h) * 5.6);
+    p.h += dt * p.rise;
+    p.rot += dt * p.spin;
+    if (p.h >= 1) {
+      p.h -= 1;
+      p.th = Math.random() * TAU;
+    }
+  }
+
+  function updateInflow(p, dt) {
+    p.th += dt * p.sp * (1.15 + (1 - Math.min(1, p.dist)) * 7.2);
+    p.dist -= dt * (0.075 + p.sp * 0.085);
+    p.rot += dt * p.spin;
+    if (p.dist < 0.035) {
+      p.dist = 0.72 + Math.random() * 0.55;
+      p.th = Math.random() * TAU;
+    }
+  }
+
+  function splitDepth(list) {
+    back.length = 0;
+    front.length = 0;
+    for (let i = 0; i < list.length; i++) {
+      if (Math.sin(list[i].th) > 0) front.push(list[i]);
+      else back.push(list[i]);
+    }
+  }
+
+  function project(p, h, radMul) {
+    const pr = profile(h) * maxR * radMul;
+    const ex = Math.cos(p.th);
+    const ez = Math.sin(p.th);
+    return {
+      x: axisX(h) + ex * pr,
+      y: axisY(h) + ez * pr * 0.3,
+      ex: ex,
+      ez: ez
+    };
+  }
+
+  function drawSky() {
+    const g = ctx.createLinearGradient(0, 0, 0, horizon);
+    g.addColorStop(0, "#14021c");
+    g.addColorStop(0.28, "#3a0d66");
+    g.addColorStop(0.46, "#0c8f62");
+    g.addColorStop(0.62, "#e21878");
+    g.addColorStop(0.8, "#ff4d00");
+    g.addColorStop(1, "#ffe14a");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  function drawAnvil() {
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(W, 0);
+    for (let x = W; x >= 0; x -= 10) ctx.lineTo(x, anvilY(x));
+    ctx.closePath();
+    const g = ctx.createLinearGradient(0, 0, 0, anvilBase + 40 * S);
+    g.addColorStop(0, "#160424");
+    g.addColorStop(0.7, "#2a0848");
+    g.addColorStop(1, "#4a1268");
+    ctx.fillStyle = g;
+    ctx.fill();
+
+    for (let i = 0; i < 7; i++) {
+      const x = mod(i * 310 * S - scroll * 0.04, W + 200 * S) - 100 * S;
+      const y = anvilBase * (0.35 + (i % 3) * 0.12);
+      ctx.fillStyle = i % 2 ? "rgba(80, 20, 120, 0.35)" : "rgba(20, 0, 40, 0.4)";
+      ctx.beginPath();
+      ctx.ellipse(x, y, (90 + (i % 4) * 30) * S, (28 + (i % 3) * 8) * S, 0, 0, TAU);
+      ctx.fill();
+    }
+
+    ctx.beginPath();
+    ctx.moveTo(0, anvilY(0));
+    for (let x = 0; x <= W; x += 10) ctx.lineTo(x, anvilY(x));
+    const rim = ctx.createLinearGradient(0, 0, W, 0);
+    rim.addColorStop(0, "rgba(40, 220, 120, 0)");
+    rim.addColorStop(0.22, "rgba(140, 255, 90, 0.95)");
+    rim.addColorStop(0.48, "rgba(255, 40, 150, 0.95)");
+    rim.addColorStop(0.72, "rgba(255, 170, 40, 1)");
+    rim.addColorStop(1, "rgba(255, 230, 140, 0.15)");
+    ctx.strokeStyle = rim;
+    ctx.lineWidth = Math.max(3, 8 * S);
+    ctx.stroke();
+  }
+
+  function drawGreenCore() {
+    const x = tornadoX - Math.min(W * 0.2, 220 * S);
+    const y = (funnelTop * 0.35 + horizon * 0.65);
+    const pulse = 0.8 + 0.2 * Math.sin(time * 1.15);
+    const r = 260 * S * pulse;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, "rgba(190, 255, 70, " + (0.62 * pulse) + ")");
+    g.addColorStop(0.35, "rgba(0, 210, 120, " + (0.28 * pulse) + ")");
+    g.addColorStop(1, "rgba(0, 180, 100, 0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+
+  function drawSun() {
+    const x = Math.min(W * 0.84, W - 20 * S);
+    const y = horizon - 6 * S;
+    const r = 58 * S;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r * 5.2);
+    g.addColorStop(0, "rgba(255, 246, 190, 0.98)");
+    g.addColorStop(0.12, "rgba(255, 190, 40, 0.75)");
+    g.addColorStop(0.28, "rgba(255, 80, 20, 0.35)");
+    g.addColorStop(0.55, "rgba(255, 30, 110, 0.14)");
+    g.addColorStop(1, "rgba(255, 30, 110, 0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, horizon + 40 * S);
+    ctx.fillStyle = "#fff8d0";
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, TAU);
+    ctx.fill();
+    ctx.fillStyle = "#ffd23a";
+    ctx.beginPath();
+    ctx.arc(x - r * 0.12, y, r * 0.62, 0, TAU);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(255, 170, 40, 0.35)";
+    ctx.beginPath();
+    ctx.ellipse(x, horizon + 6 * S, 120 * S, 12 * S, 0, 0, TAU);
+    ctx.fill();
+  }
+
+  function drawRays() {
+    const x = Math.min(W * 0.84, W - 20 * S);
+    const y = horizon - 6 * S;
+    ctx.save();
+    for (let i = 0; i < 7; i++) {
+      const a0 = -2.75 + i * 0.16 + Math.sin(time * 0.18 + i) * 0.03;
+      const spread = 0.045 + (i % 2) * 0.02;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + Math.cos(a0) * W * 1.4, y + Math.sin(a0) * W * 1.4);
+      ctx.lineTo(x + Math.cos(a0 + spread) * W * 1.4, y + Math.sin(a0 + spread) * W * 1.4);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(255, " + (150 + i * 8) + ", 60, " + (0.045 + (i % 3) * 0.018) + ")";
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawDriftClouds() {
+    const sp = 480 * S;
+    const o = scroll * 0.06;
+    const i0 = Math.floor(o / sp) - 1;
+    const i1 = i0 + Math.ceil(W / sp) + 3;
+    for (let i = i0; i <= i1; i++) {
+      const n = hash(i * 13 + 4);
+      const x = i * sp - o + (n - 0.5) * 80 * S;
+      const y = funnelTop * (0.35 + hash(i * 17 + 2) * 0.7) + 20 * S;
+      const rx = (70 + n * 90) * S;
+      const ry = (22 + hash(i + 8) * 24) * S;
+      ctx.fillStyle = n > 0.5 ? "rgba(96, 16, 120, 0.42)" : "rgba(40, 8, 64, 0.5)";
+      ctx.beginPath();
+      ctx.ellipse(x, y, rx, ry, 0, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = "rgba(255, 120, 180, 0.18)";
+      ctx.beginPath();
+      ctx.ellipse(x, y + ry * 0.55, rx * 0.85, ry * 0.35, 0, 0, TAU);
+      ctx.fill();
+    }
+  }
+
+  function drawWallCloud() {
+    ctx.fillStyle = "rgba(22, 4, 40, 0.94)";
+    ctx.beginPath();
+    ctx.ellipse(tornadoX + lean * 0.15, cloudY, cloudRx, cloudRy, 0, 0, TAU);
+    ctx.fill();
+
+    for (let i = 0; i < 16; i++) {
+      const a = time * 0.5 + i * 0.39;
+      const ox = Math.cos(a) * cloudRx * 0.82;
+      const oy = Math.sin(a) * cloudRy * 0.78;
+      const sunlit = Math.max(0, Math.cos(a));
+      ctx.fillStyle = sunlit > 0.45
+        ? "rgba(255, 120, 60, 0.28)"
+        : (i % 2 ? "rgba(70, 16, 100, 0.55)" : "rgba(10, 30, 24, 0.4)");
+      ctx.beginPath();
+      ctx.ellipse(tornadoX + ox, cloudY + oy, (54 + (i % 5) * 12) * S, (22 + (i % 3) * 6) * S, a * 0.2, 0, TAU);
+      ctx.fill();
+    }
+
+    const g = ctx.createRadialGradient(tornadoX - 70 * S, cloudY + 16 * S, 8 * S, tornadoX - 30 * S, cloudY + 20 * S, 240 * S);
+    g.addColorStop(0, "rgba(130, 255, 90, 0.42)");
+    g.addColorStop(1, "rgba(80, 255, 120, 0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(tornadoX - 20 * S, cloudY + 8 * S, cloudRx * 0.72, cloudRy * 0.9, 0, 0, TAU);
+    ctx.fill();
+
+    const warm = ctx.createRadialGradient(tornadoX + cloudRx * 0.4, cloudY + 10 * S, 4 * S, tornadoX + 40 * S, cloudY, 220 * S);
+    warm.addColorStop(0, "rgba(255, 140, 40, 0.4)");
+    warm.addColorStop(1, "rgba(255, 80, 120, 0)");
+    ctx.fillStyle = warm;
+    ctx.beginPath();
+    ctx.ellipse(tornadoX + 30 * S, cloudY + 6 * S, cloudRx * 0.6, cloudRy * 0.75, 0, 0, TAU);
+    ctx.fill();
+  }
+
+  function drawRain() {
+    const x0 = tornadoX - Math.min(W * 0.28, 300 * S);
+    const y0 = funnelTop * 0.55;
+    const rw = 70 * S;
+    const rh = horizon - y0 + 10 * S;
+    if (rh <= 8) return;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x0 - rw, y0, rw * 2, rh);
+    ctx.clip();
+    ctx.strokeStyle = "rgba(210, 255, 170, 0.28)";
+    ctx.lineWidth = Math.max(1, 1.3 * S);
+    const sp = 8 * S;
+    const off = mod(time * 520 * S, 24 * S);
+    for (let x = x0 - rw; x < x0 + rw; x += sp) {
+      ctx.beginPath();
+      ctx.moveTo(x, y0 + off);
+      ctx.lineTo(x - 7 * S, y0 + rh);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function spawnBolt() {
+    const x0 = W * (0.12 + Math.random() * 0.76);
+    const y0 = anvilBase * (0.45 + Math.random() * 0.4);
+    const hitGround = Math.random() < 0.45;
+    const x1 = x0 + (Math.random() - 0.5) * 220 * S;
+    const y1 = hitGround ? horizon + Math.random() * (baseY - horizon) * 0.85 : horizon - Math.random() * 30 * S;
+    const main = jag(x0, y0, x1, y1, 11, 54 * S);
+    const forks = [];
+    const branchAt = 3 + (Math.random() * 4 | 0);
+    if (branchAt < main.length - 1) {
+      const p = main[branchAt];
+      const end = main[Math.min(main.length - 1, branchAt + 3)];
+      forks.push(jag(p[0], p[1], p[0] + (Math.random() - 0.5) * 140 * S, end[1] + 20 * S, 5, 36 * S));
+    }
+    bolt = { main: main, forks: forks, life: 0.2 };
+  }
+
+  function jag(x0, y0, x1, y1, segs, spread) {
+    const pts = [[x0, y0]];
+    for (let i = 1; i <= segs; i++) {
+      const t = i / segs;
+      const x = mix(x0, x1, t) + (i === segs ? 0 : (Math.random() - 0.5) * spread);
+      const y = mix(y0, y1, t);
+      pts.push([x, y]);
+    }
+    return pts;
+  }
+
+  function strokePoly(pts, width, color) {
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.stroke();
+  }
+
+  function drawBolt() {
+    if (!bolt) return;
+    const a = Math.min(1, bolt.life * 6);
+    strokePoly(bolt.main, Math.max(4, 8 * S), "rgba(255, 80, 210, " + (0.35 * a) + ")");
+    strokePoly(bolt.main, Math.max(1.5, 2.4 * S), "rgba(255, 250, 220, " + a + ")");
+    for (let i = 0; i < bolt.forks.length; i++) {
+      strokePoly(bolt.forks[i], Math.max(1, 1.6 * S), "rgba(255, 240, 200, " + (0.8 * a) + ")");
+    }
+  }
+
+  function drawHills() {
+    ctx.beginPath();
+    ctx.moveTo(0, horizon + 2);
+    for (let x = 0; x <= W; x += 8) {
+      const y = horizon - (
+        16 * S
+        + Math.sin(x * 0.007 + 1.2) * 16 * S
+        + Math.sin(x * 0.018 + 4) * 8 * S
+        + Math.sin(x * 0.0031) * 24 * S
+      );
+      ctx.lineTo(x, y);
+    }
+    ctx.lineTo(W, horizon + 2);
+    ctx.closePath();
+    const g = ctx.createLinearGradient(0, horizon - 50 * S, 0, horizon + 4);
+    g.addColorStop(0, "#0e6a38");
+    g.addColorStop(1, "#08301c");
+    ctx.fillStyle = g;
+    ctx.fill();
+
+    ctx.beginPath();
+    for (let x = 0; x <= W; x += 8) {
+      const y = horizon - (
+        16 * S
+        + Math.sin(x * 0.007 + 1.2) * 16 * S
+        + Math.sin(x * 0.018 + 4) * 8 * S
+        + Math.sin(x * 0.0031) * 24 * S
+      );
+      if (x === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = "rgba(255, 190, 60, 0.85)";
+    ctx.lineWidth = Math.max(1.5, 2.5 * S);
+    ctx.stroke();
+  }
+
+  function bandY(t) {
+    return horizon + Math.pow(t, 1.42) * (H - horizon);
+  }
+
+  function drawFields() {
+    const bands = 8;
+    for (let i = 0; i < bands; i++) {
+      const t0 = i / bands;
+      const t1 = (i + 1) / bands;
+      const y0 = bandY(t0);
+      const y1 = bandY(t1);
+      const col = BANDS[i % BANDS.length];
+      const far = 1 - t0;
+      const r = col[0] * (1 - far * 0.18) + far * 60;
+      const g = col[1] * (1 - far * 0.28) + far * 16;
+      const b = col[2] * (1 - far * 0.12) + far * 80;
+      ctx.fillStyle = rgba(r, g, b, 1);
+      ctx.fillRect(0, y0, W, y1 - y0 + 1.5);
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, y0, W, Math.max(1, y1 - y0 + 1));
+      ctx.clip();
+      const depth = 0.22 + t0 * 1.55;
+      const sp = (12 + t0 * 10) * S;
+      const off = mod(scroll * depth, sp);
+      ctx.fillStyle = "rgba(40, 0, 30, " + (0.07 + t0 * 0.08) + ")";
+      const fw = Math.max(1, 2.2 * S);
+      for (let x = -sp + off; x < W + sp; x += sp) ctx.fillRect(x, y0, fw, y1 - y0 + 2);
+      for (let k = 0; k < 7; k++) {
+        const hx = hash(i * 40 + k * 3 + 1);
+        const hy = hash(i * 40 + k * 5 + 7);
+        const x = mod(hx * 900 * S + scroll * depth * 1.15, W + 30) - 15;
+        const y = y0 + hy * (y1 - y0);
+        ctx.fillStyle = k % 2 ? "rgba(255, 255, 180, 0.35)" : "rgba(0, 80, 20, 0.28)";
+        ctx.fillRect(x, y, (4 + hx * 7) * S, (3 + hy * 4) * S);
+      }
+      ctx.restore();
+
+      ctx.fillStyle = "rgba(255, 255, 210, 0.22)";
+      ctx.fillRect(0, y0, W, Math.max(1, 2 * S));
+    }
+
+    const wash = ctx.createLinearGradient(0, horizon, W, H);
+    wash.addColorStop(0, "rgba(0, 200, 120, 0.16)");
+    wash.addColorStop(0.45, "rgba(0, 0, 0, 0)");
+    wash.addColorStop(1, "rgba(255, 110, 0, 0.18)");
+    ctx.fillStyle = wash;
+    ctx.fillRect(0, horizon, W, H - horizon);
+  }
+
+  function drawCloudShadows() {
+    for (let i = 0; i < 4; i++) {
+      const span = W + 360 * S;
+      const x = mod(i * span * 0.28 - scroll * 0.14, span) - 180 * S;
+      const y = horizon + (28 + i * 22) * S;
+      ctx.fillStyle = "rgba(48, 0, 64, 0.14)";
+      ctx.beginPath();
+      ctx.ellipse(x, y, (150 + i * 20) * S, 22 * S, 0, 0, TAU);
+      ctx.fill();
+    }
+  }
+
+  function drawRoad() {
+    const y = baseY - 4 * S;
+    const h = 24 * S;
+    ctx.fillStyle = "#e15a18";
+    ctx.fillRect(0, y, W, h);
+    ctx.fillStyle = "#ffb15a";
+    const sp = 22 * S;
+    const off = mod(scroll * 1.05, sp);
+    for (let x = -sp + off; x < W; x += sp) ctx.fillRect(x, y + 5 * S, 9 * S, 2.4 * S);
+    ctx.fillStyle = "rgba(80, 20, 0, 0.45)";
+    ctx.fillRect(0, y, W, Math.max(1, 2.5 * S));
+    ctx.fillRect(0, y + h - Math.max(1, 2.5 * S), W, Math.max(1, 2.5 * S));
+    ctx.fillStyle = "rgba(255, 236, 160, 0.8)";
+    const dash = 28 * S;
+    const gap = 22 * S;
+    const dOff = mod(scroll * 1.05, dash + gap);
+    for (let x = -dOff; x < W; x += dash + gap) ctx.fillRect(x, y + h * 0.42, dash, Math.max(1.5, 2.6 * S));
+  }
+
+  function drawHorizonHaze() {
+    const g = ctx.createLinearGradient(0, horizon - 36 * S, 0, horizon + 90 * S);
+    g.addColorStop(0, "rgba(255, 140, 40, 0)");
+    g.addColorStop(0.42, "rgba(255, 180, 70, 0.38)");
+    g.addColorStop(1, "rgba(255, 40, 120, 0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, horizon - 36 * S, W, 130 * S);
+  }
+
+  function drawTree(x, ground, sc, seed, inf) {
+    const suck = (tornadoX - x) * inf * 0.0016;
+    const sway = Math.sin(time * 1.1 + seed) * 0.04;
+    ctx.save();
+    ctx.translate(x, ground);
+    ctx.rotate(suck + sway);
+    const h = 86 * S * sc;
+    const tw = Math.max(2, 8 * S * sc);
+    ctx.fillStyle = "#4a2412";
+    ctx.fillRect(-tw / 2, -h * 0.42, tw, h * 0.42);
+    const r = 28 * S * sc;
+    const cy = -h * 0.62;
+    ctx.fillStyle = sc < 0.7 ? "#0a7a40" : "#00a84c";
+    ctx.beginPath();
+    ctx.arc(0, cy, r, 0, TAU);
+    ctx.arc(-r * 0.72, cy + r * 0.28, r * 0.78, 0, TAU);
+    ctx.arc(r * 0.66, cy + r * 0.22, r * 0.74, 0, TAU);
+    ctx.fill();
+    ctx.fillStyle = "rgba(190, 255, 70, 0.8)";
+    ctx.beginPath();
+    ctx.arc(r * 0.28, cy - r * 0.22, r * 0.32, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawBarn(x, ground, sc, inf) {
+    const w = 108 * S * sc;
+    const h = 64 * S * sc;
+    const suck = (tornadoX - x) * inf * 0.0014;
+    ctx.save();
+    ctx.translate(x, ground);
+    ctx.rotate(suck);
+    ctx.fillStyle = "#ff1e46";
+    ctx.fillRect(-w / 2, -h, w, h);
+    ctx.fillStyle = "#2a0820";
+    ctx.beginPath();
+    ctx.moveTo(-w / 2 - 8 * S, -h);
+    ctx.lineTo(0, -h - 40 * S * sc);
+    ctx.lineTo(w / 2 + 8 * S, -h);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#ffd23a";
+    ctx.fillRect(-w * 0.08, -h - 18 * S * sc, w * 0.16, 16 * S * sc);
+    ctx.fillStyle = "#1a0610";
+    ctx.fillRect(-w * 0.12, -h * 0.42, w * 0.24, h * 0.42);
+    ctx.fillStyle = "#9af6ff";
+    ctx.fillRect(w * 0.16, -h * 0.78, w * 0.16, h * 0.22);
+    ctx.fillStyle = "rgba(255, 210, 140, 0.9)";
+    ctx.fillRect(w / 2 - Math.max(2, 4 * S), -h, Math.max(2, 4 * S), h);
+    ctx.restore();
+  }
+
+  function drawSilo(x, ground, sc) {
+    const w = 34 * S * sc;
+    const h = 92 * S * sc;
+    const g = ctx.createLinearGradient(x - w / 2, 0, x + w / 2, 0);
+    g.addColorStop(0, "#6a2ad4");
+    g.addColorStop(0.45, "#f4f0ff");
+    g.addColorStop(1, "#ff9a2a");
+    ctx.fillStyle = g;
+    ctx.fillRect(x - w / 2, ground - h, w, h);
+    ctx.fillStyle = "#ff4d6a";
+    ctx.beginPath();
+    ctx.arc(x, ground - h, w * 0.5, Math.PI, 0);
+    ctx.fill();
+    ctx.fillStyle = "#ffe9a0";
+    ctx.beginPath();
+    ctx.ellipse(x, ground - h, w * 0.5, 8 * S * sc, 0, 0, TAU);
+    ctx.fill();
+  }
+
+  function drawFarStructures() {
+    const rows = [
+      { factor: 0.28, yk: 0.02, sc: 0.62, salt: 100 },
+      { factor: 0.48, yk: 0.22, sc: 0.86, salt: 300 }
+    ];
+    for (let r = 0; r < rows.length; r++) {
+      const row = rows[r];
+      const sp = 320 * S;
+      const o = scroll * row.factor;
+      const i0 = Math.floor(o / sp) - 1;
+      const i1 = i0 + Math.ceil(W / sp) + 3;
+      const groundBase = horizon + (baseY - horizon) * row.yk;
+      for (let i = i0; i <= i1; i++) {
+        const n = hash(i * 19 + row.salt);
+        const x = i * sp - o + (hash(i + row.salt) - 0.5) * 70 * S;
+        const ground = groundBase + n * 16 * S;
+        const kind = hash(i * 7 + row.salt + 5);
+        const inf = influence(x, ground, 110, 70) * 0.4;
+        if (kind < 0.62) drawTree(x, ground, row.sc * (0.75 + n * 0.55), i + r, inf);
+        else drawBarn(x, ground, row.sc * 0.72, inf);
+      }
+    }
+  }
+
+  function drawPoles() {
+    const sp = 210 * S;
+    const factor = 0.5;
+    const o = scroll * factor;
+    const ground = horizon + (baseY - horizon) * 0.34;
+    const i0 = Math.floor(o / sp) - 1;
+    const i1 = i0 + Math.ceil(W / sp) + 3;
+    const pts = [];
+    for (let i = i0; i <= i1; i++) {
+      const x = i * sp - o;
+      const inf = influence(x, ground, 100, 60);
+      const topX = x + (tornadoX - x) * inf * 0.12 + Math.sin(time * 1.4 + i) * 2 * S;
+      const topY = ground - (78 * S + inf * 20 * S);
+      pts.push([x, ground, topX, topY]);
+    }
+    ctx.lineWidth = Math.max(1, 1.6 * S);
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i];
+      const b = pts[i + 1];
+      const sag = (12 + Math.sin(time * 2 + i) * 3) * S;
+      ctx.strokeStyle = "rgba(20, 6, 24, 0.75)";
+      ctx.beginPath();
+      ctx.moveTo(a[2], a[3] + 4 * S);
+      ctx.quadraticCurveTo((a[2] + b[2]) / 2, (a[3] + b[3]) / 2 + sag, b[2], b[3] + 4 * S);
+      ctx.stroke();
+    }
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      ctx.strokeStyle = "#1a0a18";
+      ctx.lineWidth = Math.max(2, 4 * S);
+      ctx.beginPath();
+      ctx.moveTo(p[0], p[1]);
+      ctx.lineTo(p[2], p[3]);
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(255, 190, 90, 0.8)";
+      ctx.lineWidth = Math.max(1, 1.4 * S);
+      ctx.beginPath();
+      ctx.moveTo(p[2], p[3]);
+      ctx.lineTo(p[2] + 4 * S, p[3]);
+      ctx.stroke();
+    }
+  }
+
+  function drawMidFarms() {
+    const sp = 520 * S;
+    const factor = 0.82;
+    const o = scroll * factor;
+    const i0 = Math.floor(o / sp) - 1;
+    const i1 = i0 + Math.ceil(W / sp) + 3;
+    for (let i = i0; i <= i1; i++) {
+      const n = hash(i * 23 + 77);
+      if (n < 0.18) continue;
+      const x = i * sp - o;
+      const ground = baseY - (36 + hash(i + 9) * 24) * S;
+      const inf = influence(x, ground, 150, 90);
+      const kind = hash(i * 11 + 4);
+      if (kind < 0.45) {
+        drawTree(x - 50 * S, ground, 1.15, i, inf);
+        drawTree(x + 36 * S, ground + 6 * S, 0.9, i + 2, inf);
+      } else if (kind < 0.8) {
+        drawBarn(x, ground, 1.05, inf);
+        if (hash(i + 50) > 0.4) drawSilo(x + 78 * S, ground, 1);
+      } else {
+        drawSilo(x, ground, 1.1);
+        drawTree(x - 46 * S, ground, 1.05, i + 3, inf);
+      }
+    }
+  }
+
+  function drawFence() {
+    const sp = 36 * S;
+    const factor = 1.02;
+    const o = mod(scroll * factor, sp);
+    const ground = baseY - 28 * S;
+    const posts = [];
+    for (let x = -o; x < W + sp; x += sp) {
+      const inf = influence(x, ground, 130, 70);
+      const h = (34 + inf * 50) * S;
+      const topX = x + (tornadoX - x) * inf * 0.28;
+      const topY = ground - h;
+      posts.push([x, ground, topX, topY, inf]);
+    }
+    ctx.lineCap = "round";
+    for (let i = 0; i < posts.length - 1; i++) {
+      const a = posts[i];
+      const b = posts[i + 1];
+      const midInf = (a[4] + b[4]) * 0.5;
+      ctx.lineWidth = Math.max(1, 1.5 * S);
+      if (midInf > 0.55) {
+        ctx.strokeStyle = "rgba(255, 220, 140, 0.7)";
+        ctx.beginPath();
+        ctx.moveTo(a[2], a[3] + 8 * S);
+        ctx.lineTo(a[2] - 10 * S, a[3] + 22 * S);
+        ctx.stroke();
+      } else {
+        ctx.strokeStyle = "#3a2418";
+        ctx.beginPath();
+        ctx.moveTo(a[2], a[3] + 6 * S);
+        ctx.lineTo(b[2], b[3] + 6 * S);
+        ctx.moveTo(a[2], a[3] + 16 * S);
+        ctx.lineTo(b[2], b[3] + 16 * S);
+        ctx.stroke();
+      }
+    }
+    for (let i = 0; i < posts.length; i++) {
+      const p = posts[i];
+      ctx.strokeStyle = p[4] > 0.4 ? "#ffb703" : "#5a3018";
+      ctx.lineWidth = Math.max(2, 3.2 * S);
+      ctx.beginPath();
+      ctx.moveTo(p[0], p[1]);
+      ctx.lineTo(p[2], p[3]);
+      ctx.stroke();
+    }
+  }
+
+  function drawWake() {
+    const len = Math.min(W * 0.62, 560 * S);
+    const g = ctx.createLinearGradient(tornadoX - len, baseY, tornadoX + 30 * S, baseY);
+    g.addColorStop(0, "rgba(90, 30, 0, 0)");
+    g.addColorStop(0.55, "rgba(120, 40, 8, 0.28)");
+    g.addColorStop(1, "rgba(50, 16, 8, 0.5)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(tornadoX - len * 0.32, baseY + 8 * S, len * 0.5, 20 * S, 0, 0, TAU);
+    ctx.fill();
+
+    for (let i = 0; i < 16; i++) {
+      const along = mod(i * 44 * S + scroll * 1.35, len);
+      const x = tornadoX - along;
+      const y = baseY + Math.sin(i * 3.7) * 11 * S;
+      const near = 1 - along / len;
+      ctx.fillStyle = "rgba(70, 28, 8, " + (0.25 + near * 0.55) + ")";
+      ctx.fillRect(x, y, (5 + (i % 4) * 3) * S, (3 + (i % 3)) * S);
+      ctx.strokeStyle = "rgba(255, 150, 40, " + (0.05 + near * 0.2) + ")";
+      ctx.lineWidth = Math.max(1, 1.6 * S);
+      ctx.beginPath();
+      ctx.moveTo(x - 16 * S, y + 2 * S);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+    }
+  }
+
+  function drawShadow() {
+    const g = ctx.createRadialGradient(tornadoX - 16 * S, baseY, 8 * S, tornadoX - 24 * S, baseY, maxR * 1.7);
+    g.addColorStop(0, "rgba(30, 0, 28, 0.48)");
+    g.addColorStop(1, "rgba(30, 0, 28, 0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(tornadoX - 20 * S, baseY + 12 * S, maxR * 1.55, maxR * 0.42, -0.18, 0, TAU);
+    ctx.fill();
+  }
+
+  function drawColumn(mode) {
+    const core = mode === "core";
+    const n = core ? 24 : 40;
+    const scale = core ? 0.4 : 1;
+    if (core) ctx.globalCompositeOperation = "lighter";
+    for (let i = 0; i < n; i++) {
+      const h0 = i / n;
+      const h1 = (i + 1) / n;
+      const r0 = profile(h0) * maxR * scale + 1;
+      const r1 = profile(h1) * maxR * scale + 1;
+      const x0 = axisX(h0);
+      const x1 = axisX(h1);
+      const y0 = axisY(h0) + 1.2;
+      const y1 = axisY(h1) - 1.2;
+      ctx.beginPath();
+      ctx.moveTo(x0 - r0, y0);
+      ctx.lineTo(x0 + r0, y0);
+      ctx.lineTo(x1 + r1, y1);
+      ctx.lineTo(x1 - r1, y1);
+      ctx.closePath();
+      const grad = ctx.createLinearGradient(x0 - r0, y0, x0 + r0, y0);
+      if (core) {
+        const a = (h0 < 0.25 ? 0.22 : 0.1) * (1 - h0 * 0.35);
+        grad.addColorStop(0, "rgba(255, 140, 40, 0)");
+        grad.addColorStop(0.4, "rgba(255, 220, 140, " + a + ")");
+        grad.addColorStop(0.62, "rgba(255, 250, 220, " + (a * 1.3) + ")");
+        grad.addColorStop(1, "rgba(255, 160, 40, 0)");
+      } else if (h0 < 0.32) {
+        const a = 0.34 + h0 * 0.2;
+        grad.addColorStop(0, "rgba(150, 20, 90, " + a + ")");
+        grad.addColorStop(0.42, "rgba(255, 120, 20, " + (a * 0.85) + ")");
+        grad.addColorStop(0.7, "rgba(255, 210, 90, " + a + ")");
+        grad.addColorStop(1, "rgba(255, 90, 10, " + (a * 0.7) + ")");
+      } else {
+        const a = 0.46 + h0 * 0.16;
+        grad.addColorStop(0, "rgba(48, 6, 82, " + a + ")");
+        grad.addColorStop(0.38, "rgba(72, 20, 110, " + (a * 0.75) + ")");
+        grad.addColorStop(0.62, "rgba(150, 50, 120, " + (a * 0.55) + ")");
+        grad.addColorStop(0.82, "rgba(255, 150, 50, " + (a * 0.85) + ")");
+        grad.addColorStop(1, "rgba(255, 210, 90, " + (0.35 + h0 * 0.2) + ")");
+      }
+      ctx.fillStyle = grad;
+      ctx.fill();
+    }
+    ctx.globalCompositeOperation = "source-over";
+  }
+
+  function drawEdges() {
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (let side = -1; side <= 1; side += 2) {
+      ctx.beginPath();
+      for (let i = 0; i <= 42; i++) {
+        const h = i / 42;
+        const x = axisX(h) + side * profile(h) * maxR;
+        const y = axisY(h);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.lineWidth = Math.max(2, (side < 0 ? 6 : 5) * S);
+      ctx.strokeStyle = side < 0 ? "rgba(120, 10, 140, 0.8)" : "rgba(255, 196, 60, 0.92)";
+      ctx.stroke();
+    }
+  }
+
+  function drawRibbons() {
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ribbon(0.02, 0.96, 0.55, 5.5, "rgba(255, 186, 40, 0.55)", 3.1, 0);
+    ribbon(0.0, 0.82, 0.22, 3.2, "rgba(255, 250, 210, 0.7)", 4.2, 1.4);
+    ribbon(0.35, 1, 0.86, 4, "rgba(255, 50, 170, 0.28)", 2.2, 2.2);
+    ctx.restore();
+  }
+
+  function ribbon(h0, h1, radMul, width, color, turns, phase) {
+    ctx.beginPath();
+    const n = 56;
+    for (let i = 0; i <= n; i++) {
+      const h = h0 + (h1 - h0) * (i / n);
+      const th = phase + h * turns * TAU + time * 3.15;
+      const r = profile(h) * maxR * radMul;
+      const x = axisX(h) + Math.cos(th) * r;
+      const y = axisY(h) + Math.sin(th) * r * 0.3;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(1.25, width * S);
+    ctx.stroke();
+  }
+
+  function drawMouth() {
+    const h = 0.985;
+    const r = profile(h) * maxR;
+    ctx.fillStyle = "rgba(8, 0, 18, 0.55)";
+    ctx.beginPath();
+    ctx.ellipse(axisX(h), axisY(h), r * 0.62, Math.max(3, r * 0.16), 0, 0, TAU);
+    ctx.fill();
+  }
+
+  function drawGlow() {
+    for (let i = 0; i < 7; i++) {
+      const h = i / 6;
+      const x = axisX(h);
+      const y = axisY(h);
+      const r = profile(h) * maxR * 1.55;
+      const g = ctx.createRadialGradient(x, y, r * 0.15, x, y, r);
+      const hot = h < 0.35;
+      g.addColorStop(0, hot ? "rgba(255, 140, 30, 0.2)" : "rgba(180, 40, 140, 0.1)");
+      g.addColorStop(1, "rgba(255, 80, 20, 0)");
+      ctx.fillStyle = g;
+      ctx.fillRect(x - r, y - r * 0.45, r * 2, r * 0.9);
+    }
+  }
+
+  function dustColor(p, light) {
+    if (p.core) return [255, 236, 190];
+    return [
+      mix(170, 255, light),
+      mix(36, 176, light),
+      mix(110, 48, light)
+    ];
+  }
+
+  function drawDustList(list) {
+    ctx.lineCap = "round";
+    for (let i = 0; i < list.length; i++) {
+      const p = list[i];
+      const q = project(p, p.h, p.rad);
+      const light = Math.max(0, Math.min(1, 0.5 + 0.5 * q.ex));
+      const fade = Math.min(1, p.h / 0.045) * Math.min(1, (1.02 - p.h) / 0.08);
+      const frontMul = q.ez > 0 ? 1 : 0.55;
+      const alpha = fade * (0.28 + light * 0.6) * frontMul;
+      if (alpha < 0.03) continue;
+      const len = (7 + p.sz * 16) * S * (1.15 - p.h * 0.35) * (p.core ? 1.25 : 1);
+      const tx = -q.ez * len;
+      const ty = q.ex * len * 0.3 - len * (p.core ? 0.65 : 0.32);
+      const c = dustColor(p, light);
+      ctx.strokeStyle = rgba(c[0], c[1], c[2], alpha);
+      ctx.lineWidth = Math.max(1.15, (p.core ? 1.8 : 1.25) * S * (0.7 + p.sz) * (q.ez > 0 ? 1.35 : 0.85));
+      ctx.beginPath();
+      ctx.moveTo(q.x, q.y);
+      ctx.lineTo(q.x + tx, q.y + ty);
+      ctx.stroke();
+    }
+  }
+
+  function chunkColor(p, light) {
+    const c = DEBRIS[(p.hue * DEBRIS.length) | 0];
+    const k = 0.42 + 0.58 * light;
+    return rgba(c[0] * k, c[1] * k, c[2] * k, 0.95);
+  }
+
+  function drawChunkList(list) {
+    for (let i = 0; i < list.length; i++) {
+      const p = list[i];
+      const q = project(p, p.h, p.rad);
+      const light = Math.max(0, Math.min(1, 0.5 + 0.5 * q.ex));
+      const fade = Math.min(1, p.h / 0.04) * Math.min(1, (1.05 - p.h) / 0.1);
+      if (fade < 0.04) continue;
+      const hero = p.hue > 0.9 ? 2.15 : 1;
+      const s = (p.kind < 0.65 ? 7 : 12) * S * (0.55 + p.sz) * hero * (q.ez > 0 ? 1.3 : 0.78) * (1.2 - p.h * 0.45);
+      ctx.save();
+      ctx.translate(q.x, q.y);
+      ctx.rotate(p.rot);
+      ctx.globalAlpha = Math.min(1, fade);
+      ctx.fillStyle = chunkColor(p, light);
+      if (p.kind < 0.42) {
+        ctx.fillRect(-s * 1.4, -s * 0.28, s * 2.8, s * 0.56);
+      } else if (p.kind < 0.72) {
+        ctx.beginPath();
+        ctx.moveTo(-s, s * 0.45);
+        ctx.lineTo(0, -s * 0.7);
+        ctx.lineTo(s * 0.9, s * 0.35);
+        ctx.closePath();
+        ctx.fill();
+      } else {
+        ctx.beginPath();
+        ctx.ellipse(0, 0, s, s * 0.62, 0, 0, TAU);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+
+  function drawInflowList(list) {
+    for (let i = 0; i < list.length; i++) {
+      const p = list[i];
+      const dist = p.dist;
+      const R = (50 + dist * 480) * S;
+      const ex = Math.cos(p.th);
+      const ez = Math.sin(p.th);
+      const x = tornadoX + ex * R;
+      const y = baseY - (1 - Math.min(1, dist)) * p.yBias * 130 * S + ez * R * 0.1 - Math.abs(Math.sin(time * p.sp * 3 + p.hue * 6)) * 8 * S * (1 - dist);
+      if (x < -40 || x > W + 40 || y < -40 || y > H + 40) continue;
+      const light = Math.max(0, Math.min(1, 0.5 + 0.5 * ex));
+      const alpha = Math.min(1, dist * 7) * Math.min(1, (1.2 - dist) * 1.8);
+      if (alpha < 0.04) continue;
+      const hero = p.hue > 0.88 ? 2.3 : 1;
+      const s = (4 + p.sz * 8) * S * hero * (0.7 + (1 - Math.min(1, dist)) * 0.6);
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(p.rot);
+      ctx.globalAlpha = Math.min(1, alpha);
+      ctx.fillStyle = chunkColor(p, light);
+      if (p.kind < 0.5) ctx.fillRect(-s * 1.3, -s * 0.25, s * 2.6, s * 0.5);
+      else if (p.kind < 0.78) {
+        ctx.beginPath();
+        ctx.moveTo(-s, s * 0.3);
+        ctx.lineTo(0, -s * 0.55);
+        ctx.lineTo(s, s * 0.35);
+        ctx.closePath();
+        ctx.fill();
+      } else {
+        ctx.beginPath();
+        ctx.arc(0, 0, s * 0.7, 0, TAU);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+
+  function drawBaseRing() {
+    const x = axisX(0.01);
+    const y = baseY + 2 * S;
+    const rx = profile(0) * maxR * 1.02;
+    const ry = Math.max(8 * S, rx * 0.26);
+    ctx.save();
+    ctx.translate(x, y);
+    const g = ctx.createRadialGradient(0, 0, rx * 0.15, 0, 0, rx);
+    g.addColorStop(0, "rgba(255, 220, 140, 0.2)");
+    g.addColorStop(0.4, "rgba(255, 120, 20, 0.32)");
+    g.addColorStop(0.72, "rgba(120, 30, 40, 0.18)");
+    g.addColorStop(1, "rgba(80, 10, 20, 0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, rx, ry, 0, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 214, 90, 0.7)";
+    ctx.lineWidth = Math.max(1.5, 3 * S);
+    for (let i = 0; i < 5; i++) {
+      const a = time * 3.8 + i * (TAU / 5);
+      ctx.beginPath();
+      ctx.ellipse(0, 0, rx * 0.88, ry * 0.88, 0, a, a + 0.62);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawDustPuffs() {
+    for (let i = 0; i < 6; i++) {
+      const th = time * (1.15 + i * 0.17) + i * 1.6;
+      const rr = (60 + i * 28) * S * profile(0);
+      const x = axisX(0.02) + Math.cos(th) * rr;
+      const y = baseY - 6 * S + Math.sin(th) * rr * 0.22 - i * 4 * S;
+      const rad = (40 + (i % 3) * 26) * S;
+      const g = ctx.createRadialGradient(x, y, 0, x, y, rad);
+      g.addColorStop(0, i % 2 ? "rgba(255, 170, 40, 0.33)" : "rgba(255, 80, 120, 0.2)");
+      g.addColorStop(1, "rgba(255, 80, 0, 0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(x, y, rad, 0, TAU);
+      ctx.fill();
+    }
+  }
+
+  function drawHaze() {
+    const r = Math.max(maxR * 2.1, 280 * S);
+    const g = ctx.createRadialGradient(tornadoX, baseY, 16 * S, tornadoX, baseY, r);
+    g.addColorStop(0, "rgba(255, 150, 30, 0.26)");
+    g.addColorStop(0.45, "rgba(200, 50, 40, 0.1)");
+    g.addColorStop(1, "rgba(200, 40, 20, 0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(tornadoX, baseY, r, r * 0.42, 0, 0, TAU);
+    ctx.fill();
+  }
+
+  function drawTruck(x, ground, inf, seed) {
+    const lift = inf * inf * 210 * S;
+    const rot = inf * Math.sign(tornadoX - x || 1) * 1.15;
+    const slide = (tornadoX - x) * inf * 0.12;
+    const hue = hash(seed + 8);
+    ctx.save();
+    ctx.translate(x + slide, ground - lift);
+    ctx.rotate(rot);
+    ctx.fillStyle = hue < 0.45 ? "#ff2438" : (hue < 0.75 ? "#ffd000" : "#00d2c8");
+    ctx.fillRect(-30 * S, -18 * S, 60 * S, 18 * S);
+    ctx.fillStyle = "#b8f6ff";
+    ctx.fillRect(-6 * S, -32 * S, 26 * S, 16 * S);
+    ctx.fillStyle = "#14080c";
+    ctx.beginPath();
+    ctx.arc(-16 * S, 2 * S, 6.5 * S, 0, TAU);
+    ctx.arc(18 * S, 2 * S, 6.5 * S, 0, TAU);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255, 230, 160, 0.8)";
+    ctx.fillRect(28 * S, -16 * S, 3 * S, 14 * S);
+    ctx.restore();
+  }
+
+  function drawTrucks() {
+    const sp = 760 * S;
+    const o = scroll * 1.05;
+    const i0 = Math.floor(o / sp) - 1;
+    const i1 = i0 + Math.ceil(W / sp) + 3;
+    for (let i = i0; i <= i1; i++) {
+      if (hash(i * 29 + 13) < 0.35) continue;
+      const x = i * sp - o + (hash(i + 3) - 0.5) * 40 * S;
+      const ground = baseY + 2 * S;
+      const inf = influence(x, ground, 140, 80);
+      drawTruck(x, ground, inf, i);
+    }
+  }
+
+  function drawBale(x, y, rot, sc) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rot);
+    ctx.fillStyle = "#ffb000";
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 24 * S * sc, 15 * S * sc, 0, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = "#fff1b8";
+    ctx.lineWidth = Math.max(1, 2 * S);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 15 * S * sc, 8 * S * sc, 0, 0, TAU);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawBales(layer) {
+    const sp = 280 * S;
+    const factor = layer ? 1.28 : 0.66;
+    const o = scroll * factor;
+    const i0 = Math.floor(o / sp) - 1;
+    const i1 = i0 + Math.ceil(W / sp) + 3;
+    for (let i = i0; i <= i1; i++) {
+      if (hash(i + layer * 800 + 15) < 0.42) continue;
+      const x = i * sp - o;
+      const y = layer
+        ? baseY + (28 + hash(i + 21) * 64) * S
+        : horizon + (baseY - horizon) * (0.22 + hash(i + 22) * 0.38);
+      const inf = influence(x, y, layer ? 120 : 100, layer ? 90 : 70);
+      const lift = inf * inf * (layer ? 170 : 80) * S;
+      const rot = Math.sin(time * 0.7 + i) * 0.06 + inf * Math.sign(tornadoX - x || 1) * 2.4;
+      const slide = (tornadoX - x) * inf * 0.1;
+      drawBale(x + slide, y - lift, rot, layer ? 1.05 : 0.75);
+    }
+  }
+
+  function drawCorn() {
+    const spacing = Math.max(10, 15 * S);
+    const speed = scroll * 1.35;
+    const i0 = Math.floor(speed / spacing) - 1;
+    const i1 = i0 + Math.ceil(W / spacing) + 3;
+    for (let i = i0; i <= i1; i++) {
+      const x = i * spacing - speed;
+      const nse = hash(i * 13 + 91);
+      const dx = (x - tornadoX) / Math.max(1, S);
+      const inf = Math.exp(-(dx * dx) / (2 * 170 * 170));
+      const h = (64 + nse * 58) * S * (1 - inf * 0.72);
+      const leanAmt = Math.sin(time * 2.6 + i * 0.45) * 7 * S + (tornadoX - x) * inf * 0.18;
+      const colR = mix(10, 196, inf);
+      const colG = mix(180, 110, inf);
+      const colB = mix(48, 24, inf);
+      const topX = x + leanAmt;
+      const topY = H - h;
+      ctx.strokeStyle = rgba(colR, colG, colB, 1);
+      ctx.lineWidth = Math.max(1.4, 2.4 * S);
+      ctx.beginPath();
+      ctx.moveTo(x, H + 2);
+      ctx.quadraticCurveTo(x + leanAmt * 0.35, H - h * 0.45, topX, topY);
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(0, 110, 40, 0.85)";
+      ctx.lineWidth = Math.max(1, 1.6 * S);
+      ctx.beginPath();
+      ctx.moveTo(x + 1, H - h * 0.35);
+      ctx.quadraticCurveTo(x + leanAmt * 0.2 - 10 * S, H - h * 0.55, x + leanAmt * 0.4 - 16 * S, H - h * 0.42);
+      ctx.stroke();
+      if (inf < 0.65) {
+        ctx.fillStyle = "#ffe14a";
+        ctx.fillRect(topX - 1.6 * S, topY - 9 * S, Math.max(2, 3.2 * S), 10 * S);
+      }
+    }
+  }
+
+  function drawFlash() {
+    if (!bolt) return;
+    const a = Math.min(1, bolt.life * 5) * 0.16;
+    ctx.fillStyle = "rgba(255, 236, 255, " + a + ")";
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  function drawVignette() {
+    const r0 = Math.min(W, H) * 0.42;
+    const r1 = Math.max(W, H) * 0.72;
+    const g = ctx.createRadialGradient(W * 0.5, H * 0.5, r0, W * 0.5, H * 0.5, r1);
+    g.addColorStop(0, "rgba(0, 0, 0, 0)");
+    g.addColorStop(1, "rgba(16, 0, 24, 0.38)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  function update(dt) {
+    scroll += 128 * S * dt;
+    for (let i = 0; i < dust.length; i++) updateOrbit(dust[i], dt);
+    for (let i = 0; i < chunks.length; i++) updateOrbit(chunks[i], dt);
+    for (let i = 0; i < inflow.length; i++) updateInflow(inflow[i], dt);
+    nextBolt -= dt;
+    if (bolt) {
+      bolt.life -= dt;
+      if (bolt.life <= 0) bolt = null;
+    } else if (nextBolt <= 0) {
+      spawnBolt();
+      nextBolt = 2.6 + Math.random() * 3.4;
+    }
+  }
+
+  function draw() {
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+    drawSky();
+    drawAnvil();
+    drawGreenCore();
+    drawSun();
+    drawRays();
+    drawDriftClouds();
+    drawWallCloud();
+    drawRain();
+    drawHills();
+    drawFields();
+    drawCloudShadows();
+    drawRoad();
+    drawHorizonHaze();
+    drawBolt();
+    drawFarStructures();
+    drawPoles();
+    drawMidFarms();
+    drawFence();
+    drawBales(0);
+    drawWake();
+    drawShadow();
+    drawGlow();
+    drawDustPuffs();
+    splitDepth(inflow);
+    const inflowBack = back.slice();
+    const inflowFront = front.slice();
+    drawInflowList(inflowBack);
+    splitDepth(dust);
+    const dustBack = back.slice();
+    const dustFront = front.slice();
+    splitDepth(chunks);
+    const chunkBack = back.slice();
+    const chunkFront = front.slice();
+    drawDustList(dustBack);
+    drawChunkList(chunkBack);
+    drawColumn("body");
+    drawColumn("core");
+    drawEdges();
+    drawRibbons();
+    drawMouth();
+    drawTrucks();
+    drawDustList(dustFront);
+    drawChunkList(chunkFront);
+    drawInflowList(inflowFront);
+    drawBaseRing();
+    drawBales(1);
+    drawHaze();
+    drawCorn();
+    drawFlash();
+    drawVignette();
+  }
+
+  function frame(now) {
+    if (!last) last = now;
+    let dt = (now - last) / 1000;
+    last = now;
+    if (dt < 0) dt = 0;
+    if (dt > 0.05) dt = 0.05;
+    time += dt;
+    const rw = window.innerWidth;
+    const rh = window.innerHeight;
+    const rd = window.devicePixelRatio || 1;
+    if (rw !== viewW || rh !== viewH || Math.abs(rd - rawDpr) > 0.001) {
+      viewW = rw;
+      viewH = rh;
+      rawDpr = rd;
+      resize();
+    }
+    if (W >= 2 && H >= 2) {
+      layout();
+      update(dt);
+      draw();
+    }
+    requestAnimationFrame(frame);
+  }
+
+  viewW = window.innerWidth;
+  viewH = window.innerHeight;
+  rawDpr = window.devicePixelRatio || 1;
+  resize();
+  initParticles();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

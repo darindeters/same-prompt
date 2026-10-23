@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#e3f1f1">
+<title>Ink in water</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#e3f1f1}canvas{display:block;width:100%;height:100%;position:fixed;inset:0}body:after{content:"";position:fixed;inset:0;pointer-events:none;box-shadow:inset 0 0 7vw #507c8a25,inset 1px 0 0 #ffffff90,inset -1px 0 0 #ffffff90}
+</style>
+</head>
+<body>
+<canvas aria-label="Colorful ink blooming and swirling as it sinks through water"></canvas>
+<script>
+(()=>{
+'use strict';
+const canvas=document.querySelector('canvas'),ctx=canvas.getContext('2d',{alpha:false});
+const buffer=document.createElement('canvas'),paint=buffer.getContext('2d',{alpha:false});
+// A small incompressible fluid carries three channels of pigment absorption.
+// Vorticity confinement keeps the sinking plumes folded into delicate curls.
+const N=204,S=N+2,L=S*S,dt=1/60;
+buffer.width=N;buffer.height=N;
+let u=new Float32Array(L),v=new Float32Array(L),ut=new Float32Array(L),vt=new Float32Array(L);
+let dyes=[new Float32Array(L),new Float32Array(L),new Float32Array(L)],temp=dyes.map(()=>new Float32Array(L));
+const pressure=new Float32Array(L),div=new Float32Array(L),curl=new Float32Array(L),pixels=paint.createImageData(N,N);
+const colors=[[.04,1.75,.42],[1.9,.12,.025],[.025,.64,2.4],[.66,1.85,.035],[1.7,.02,.65]];
+let width,height,clock=0,nextDrop=0,sequence=0,drops=[],last=0,accumulator=0;
+function resize(){width=innerWidth;height=innerHeight;const d=Math.min(devicePixelRatio||1,2);canvas.width=Math.round(width*d);canvas.height=Math.round(height*d);ctx.setTransform(d,0,0,d,0,0)}
+addEventListener('resize',resize,{passive:true});resize();
+const random=(a,b)=>a+Math.random()*(b-a);
+function boundary(a,type){for(let i=1;i<=N;i++){a[i]=type===2?-a[S+i]:a[S+i];a[(N+1)*S+i]=type===2?-a[N*S+i]:a[N*S+i];a[i*S]=type===1?-a[i*S+1]:a[i*S+1];a[i*S+N+1]=type===1?-a[i*S+N]:a[i*S+N]}}
+function advect(out,src,ux,vy,fade){for(let y=1;y<=N;y++)for(let x=1;x<=N;x++){const k=y*S+x;let px=Math.max(.5,Math.min(N+.5,x-dt*ux[k])),py=Math.max(.5,Math.min(N+.5,y-dt*vy[k]));const ix=px|0,iy=py|0,fx=px-ix,fy=py-iy,j=iy*S+ix;out[k]=fade*((1-fy)*((1-fx)*src[j]+fx*src[j+1])+fy*((1-fx)*src[j+S]+fx*src[j+S+1]))}}
+function project(){pressure.fill(0);for(let y=1;y<=N;y++)for(let x=1;x<=N;x++){let k=y*S+x;div[k]=-.5*(u[k+1]-u[k-1]+v[k+S]-v[k-S])}boundary(div,0);for(let n=0;n<13;n++){for(let y=1;y<=N;y++)for(let x=1;x<=N;x++){let k=y*S+x;pressure[k]=(div[k]+pressure[k-1]+pressure[k+1]+pressure[k-S]+pressure[k+S])*.25}boundary(pressure,0)}for(let y=1;y<=N;y++)for(let x=1;x<=N;x++){let k=y*S+x;u[k]-=.5*(pressure[k+1]-pressure[k-1]);v[k]-=.5*(pressure[k+S]-pressure[k-S])}boundary(u,1);boundary(v,2)}
+function splat(x,y,r,dx,dy,color,amount){const left=Math.max(1,Math.floor(x-r*3)),right=Math.min(N,Math.ceil(x+r*3)),top=Math.max(1,Math.floor(y-r*3)),bottom=Math.min(N,Math.ceil(y+r*3));for(let j=top;j<=bottom;j++)for(let i=left;i<=right;i++){const k=j*S+i,w=Math.exp(-((i-x)**2+(j-y)**2)/(r*r));u[k]+=dx*w;v[k]+=dy*w;if(color)for(let c=0;c<3;c++)dyes[c][k]+=color[c]*amount*w}}
+function newDrop(){const positions=[.30,.65,.47,.77,.21,.56];const c=sequence%colors.length;drops.push({x:N*(positions[sequence%positions.length]+random(-.035,.035)),y:N*random(.015,.05),age:0,color:colors[c],phase:random(0,6.28),speed:random(8,12),r:random(1.5,2.3)});sequence++;nextDrop=clock+random(2.6,3.7)}
+function step(){clock+=dt;if(clock>=nextDrop)newDrop();for(let i=drops.length-1;i>=0;i--){const d=drops[i];d.age+=dt;d.y+=d.speed*dt;d.x+=Math.sin(d.age*1.6+d.phase)*dt*1.8;const strength=Math.max(0,1-d.age/6.6);if(strength<=0){drops.splice(i,1);continue}const r=d.r+Math.min(d.age,4)*.65;
+// The heavy center pushes down, while its shoulders roll outward and upward.
+splat(d.x,d.y,r,Math.sin(d.age*2+d.phase)*1.4,14*strength,d.color,.19*strength);
+splat(d.x-r*1.6,d.y+r*.1,r*1.2,-5.8*strength,-2.8*strength,null,0);
+splat(d.x+r*1.6,d.y+r*.1,r*1.2,5.8*strength,-2.8*strength,null,0);
+if(d.age<1.5)splat(d.x+Math.sin(d.age*3)*.5,Math.max(2,d.y-r*1.8),.65,0,3,d.color,.07*strength);
+}
+for(let y=1;y<=N;y++)for(let x=1;x<=N;x++){const k=y*S+x;curl[k]=.5*(v[k+1]-v[k-1]-u[k+S]+u[k-S])}
+for(let y=2;y<N;y++)for(let x=2;x<N;x++){const k=y*S+x;let gx=Math.abs(curl[k+1])-Math.abs(curl[k-1]),gy=Math.abs(curl[k+S])-Math.abs(curl[k-S]);const len=Math.sqrt(gx*gx+gy*gy)+.0001;u[k]+=dt*5*gy/len*curl[k];v[k]-=dt*5*gx/len*curl[k];v[k]+=dt*.8*Math.min(3,dyes[0][k]+dyes[1][k]+dyes[2][k]);}
+project();advect(ut,u,u,v,.998);advect(vt,v,u,v,.998);[u,ut]=[ut,u];[v,vt]=[vt,v];boundary(u,1);boundary(v,2);project();
+for(let c=0;c<3;c++){advect(temp[c],dyes[c],u,v,.9974);boundary(temp[c],0)}[dyes,temp]=[temp,dyes];
+}
+function render(){const data=pixels.data;for(let y=0;y<N;y++)for(let x=0;x<N;x++){const k=(y+1)*S+x+1,p=(y*N+x)*4;const edge=Math.pow(Math.abs(x/N-.5)*2,8);const light=1-.045*(y/N)-edge*.065;const total=dyes[0][k]+dyes[1][k]+dyes[2][k];const relief=Math.max(-.06,Math.min(.06,(dyes[0][k-S]+dyes[1][k-S]+dyes[2][k-S]-total)*.022));data[p]=Math.min(255,249*light*Math.exp(-1.35*dyes[0][k])+relief*220);data[p+1]=Math.min(255,253*light*Math.exp(-1.35*dyes[1][k])+relief*220);data[p+2]=Math.min(255,255*light*Math.exp(-1.35*dyes[2][k])+relief*220);data[p+3]=255}paint.putImageData(pixels,0,0);
+ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';ctx.drawImage(buffer,0,0,width,height);
+// Quiet reflections at the glass rim and along its curved walls.
+let glow=ctx.createLinearGradient(0,0,width,0);glow.addColorStop(0,'rgba(255,255,255,.48)');glow.addColorStop(.025,'rgba(255,255,255,0)');glow.addColorStop(.975,'rgba(255,255,255,0)');glow.addColorStop(1,'rgba(255,255,255,.4)');ctx.fillStyle=glow;ctx.fillRect(0,0,width,height);
+ctx.strokeStyle='rgba(255,255,255,.45)';ctx.lineWidth=1;ctx.beginPath();ctx.ellipse(width*.5,height*.018,width*.49,height*.012,0,0,Math.PI);ctx.stroke();}
+// Begin with developed pigment already in the water, then continue indefinitely.
+newDrop();for(let i=0;i<115;i++)step();nextDrop=clock;newDrop();for(let i=0;i<38;i++)step();render();
+function frame(now){if(!last)last=now;accumulator+=Math.min((now-last)/1000,.05);last=now;let steps=0;while(accumulator>=dt&&steps<3){step();accumulator-=dt;steps++}render();requestAnimationFrame(frame)}
+document.addEventListener('visibilitychange',()=>{last=0;accumulator=0});requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
