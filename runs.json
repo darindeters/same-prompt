@@ -637,5 +637,39 @@
     "elapsed_s": 1164.6
    }
   }
+ },
+ "marble-run": {
+  "title": "Marble Run",
+  "prompt": "Build a marble run where dozens of glass marbles roll down winding tracks, drop through funnels and spin around loops, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it sound effects that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "claude": {
+    "model": "claude-fable-5-1",
+    "effort": "medium",
+    "cli": "2.1.303 (Claude Code)",
+    "start_utc": "2026-10-24T15:33:16Z",
+    "elapsed_s": 1335.1
+   },
+   "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-24T15:55:31Z",
+    "elapsed_s": 151.6
+   },
+   "gemini": {
+    "model": "gemini-4-argon-medium",
+    "effort": "medium",
+    "cli": "1.4.5",
+    "start_utc": "2026-10-24T15:33:12Z",
+    "elapsed_s": 256.9
+   },
+   "grok": {
+    "model": "grok-4.7",
+    "effort": "medium",
+    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
+    "start_utc": "2026-10-24T15:33:16Z",
+    "elapsed_s": 1667.2
+   }
+  }
  }
 }

@@ -235,3 +235,14 @@ Note: Rebuilt on Oct 23, 2026 with the current prompt, which adds the vivid-colo
 | Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:29 | [open](https://darindeters.github.io/same-prompt/neon-city/codex/) |
 | Gemini (4 Argon) | Antigravity CLI 1.4.5 | 2:40 | [open](https://darindeters.github.io/same-prompt/neon-city/gemini/) |
 | Grok (4.7) | Grok Build 1.0.62 | 19:25 | [open](https://darindeters.github.io/same-prompt/neon-city/grok/) |
+
+## Marble Run
+
+> Build a marble run where dozens of glass marbles roll down winding tracks, drop through funnels and spin around loops, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it sound effects that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 22:15 | [open](https://darindeters.github.io/same-prompt/marble-run/claude/) |
+| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:32 | [open](https://darindeters.github.io/same-prompt/marble-run/codex/) |
+| Gemini (4 Argon) | Antigravity CLI 1.4.5 | 4:17 | [open](https://darindeters.github.io/same-prompt/marble-run/gemini/) |
+| Grok (4.7) | Grok Build 1.0.62 | 27:47 | [open](https://darindeters.github.io/same-prompt/marble-run/grok/) |

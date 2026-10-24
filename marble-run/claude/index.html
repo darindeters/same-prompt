@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Marble Run</title>
+<style>
+  html,body{margin:0;height:100%;background:#1a0b4a;overflow:hidden}
+  canvas{display:block;width:100vw;height:100vh;touch-action:none;cursor:default}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+// @@PHYSICS-START
+const WORLD = 1000, R = 9, G = 1600, TAU = Math.PI * 2, HALF = Math.PI / 2;
+const HUES = [350, 22, 50, 88, 150, 185, 215, 265, 310];
+const GAP0 = 1.7, GAP1 = 2.75; // open arc of each loop ring (radians, lower-left)
+let fx = function () {};
+
+function seg(ax, ay, bx, by, p) {
+  const dx = bx - ax, dy = by - ay, len = Math.hypot(dx, dy) || 1e-6;
+  return Object.assign({
+    ax, ay, bx, by, len, ux: dx / len, uy: dy / len,
+    minx: Math.min(ax, bx) - R - 1, maxx: Math.max(ax, bx) + R + 1,
+    miny: Math.min(ay, by) - R - 1, maxy: Math.max(ay, by) + R + 1,
+    loop: null, theta: 0, kind: 'track', color: '#fff'
+  }, p);
+}
+function polyline(pts, p) {
+  const out = [];
+  for (let i = 0; i < pts.length - 1; i++) out.push(seg(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], p));
+  return out;
+}
+function wavy(x0, y0, x1, y1, waves, n) {
+  const pts = [], amp = 0.8 * Math.abs(y1 - y0) / (TAU * waves);
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    pts.push([x0 + (x1 - x0) * t, y0 + (y1 - y0) * t + amp * Math.sin(TAU * waves * t)]);
+  }
+  return pts;
+}
+// analytic circular arc collider (marbles may touch it from either side); a0 < a1, span <= TAU
+function arc(cx, cy, r, a0, a1, p) {
+  return Object.assign({ cx, cy, r, a0, span: a1 - a0, loop: null, kind: 'arc', color: '#fff',
+    minx: cx - r - R - 1, maxx: cx + r + R + 1, miny: cy - r - R - 1, maxy: cy + r + R + 1 }, p);
+}
+
+function buildWorld() {
+  const segs = [], arcs = [], loops = [], funnels = [], shapes = [];
+  function track(pts, color, kind) { shapes.push({ type: 'poly', pts, color, kind }); for (const s of polyline(pts, { color, kind, e: kind === 'wall' ? 0.02 : 0.25 })) segs.push(s); }
+  function ramp(cx, cy, r, a0, a1, color) { shapes.push({ type: 'arc', cx, cy, r, a0, a1, color }); arcs.push(arc(cx, cy, r, a0, a1, { color })); }
+  function loop(cx, cy, r, color) {
+    // ring open on the lower-left (angles GAP0..GAP1) where the floor enters and marbles leave
+    const L = { id: loops.length, cx, cy, r, color };
+    loops.push(L);
+    shapes.push({ type: 'arc', cx, cy, r, a0: GAP1, a1: GAP0 + TAU, color, ring: true });
+    arcs.push(arc(cx, cy, r, GAP1, GAP0 + TAU, { loop: L, kind: 'loop', color }));
+  }
+  function funnel(lx, ly, rx, ry, hx, hy, gap, chute, color) {
+    const hl = hx - gap / 2, hr = hx + gap / 2;
+    track([[lx, ly], [hl, hy], [hl, hy + chute]], color, 'funnel');
+    track([[rx, ry], [hr, hy], [hr, hy + chute]], color, 'funnel');
+    funnels.push({ x: hx, y: hy + chute });
+  }
+  const C = { cyan: '#00f0ff', lime: '#9dff00', yellow: '#ffe600', orange: '#ff8a00', pink: '#ff2bd6', violet: '#c45cff' };
+
+  track([[0, -80], [0, 32]], C.cyan, 'wall');                      // left guard
+  track(wavy(0, 30, 440, 95, 1.5, 28), C.cyan, 'track');            // T1
+  funnel(430, 108, 700, 45, 545, 205, 30, 15, C.pink);              // F1
+  track(wavy(640, 250, 150, 295, 1.5, 28), C.lime, 'track');        // T2
+  track([[120, 232], [120, 403]], C.lime, 'wall');                  // W1
+  ramp(195, 403, 75, HALF, Math.PI, C.lime);                        // A1 ramp (quarter bowl)
+  track([[195, 478], [300, 486], [440, 498]], C.yellow, 'track');   // floor 1 (sloped through loop bottom)
+  loop(300, 442, 44, C.violet);                                     // L1
+  track(wavy(440, 498, 830, 560, 1.5, 28), C.yellow, 'track');      // T3
+  track([[1000, 390], [1000, 522]], C.pink, 'wall');                // right guard
+  funnel(820, 574, 1000, 520, 915, 675, 30, 13, C.pink);            // F2
+  track(wavy(960, 715, 480, 760, 1.5, 28), C.orange, 'track');      // T4
+  track([[450, 700], [450, 873]], C.orange, 'wall');                // W2
+  ramp(510, 873, 60, HALF, Math.PI, C.orange);                      // A2 ramp
+  track([[510, 933], [600, 941], [760, 953]], C.cyan, 'track');     // floor 2
+  loop(600, 901, 40, C.violet);                                     // L2
+  track(wavy(760, 953, 985, 972, 1, 20), C.cyan, 'track');          // T5
+  return { segs, arcs, loops, funnels, shapes };
+}
+
+function updateLoop(m, L, st, dt) {
+  const dx = m.x - L.cx, dy = m.y - L.cy, d = Math.hypot(dx, dy);
+  if (d > L.r + 2 * R) {
+    if (st.inside) { st.inside = false; st.acc = 0; st.t = 0; st.exiting = false; }
+    return;
+  }
+  const th = Math.atan2(dy, dx);
+  if (!st.inside) { st.inside = true; st.prev = th; st.acc = 0; st.t = 0; st.exiting = false; return; }
+  let dth = th - st.prev; if (dth > Math.PI) dth -= TAU; else if (dth < -Math.PI) dth += TAU;
+  st.prev = th; st.acc += dth; st.t += dt;
+  if (st.exiting) return;
+  if (Math.abs(st.acc) > 5.3) { st.exiting = true; fx('loop', m, 1); }                 // made it round
+  else if (st.t > 0.9 || (Math.abs(st.acc) > 0.3 && dth * st.acc < 0)) st.exiting = true; // stalled or rolled back: let it out
+}
+
+function resolve(m, nx, ny, pen, dt, e) {
+  m.x += nx * pen; m.y += ny * pen;
+  const tx = -ny, ty = nx;
+  let vn = m.vx * nx + m.vy * ny, vt = m.vx * tx + m.vy * ty;
+  if (vn < 0) { if (-vn > 110) fx('hit', m, -vn); vn = -vn * e; }
+  vt *= (1 - 0.14 * dt);
+  m.vx = vn * nx + vt * tx; m.vy = vn * ny + vt * ty;
+  m.contact = true; m.cs = Math.abs(vt); m.spin += vt / R * dt;
+}
+
+function collide(m, s, dt) {
+  const dx = m.x - s.ax, dy = m.y - s.ay;
+  let t = dx * s.ux + dy * s.uy; if (t < 0) t = 0; else if (t > s.len) t = s.len;
+  const px = s.ax + s.ux * t, py = s.ay + s.uy * t;
+  let nx = m.x - px, ny = m.y - py; const d = Math.hypot(nx, ny);
+  if (d >= R || d < 1e-9) return;
+  resolve(m, nx / d, ny / d, R - d, dt, s.e);
+}
+
+function collideArc(m, A, dt) {
+  const dx = m.x - A.cx, dy = m.y - A.cy, d = Math.hypot(dx, dy);
+  if (d < 1e-9 || d <= A.r - R || d >= A.r + R) return;
+  const th = Math.atan2(dy, dx);
+  let rel = th - A.a0; rel -= Math.floor(rel / TAU) * TAU;
+  if (rel > A.span) return;
+  if (A.loop) { const st = m.ls[A.loop.id]; if (st.exiting && th > -0.3 && th <= GAP0) return; }
+  if (d < A.r) resolve(m, -dx / d, -dy / d, d - (A.r - R), dt, 0.25);   // riding the inside
+  else resolve(m, dx / d, dy / d, (A.r + R) - d, dt, 0.25);              // touching the outside
+}
+
+function createSim() {
+  const W = buildWorld(), marbles = [], N = 48, queue = [];
+  let time = 0;
+  for (let i = 0; i < N; i++) {
+    const m = { id: i, x: 0, y: -999, vx: 0, vy: 0, spin: 0, hue: HUES[(i * 4) % HUES.length], alive: false, still: 0, contact: false, cs: 0, lastHit: -1, py: 0,
+      ls: W.loops.map(() => ({ inside: false, prev: 0, acc: 0, t: 0, exiting: false })) };
+    marbles.push(m); queue.push({ m, t: 0.3 + i * 0.6 });
+  }
+  function spawn(m) {
+    m.alive = true; m.x = 26 + Math.random() * 20; m.y = -30 - Math.random() * 10; m.vx = 0; m.vy = 0; m.still = 0; m.py = m.y;
+    for (const s of m.ls) { s.inside = false; s.exiting = false; s.acc = 0; s.t = 0; }
+    fx('spawn', m, 1);
+  }
+  function recycle(m, why) { m.alive = false; queue.push({ m, t: time + 0.4 + Math.random() * 1.2 }); if (why === 'stuck') fx('lift', m, 1); }
+  function step(dt) {
+    time += dt;
+    for (let i = queue.length - 1; i >= 0; i--) {
+      const q = queue[i];
+      if (q.t <= time) {
+        let clear = true;
+        for (const o of marbles) if (o.alive && o.y < 12 && o.x < 80) { clear = false; break; }
+        if (clear) { queue.splice(i, 1); spawn(q.m); } else q.t = time + 0.12;
+      }
+    }
+    const drag = 1 - 0.02 * dt, segs = W.segs, arcs = W.arcs, loops = W.loops;
+    for (const m of marbles) {
+      if (!m.alive) continue;
+      m.py = m.y; m.vy += G * dt; m.vx *= drag; m.vy *= drag; m.x += m.vx * dt; m.y += m.vy * dt;
+      m.contact = false; m.cs = 0;
+      for (const L of loops) updateLoop(m, L, m.ls[L.id], dt);
+      for (const s of segs) {
+        if (m.x < s.minx || m.x > s.maxx || m.y < s.miny || m.y > s.maxy) continue;
+        collide(m, s, dt);
+      }
+      for (const a of arcs) {
+        if (m.x < a.minx || m.x > a.maxx || m.y < a.miny || m.y > a.maxy) continue;
+        collideArc(m, a, dt);
+      }
+    }
+    for (let i = 0; i < marbles.length; i++) {
+      const a = marbles[i]; if (!a.alive) continue;
+      for (let j = i + 1; j < marbles.length; j++) {
+        const b = marbles[j]; if (!b.alive) continue;
+        let dx = b.x - a.x, dy = b.y - a.y; const d2 = dx * dx + dy * dy;
+        if (d2 >= 4 * R * R || d2 === 0) continue;
+        const d = Math.sqrt(d2); dx /= d; dy /= d;
+        const pen = (2 * R - d) / 2; a.x -= dx * pen; a.y -= dy * pen; b.x += dx * pen; b.y += dy * pen;
+        const rvn = (b.vx - a.vx) * dx + (b.vy - a.vy) * dy;
+        if (rvn < 0) {
+          const jimp = -(1 + 0.55) * rvn / 2;
+          a.vx -= jimp * dx; a.vy -= jimp * dy; b.vx += jimp * dx; b.vy += jimp * dy;
+          if (-rvn > 70) fx('clink', a, -rvn, b);
+        }
+      }
+    }
+    for (const m of marbles) {
+      if (!m.alive) continue;
+      for (const f of W.funnels) if (m.py < f.y && m.y >= f.y && Math.abs(m.x - f.x) < 22) fx('funnel', m, 1);
+      const sp = Math.hypot(m.vx, m.vy);
+      if (sp < 20) m.still += dt; else m.still = 0;
+      if (m.still > 0.6 && Math.random() < dt * 6) { m.vx += (Math.random() - 0.5) * 90; m.vy -= 45; }
+      if (m.still > 3) recycle(m, 'stuck');
+      else if (m.x < -40 || m.x > 1040 || m.y > 1060) recycle(m, 'exit');
+    }
+  }
+  return { marbles, W, step, get time() { return time; } };
+}
+// @@PHYSICS-END
+
+// ---------------- Rendering ----------------
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const sim = createSim();
+let dpr = 1, cw = 0, ch = 0, scale = 1, ox = 0, oy = 0, bg = null, gloss = null;
+const sprites = {}, particles = [];
+
+function hsl(h, s, l, a) { return a === undefined ? `hsl(${h},${s}%,${l}%)` : `hsla(${h},${s}%,${l}%,${a})`; }
+
+function buildBg() {
+  bg = document.createElement('canvas'); bg.width = cw; bg.height = ch;
+  const g = bg.getContext('2d');
+  const lg = g.createLinearGradient(0, 0, 0, ch);
+  lg.addColorStop(0, '#1b0a52'); lg.addColorStop(0.5, '#2c0b66'); lg.addColorStop(1, '#0a0f44');
+  g.fillStyle = lg; g.fillRect(0, 0, cw, ch);
+  const blobs = [[0.18, 0.2, 'rgba(255,43,214,0.28)'], [0.82, 0.28, 'rgba(0,240,255,0.26)'], [0.3, 0.6, 'rgba(196,92,255,0.22)'], [0.62, 0.9, 'rgba(157,255,0,0.14)'], [0.9, 0.78, 'rgba(255,138,0,0.24)']];
+  const rad = Math.max(cw, ch) * 0.42;
+  for (const [bx, by, col] of blobs) {
+    const rg = g.createRadialGradient(bx * cw, by * ch, 0, bx * cw, by * ch, rad);
+    rg.addColorStop(0, col); rg.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = rg; g.fillRect(0, 0, cw, ch);
+  }
+  // faint dot grid for depth
+  g.fillStyle = 'rgba(255,255,255,0.06)';
+  const gs = 40 * scale;
+  for (let x = ox % gs; x < cw; x += gs) for (let y = oy % gs; y < ch; y += gs) { g.beginPath(); g.arc(x, y, 1.2 * scale, 0, TAU); g.fill(); }
+
+  g.setTransform(scale, 0, 0, scale, ox, oy);
+  g.lineCap = 'round'; g.lineJoin = 'round';
+  const stroke = (build, color) => {
+    g.globalAlpha = 0.28; g.strokeStyle = color; g.lineWidth = 20; build(); g.stroke();
+    g.globalAlpha = 1; g.lineWidth = 7; build(); g.stroke();
+    g.strokeStyle = 'rgba(255,255,255,0.8)'; g.lineWidth = 2; build(); g.stroke();
+  };
+  for (const sh of sim.W.shapes) if (sh.type === 'poly') {
+    stroke(() => { g.beginPath(); g.moveTo(sh.pts[0][0], sh.pts[0][1]); for (let i = 1; i < sh.pts.length; i++) g.lineTo(sh.pts[i][0], sh.pts[i][1]); }, sh.color);
+  }
+  for (const sh of sim.W.shapes) if (sh.type === 'arc') {
+    stroke(() => { g.beginPath(); g.arc(sh.cx, sh.cy, sh.r, sh.a0, sh.a1); }, sh.color);
+    if (!sh.ring) continue;
+    // hub ornament
+    g.globalAlpha = 0.35; g.fillStyle = sh.color; g.beginPath(); g.arc(sh.cx, sh.cy, sh.r * 0.18, 0, TAU); g.fill();
+    g.globalAlpha = 0.6; g.strokeStyle = sh.color; g.lineWidth = 2;
+    for (let k = 0; k < 6; k++) { const a = k / 6 * TAU; g.beginPath(); g.moveTo(sh.cx + Math.cos(a) * sh.r * 0.18, sh.cy + Math.sin(a) * sh.r * 0.18); g.lineTo(sh.cx + Math.cos(a) * (sh.r - 6), sh.cy + Math.sin(a) * (sh.r - 6)); g.stroke(); }
+    g.globalAlpha = 1;
+  }
+  g.setTransform(1, 0, 0, 1, 0, 0);
+}
+
+function buildSprites() {
+  const px = 2 * R * scale, s = Math.ceil(px) + 6, c0 = s / 2, r = px / 2;
+  for (const h of HUES) {
+    const c = document.createElement('canvas'); c.width = c.height = s; const g = c.getContext('2d');
+    const grad = g.createRadialGradient(c0 - r * 0.35, c0 - r * 0.35, r * 0.05, c0, c0, r);
+    grad.addColorStop(0, hsl(h, 100, 88)); grad.addColorStop(0.45, hsl(h, 100, 58)); grad.addColorStop(1, hsl(h, 100, 22));
+    g.fillStyle = grad; g.beginPath(); g.arc(c0, c0, r, 0, TAU); g.fill();
+    g.save(); g.beginPath(); g.arc(c0, c0, r, 0, TAU); g.clip();
+    g.lineCap = 'round'; g.lineWidth = r * 0.34;
+    g.strokeStyle = 'rgba(255,255,255,0.6)'; g.beginPath(); g.arc(c0 + r * 0.3, c0, r * 0.62, 0.7, 2.5); g.stroke();
+    g.strokeStyle = hsl((h + 180) % 360, 100, 70, 0.45); g.beginPath(); g.arc(c0 - r * 0.3, c0, r * 0.62, 3.8, 5.6); g.stroke();
+    g.strokeStyle = 'rgba(0,0,0,0.25)'; g.lineWidth = r * 0.2; g.beginPath(); g.arc(c0, c0 + r * 0.35, r * 0.5, 0.4, 2.1); g.stroke();
+    g.restore();
+    sprites[h] = c;
+  }
+  gloss = document.createElement('canvas'); gloss.width = gloss.height = s; const g = gloss.getContext('2d');
+  const hg = g.createRadialGradient(c0 - r * 0.4, c0 - r * 0.45, 0, c0 - r * 0.4, c0 - r * 0.45, r * 0.55);
+  hg.addColorStop(0, 'rgba(255,255,255,0.95)'); hg.addColorStop(0.35, 'rgba(255,255,255,0.5)'); hg.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = hg; g.beginPath(); g.arc(c0, c0, r, 0, TAU); g.fill();
+  g.strokeStyle = 'rgba(255,255,255,0.45)'; g.lineWidth = Math.max(1, r * 0.12); g.beginPath(); g.arc(c0, c0, r * 0.82, 0.3, 1.6); g.stroke();
+  g.strokeStyle = 'rgba(0,0,0,0.35)'; g.lineWidth = Math.max(1, r * 0.1); g.beginPath(); g.arc(c0, c0, r - g.lineWidth / 2, 0, TAU); g.stroke();
+}
+
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  cw = Math.max(1, Math.round(innerWidth * dpr)); ch = Math.max(1, Math.round(innerHeight * dpr));
+  cv.width = cw; cv.height = ch;
+  scale = Math.min(cw, ch) / WORLD; ox = (cw - WORLD * scale) / 2; oy = (ch - WORLD * scale) / 2;
+  buildBg(); buildSprites();
+}
+window.addEventListener('resize', resize);
+resize();
+
+function sparks(m, n, col) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * TAU, sp = 60 + Math.random() * 220;
+    particles.push({ x: m.x, y: m.y, vx: Math.cos(a) * sp + m.vx * 0.2, vy: Math.sin(a) * sp + m.vy * 0.2, life: 0.25 + Math.random() * 0.3, t: 0, col });
+  }
+  if (particles.length > 400) particles.splice(0, particles.length - 400);
+}
+
+function render(el) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(bg, 0, 0);
+  // particles
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i]; p.t += el; if (p.t >= p.life) { particles.splice(i, 1); continue; }
+    p.vy += G * 0.4 * el; p.x += p.vx * el; p.y += p.vy * el;
+    const k = 1 - p.t / p.life;
+    ctx.globalAlpha = k; ctx.fillStyle = p.col; ctx.beginPath(); ctx.arc(ox + p.x * scale, oy + p.y * scale, (1 + 1.6 * k) * scale, 0, TAU); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  const half = (gloss.width / 2);
+  for (const m of sim.marbles) {
+    if (!m.alive) continue;
+    const sx = ox + m.x * scale, sy = oy + m.y * scale;
+    ctx.fillStyle = 'rgba(0,0,0,0.38)'; ctx.beginPath(); ctx.arc(sx + 2.5 * scale, sy + 3.5 * scale, R * scale, 0, TAU); ctx.fill();
+    const sp = sprites[m.hue], c = Math.cos(m.spin), s = Math.sin(m.spin);
+    ctx.setTransform(c, s, -s, c, sx, sy);
+    ctx.drawImage(sp, -half, -half);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(gloss, sx - half, sy - half);
+  }
+}
+
+// ---------------- Audio ----------------
+let actx = null, master = null, noiseBuf = null, rollGain = null, rollFilter = null;
+let bucketT = 0, bucketN = 0;
+function initAudio() {
+  const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+  try { actx = new AC(); } catch (e) { actx = null; return; }
+  master = actx.createGain(); master.gain.value = 0.55;
+  const comp = actx.createDynamicsCompressor(); comp.threshold.value = -16; comp.ratio.value = 6; comp.attack.value = 0.002; comp.release.value = 0.12;
+  master.connect(comp); comp.connect(actx.destination);
+  noiseBuf = actx.createBuffer(1, actx.sampleRate, actx.sampleRate);
+  const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  const src = actx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+  rollFilter = actx.createBiquadFilter(); rollFilter.type = 'lowpass'; rollFilter.frequency.value = 700; rollFilter.Q.value = 0.7;
+  const hp = actx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 180;
+  rollGain = actx.createGain(); rollGain.gain.value = 0;
+  src.connect(hp); hp.connect(rollFilter); rollFilter.connect(rollGain); rollGain.connect(master); src.start();
+  tryResume();
+}
+function tryResume() { if (actx && actx.state !== 'running') actx.resume().catch(() => {}); }
+function ready() {
+  if (!actx || actx.state !== 'running') return false;
+  const t = actx.currentTime; if (t - bucketT > 0.1) { bucketT = t; bucketN = 0; }
+  if (bucketN >= 14) return false; bucketN++; return true;
+}
+function out(m) {
+  const g = actx.createGain();
+  if (actx.createStereoPanner) { const p = actx.createStereoPanner(); p.pan.value = Math.max(-0.85, Math.min(0.85, (m.x / WORLD * 2 - 1) * 0.85)); g.connect(p); p.connect(master); }
+  else g.connect(master);
+  return g;
+}
+function tone(dest, type, f0, f1, t, dur, vol, curve) {
+  const o = actx.createOscillator(), g = actx.createGain(); o.type = type;
+  o.frequency.setValueAtTime(f0, t); if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(f1, t + dur * (curve || 1));
+  g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(vol, t + 0.002); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g); g.connect(dest); o.start(t); o.stop(t + dur + 0.02);
+}
+function noise(dest, f0, f1, q, t, dur, vol) {
+  const n = actx.createBufferSource(); n.buffer = noiseBuf;
+  const bp = actx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = q; bp.frequency.setValueAtTime(f0, t); if (f1 !== f0) bp.frequency.exponentialRampToValueAtTime(f1, t + dur);
+  const g = actx.createGain(); g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  n.connect(bp); bp.connect(g); g.connect(dest); n.start(t, Math.random() * 0.9); n.stop(t + dur + 0.02);
+}
+function sHit(vol, m) {            // glass marble tapping a rail
+  if (!ready()) return; const t = actx.currentTime, d = out(m), f = 1600 + Math.random() * 2600;
+  tone(d, 'sine', f, f * 0.85, t, 0.07, vol);
+  noise(d, 2500 + Math.random() * 3000, 1800, 1.2, t, 0.03, vol * 0.9);
+}
+function sClink(vol, m) {          // glass on glass
+  if (!ready()) return; const t = actx.currentTime, d = out(m), f = 2300 + Math.random() * 1400;
+  tone(d, 'sine', f, f, t, 0.16, vol); tone(d, 'sine', f * 1.47, f * 1.47, t, 0.12, vol * 0.6); tone(d, 'sine', f * 2.31, f * 2.31, t, 0.06, vol * 0.3);
+  noise(d, 5000, 5000, 2, t, 0.02, vol * 0.5);
+}
+function sFunnel(m) {              // marble dropping through the hole
+  if (!ready()) return; const t = actx.currentTime, d = out(m);
+  tone(d, 'sine', 300, 95, t, 0.12, 0.35, 0.7); noise(d, 900, 300, 1, t, 0.08, 0.2);
+}
+function sLoop(m) {                // whoosh at the end of a loop
+  if (!ready()) return; const t = actx.currentTime, d = out(m);
+  noise(d, 500, 2600, 1.5, t, 0.4, 0.16); tone(d, 'triangle', 420, 980, t, 0.35, 0.08);
+}
+function sSpawn(m) {               // marble released at the top
+  if (!ready()) return; const t = actx.currentTime, d = out(m);
+  tone(d, 'triangle', 1100, 1700, t, 0.1, 0.07);
+}
+function sLift(m) {                // stuck marble popped free
+  if (!ready()) return; const t = actx.currentTime, d = out(m);
+  tone(d, 'square', 500, 1400, t, 0.18, 0.05);
+}
+function audioFrame() {
+  if (!actx || actx.state !== 'running') return;
+  let sum = 0, n = 0;
+  for (const m of sim.marbles) if (m.alive && m.contact) { sum += m.cs; n++; }
+  const t = actx.currentTime;
+  rollGain.gain.setTargetAtTime(Math.min(0.2, sum / 22000), t, 0.06);
+  rollFilter.frequency.setTargetAtTime(400 + Math.min(2200, (n ? sum / n : 0) * 2.2), t, 0.1);
+}
+
+fx = function (type, m, strength) {
+  const now = sim.time, col = hsl(m.hue, 100, 75);
+  if (type === 'hit') {
+    if (now - m.lastHit < 0.06) return; m.lastHit = now;
+    const v = Math.min(1, strength / 900); sparks(m, 2 + Math.round(v * 4), col); sHit(0.07 + v * 0.45, m);
+  } else if (type === 'clink') {
+    if (now - m.lastHit < 0.06) return; m.lastHit = now;
+    sClink(0.08 + Math.min(0.45, strength / 1300), m); sparks(m, 2, '#ffffff');
+  } else if (type === 'funnel') sFunnel(m);
+  else if (type === 'loop') { sLoop(m); sparks(m, 10, col); }
+  else if (type === 'spawn') sSpawn(m);
+  else if (type === 'lift') { sLift(m); sparks(m, 8, col); }
+};
+
+initAudio();
+const unlock = () => { tryResume(); if (actx && actx.state === 'running') for (const ev of ['pointerdown', 'keydown', 'touchstart', 'mousedown']) window.removeEventListener(ev, unlock); };
+for (const ev of ['pointerdown', 'keydown', 'touchstart', 'mousedown']) window.addEventListener(ev, unlock);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) tryResume(); });
+
+// ---------------- Main loop ----------------
+let last = performance.now(), acc = 0; const DT = 1 / 240;
+function frame(now) {
+  requestAnimationFrame(frame);
+  let el = (now - last) / 1000; last = now; if (el > 0.1) el = 0.1;
+  acc += el; let n = 0;
+  while (acc >= DT && n < 30) { sim.step(DT); acc -= DT; n++; }
+  render(el); audioFrame();
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
