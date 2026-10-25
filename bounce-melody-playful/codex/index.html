@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#100823">
+<title>Chromatic Elise</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #100823; }
+  body { touch-action: none; overscroll-behavior: none; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas aria-label="Colorful balls bouncing inside a slowly rotating circle, playing Für Elise"></canvas>
+<script>
+(() => {
+  'use strict';
+  const canvas = document.querySelector('canvas');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const TAU = Math.PI * 2;
+  const R = 405;
+  const colors = ['#ff428a', '#ff7b35', '#ffdb39', '#89ff51', '#20efc2', '#34cfff', '#8e7aff', '#e86aff'];
+  let width, height, scale, dpr, rotation = 0, last = 0, time = 0;
+  const balls = [], sparks = [], ripples = [];
+  let audio = null, master, delay, reverb;
+  let noteIndex = 0;
+  // The opening and contrasting phrases, in their original pitches.
+  const melody = [
+    76,75,76,75,76,71,74,72,69,
+    60,64,69,71,64,68,71,72,
+    64,76,75,76,75,76,71,74,72,69,
+    60,64,69,71,64,72,71,69,
+    76,75,76,75,76,71,74,72,69,
+    60,64,69,71,64,68,71,72,
+    64,76,75,76,75,76,71,74,72,69,
+    60,64,69,71,64,72,71,69,
+    71,72,74,76,67,77,76,74,
+    65,76,74,72,64,74,72,71,
+    64,76,64,76,76,88,75,76,75,76,75,76,
+    71,74,72,69,60,64,69,71,64,68,71,72,
+    64,76,75,76,75,76,71,74,72,69,
+    60,64,69,71,64,72,71,69
+  ];
+
+  function initAudio() {
+    try {
+      if (!audio) {
+        const Audio = window.AudioContext || window.webkitAudioContext;
+        if (!Audio) return;
+        audio = new Audio();
+        master = audio.createGain();
+        master.gain.value = 0.48;
+        const limiter = audio.createDynamicsCompressor();
+        limiter.threshold.value = -15;
+        limiter.knee.value = 20;
+        limiter.ratio.value = 5;
+        master.connect(limiter);
+        limiter.connect(audio.destination);
+        delay = audio.createDelay(0.5);
+        delay.delayTime.value = 0.19;
+        const echo = audio.createGain();
+        echo.gain.value = 0.14;
+        delay.connect(echo);
+        echo.connect(master);
+        reverb = audio.createConvolver();
+        const length = Math.floor(audio.sampleRate * 1.25);
+        const impulse = audio.createBuffer(2, length, audio.sampleRate);
+        for (let c = 0; c < 2; c++) {
+          const channel = impulse.getChannelData(c);
+          for (let i = 0; i < length; i++) channel[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, 3) * 0.35;
+        }
+        reverb.buffer = impulse;
+        const wet = audio.createGain();
+        wet.gain.value = 0.22;
+        reverb.connect(wet);
+        wet.connect(master);
+      }
+      if (audio.state === 'suspended') audio.resume().catch(() => {});
+    } catch (_) { /* The animation also works without audio support. */ }
+  }
+  function playNote(midi, x, force) {
+    if (!audio || audio.state !== 'running') return;
+    const t = audio.currentTime;
+    const frequency = 440 * Math.pow(2, (midi - 69) / 12);
+    const voice = audio.createGain();
+    const pan = audio.createStereoPanner();
+    pan.pan.value = Math.max(-0.8, Math.min(0.8, x / R * 0.8));
+    voice.connect(pan);
+    pan.connect(master);
+    pan.connect(delay);
+    pan.connect(reverb);
+    // A soft mallet attack, a glassy overtone, and a tiny rubbery pitch scoop.
+    const volume = 0.14 + Math.min(force / 160, 1) * 0.035;
+    voice.gain.setValueAtTime(0, t);
+    voice.gain.linearRampToValueAtTime(volume, t + 0.006);
+    voice.gain.exponentialRampToValueAtTime(0.001, t + 0.8);
+    voice.gain.linearRampToValueAtTime(0, t + 0.86);
+    [[1, 0.8, 'triangle'], [2, 0.2, 'sine'], [3.997, 0.065, 'sine']].forEach(([ratio, level, type]) => {
+      const osc = audio.createOscillator();
+      const gain = audio.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(frequency * ratio * 1.012, t);
+      osc.frequency.exponentialRampToValueAtTime(frequency * ratio, t + 0.035);
+      gain.gain.value = level;
+      osc.connect(gain);
+      gain.connect(voice);
+      osc.start(t);
+      osc.stop(t + 0.87);
+      osc.onended = () => { osc.disconnect(); gain.disconnect(); };
+    });
+    setTimeout(() => { voice.disconnect(); pan.disconnect(); }, 1100);
+  }
+  window.addEventListener('pointerdown', initAudio, { passive: true });
+  window.addEventListener('keydown', initAudio);
+  initAudio();
+
+  function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    scale = Math.min(width, height) / 1000;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+  for (let i = 0; i < 38; i++) {
+    const a = i * 2.3999632297;
+    const distance = Math.sqrt((i + 0.5) / 38) * 345;
+    const direction = Math.random() * TAU;
+    const speed = 78 + Math.random() * 48;
+    balls.push({
+      x: Math.cos(a) * distance, y: Math.sin(a) * distance,
+      vx: Math.cos(direction) * speed, vy: Math.sin(direction) * speed,
+      r: 12 + Math.random() * 10, color: colors[i % colors.length],
+      squash: 0, angle: direction, trail: []
+    });
+  }
+
+  function bounce(ball, nx, ny, speed) {
+    const x = nx * R, y = ny * R;
+    ball.squash = 1;
+    ball.angle = Math.atan2(ny, nx);
+    ripples.push({ x, y, age: 0, color: ball.color });
+    for (let j = 0; j < 9; j++) {
+      const a = Math.atan2(-ny, -nx) + (Math.random() - 0.5) * 2.9;
+      const v = 35 + Math.random() * 100;
+      sparks.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, age: 0, life: 0.35 + Math.random() * 0.35, color: ball.color });
+    }
+    playNote(melody[noteIndex++ % melody.length], x, speed);
+  }
+  function update(dt) {
+    time += dt;
+    rotation += dt * 0.065;
+    for (const b of balls) {
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      b.squash *= Math.exp(-dt * 12);
+      const distance = Math.hypot(b.x, b.y);
+      if (distance > R - b.r) {
+        const nx = b.x / distance, ny = b.y / distance;
+        b.x = nx * (R - b.r);
+        b.y = ny * (R - b.r);
+        const dot = b.vx * nx + b.vy * ny;
+        if (dot > 0) {
+          b.vx -= 2 * dot * nx;
+          b.vy -= 2 * dot * ny;
+          bounce(b, nx, ny, dot);
+        }
+      }
+      b.trail.push({ x: b.x, y: b.y });
+      if (b.trail.length > 14) b.trail.shift();
+    }
+    for (let i = sparks.length - 1; i >= 0; i--) {
+      const p = sparks[i];
+      p.age += dt; p.x += p.vx * dt; p.y += p.vy * dt;
+      if (p.age > p.life) sparks.splice(i, 1);
+    }
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      ripples[i].age += dt;
+      if (ripples[i].age > 0.6) ripples.splice(i, 1);
+    }
+  }
+  function circle(x, y, radius) { ctx.beginPath(); ctx.arc(x, y, radius, 0, TAU); }
+  function draw() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const bg = ctx.createRadialGradient(width / 2, height / 2, 0, width / 2, height / 2, Math.max(width, height) * 0.7);
+    bg.addColorStop(0, '#24113d'); bg.addColorStop(0.55, '#100a23'); bg.addColorStop(1, '#060715');
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, width, height);
+    ctx.translate(width / 2, height / 2);
+    ctx.scale(scale, scale);
+    // Fine orbiting details make the slow rotation visible around the circular wall.
+    ctx.save(); ctx.rotate(rotation);
+    ctx.strokeStyle = '#b783ff18'; ctx.lineWidth = 1;
+    circle(0, 0, R + 29); ctx.stroke();
+    for (let i = 0; i < 96; i++) {
+      const a = i / 96 * TAU;
+      const major = i % 8 === 0;
+      ctx.strokeStyle = major ? colors[(i / 8) % 8] + 'aa' : '#bc9cfa35';
+      ctx.lineWidth = major ? 3 : 1;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * (R + 24), Math.sin(a) * (R + 24));
+      ctx.lineTo(Math.cos(a) * (R + (major ? 36 : 29)), Math.sin(a) * (R + (major ? 36 : 29)));
+      ctx.stroke();
+    }
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 8; i++) {
+      const start = i * TAU / 8;
+      ctx.strokeStyle = colors[i]; ctx.shadowColor = colors[i]; ctx.shadowBlur = 17;
+      ctx.lineWidth = 7;
+      ctx.beginPath(); ctx.arc(0, 0, R + 2, start, start + TAU / 8 - 0.025); ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = '#ffffff90'; ctx.lineWidth = 1.2;
+    circle(0, 0, R - 2); ctx.stroke();
+    ctx.restore();
+    const inside = ctx.createRadialGradient(-100, -150, 20, 0, 0, R);
+    inside.addColorStop(0, '#30204c70'); inside.addColorStop(1, '#0a0a1c70');
+    circle(0, 0, R - 4); ctx.fillStyle = inside; ctx.fill();
+    for (const p of ripples) {
+      ctx.globalAlpha = (1 - p.age / 0.6) * 0.8;
+      ctx.strokeStyle = p.color; ctx.lineWidth = 2.5 * (1 - p.age / 0.6);
+      circle(p.x, p.y, 6 + p.age * 86); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    for (const b of balls) {
+      for (let i = 0; i < b.trail.length - 1; i += 2) {
+        const p = b.trail[i];
+        ctx.globalAlpha = (i / b.trail.length) * 0.12;
+        ctx.fillStyle = b.color; circle(p.x, p.y, b.r * (0.3 + i / b.trail.length * 0.6)); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(b.angle);
+      ctx.scale(1 - b.squash * 0.25, 1 + b.squash * 0.22);
+      ctx.shadowColor = b.color; ctx.shadowBlur = 17;
+      const fill = ctx.createRadialGradient(-b.r * 0.35, -b.r * 0.4, 0, 0, 0, b.r * 1.15);
+      fill.addColorStop(0, '#ffffff'); fill.addColorStop(0.16, b.color);
+      fill.addColorStop(0.7, b.color); fill.addColorStop(1, '#32204f');
+      circle(0, 0, b.r); ctx.fillStyle = fill; ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#ffffffa0'; circle(-b.r * 0.28, -b.r * 0.35, b.r * 0.17); ctx.fill();
+      ctx.restore();
+    }
+    for (const p of sparks) {
+      ctx.globalAlpha = Math.pow(1 - p.age / p.life, 2);
+      ctx.fillStyle = p.color; circle(p.x, p.y, 2.8 * (1 - p.age / p.life) + 0.4); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+  function frame(now) {
+    const dt = last ? Math.min((now - last) / 1000, 0.035) : 1 / 60;
+    last = now;
+    update(dt); draw();
+    requestAnimationFrame(frame);
+  }
+  document.addEventListener('visibilitychange', () => { last = 0; });
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Für Elise</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #140826;
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  canvas {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    cursor: default;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+
+var NAMES = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+
+function parseScore(text) {
+  var out = [];
+  var parts = text.trim().split(/\s+/);
+  for (var i = 0; i < parts.length; i++) {
+    var tok = parts[i];
+    if (tok.charAt(0) === 'R') {
+      out.push([0, Number(tok.slice(2))]);
+      continue;
+    }
+    var m = /^([A-G])(s?)(\d+)\/(\d+)$/.exec(tok);
+    var pc = NAMES[m[1]] + (m[2] ? 1 : 0);
+    var oct = Number(m[3]);
+    out.push([(oct + 1) * 12 + pc, Number(m[4])]);
+  }
+  return out;
+}
+
+var THEME = [
+  'E5/1 Ds5/1 E5/1 Ds5/1 E5/1 B4/1',
+  'D5/1 C5/1 A4/2 R/1 C4/1',
+  'E4/1 A4/1 B4/2 R/1 E4/1',
+  'Gs4/1 B4/1 C5/2 R/1 E4/1',
+  'E5/1 Ds5/1 E5/1 Ds5/1 E5/1 B4/1',
+  'D5/1 C5/1 A4/2 R/1 C4/1',
+  'E4/1 A4/1 B4/2 R/1 E4/1',
+  'C5/1 B4/1 A4/4'
+].join(' ');
+
+var DOLCE = [
+  'B4/2 C5/2 D5/2 E5/2',
+  'G4/2 F5/2 E5/2 D5/2',
+  'F4/2 E5/2 D5/2 C5/2',
+  'E4/2 D5/2 C5/2 B4/2'
+].join(' ');
+
+var TURN = [
+  'E5/1 Ds5/1 E5/1 Ds5/1 E5/1 B4/1',
+  'D5/1 C5/1 A4/4'
+].join(' ');
+
+var SCORE = parseScore(
+  THEME + ' ' + THEME + ' ' + DOLCE + ' ' + DOLCE + ' R/2 ' + TURN
+);
+
+var Q = 0.16;
+var START_DELAY = 0.42;
+var LOOP = 0;
+for (var si = 0; si < SCORE.length; si++) LOOP += SCORE[si][1] * Q;
+
+var PALETTE = [
+  '#ff3355', '#ff7a00', '#ffe14a', '#c6ff2e', '#2fffc0',
+  '#49d6ff', '#d06bff', '#ff4ad8', '#ff5a3c', '#fff36a'
+];
+
+var canvas = document.getElementById('c');
+var ctx = canvas.getContext('2d');
+
+var cssW = 0;
+var cssH = 0;
+var curDpr = 1;
+var cx = 0;
+var cy = 0;
+var R = 100;
+var outerR = 120;
+var rim = 16;
+var balls = [];
+var bursts = [];
+var rot = Math.random() * Math.PI * 2;
+var OMEGA = 0.22;
+var musicT = 0;
+var ringPulse = 0;
+var awaiting = false;
+var awaitId = -1;
+var awaitMidi = 0;
+var awaitStart = 0;
+var lastPlayed = -1;
+var designated = null;
+var knockReady = 0;
+var recent = [];
+
+var actx = null;
+var master = null;
+var noiseBuf = null;
+
+function mulHex(hex, f) {
+  var n = parseInt(hex.slice(1), 16);
+  function ch(v) {
+    var x = Math.max(0, Math.min(255, Math.round(v * f)));
+    var s = x.toString(16);
+    return s.length < 2 ? '0' + s : s;
+  }
+  return '#' + ch((n >> 16) & 255) + ch((n >> 8) & 255) + ch(n & 255);
+}
+
+function mixWhite(hex, t) {
+  var n = parseInt(hex.slice(1), 16);
+  function L(c) { return Math.round(c + (255 - c) * t); }
+  return 'rgb(' + L((n >> 16) & 255) + ',' + L((n >> 8) & 255) + ',' + L(n & 255) + ')';
+}
+
+function rgba(hex, a) {
+  var n = parseInt(hex.slice(1), 16);
+  return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+}
+
+function layout() {
+  cssW = window.innerWidth;
+  cssH = window.innerHeight;
+  curDpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.max(1, Math.round(cssW * curDpr));
+  canvas.height = Math.max(1, Math.round(cssH * curDpr));
+  var m = Math.min(cssW, cssH);
+  var pad = Math.max(14, m * 0.026);
+  var newOuter = m * 0.5 - pad;
+  var newRim = Math.max(15, m * 0.032);
+  var newR = Math.max(40, newOuter - newRim);
+  var ncx = cssW * 0.5;
+  var ncy = cssH * 0.5;
+  if (!balls.length) {
+    cx = ncx;
+    cy = ncy;
+    R = newR;
+    outerR = newOuter;
+    rim = newRim;
+    spawn();
+  } else {
+    var k = newR / R;
+    for (var i = 0; i < balls.length; i++) {
+      var b = balls[i];
+      b.x = ncx + (b.x - cx) * k;
+      b.y = ncy + (b.y - cy) * k;
+      b.vx *= k;
+      b.vy *= k;
+      b.r *= k;
+    }
+    cx = ncx;
+    cy = ncy;
+    R = newR;
+    outerR = newOuter;
+    rim = newRim;
+  }
+}
+
+function spawn() {
+  var shift = Math.floor(Math.random() * PALETTE.length);
+  var guard = 0;
+  while (balls.length < 40 && guard < 8000) {
+    guard++;
+    var radius = R * (0.04 + Math.random() * 0.026);
+    var ang = Math.random() * Math.PI * 2;
+    var maxD = Math.max(0, R - radius - 6);
+    var dist = Math.sqrt(Math.random()) * maxD;
+    var x = cx + Math.cos(ang) * dist;
+    var y = cy + Math.sin(ang) * dist;
+    var ok = true;
+    for (var i = 0; i < balls.length; i++) {
+      var o = balls[i];
+      var dx = o.x - x;
+      var dy = o.y - y;
+      if (dx * dx + dy * dy < (o.r + radius + 2.5) * (o.r + radius + 2.5)) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) continue;
+    pushBall(x, y, radius, shift);
+  }
+  var k = 0;
+  while (balls.length < 40) {
+    var radius2 = R * 0.04;
+    var ang2 = k * 2.399963;
+    var dist2 = ((k % 6) + 0.6) / 6.4 * (R - radius2 - 4);
+    pushBall(cx + Math.cos(ang2) * dist2, cy + Math.sin(ang2) * dist2, radius2, shift);
+    k++;
+  }
+  for (var pass = 0; pass < 24; pass++) separateAll(true);
+}
+
+function pushBall(x, y, radius, shift) {
+  var sp = R * (0.32 + Math.random() * 0.62);
+  var dir = Math.random() * Math.PI * 2;
+  var color = PALETTE[(balls.length + shift) % PALETTE.length];
+  balls.push({
+    id: balls.length,
+    x: x,
+    y: y,
+    r: radius,
+    vx: Math.cos(dir) * sp,
+    vy: Math.sin(dir) * sp,
+    color: color,
+    dark: mulHex(color, 0.62),
+    ang: Math.random() * Math.PI * 2,
+    spin: (Math.random() - 0.5) * 3,
+    squash: 1,
+    flash: 0,
+    skim: 0,
+    phase: Math.random() * Math.PI * 2,
+    freq: 0.65 + Math.random() * 0.9,
+    band: 0.3 + (balls.length % 6) * 0.09
+  });
+}
+
+function radialOf(b) {
+  var dx = b.x - cx;
+  var dy = b.y - cy;
+  var d = Math.hypot(dx, dy) || 0.0001;
+  return { d: d, nx: dx / d, ny: dy / d, gap: R - b.r - d };
+}
+
+function capSpeed(b) {
+  var max = R * 3;
+  var s = Math.hypot(b.vx, b.vy);
+  if (s > max) {
+    b.vx *= max / s;
+    b.vy *= max / s;
+  }
+}
+
+function separateAll(posOnly) {
+  for (var i = 0; i < balls.length; i++) {
+    for (var j = i + 1; j < balls.length; j++) {
+      resolvePair(balls[i], balls[j], posOnly, null);
+    }
+  }
+  for (var k = 0; k < balls.length; k++) {
+    var b = balls[k];
+    var rd = radialOf(b);
+    var limit = R - b.r - 1.5;
+    if (rd.d > limit) {
+      b.x = cx + rd.nx * limit;
+      b.y = cy + rd.ny * limit;
+    }
+  }
+}
+
+function resolvePair(a, b, posOnly, knock) {
+  var dx = b.x - a.x;
+  var dy = b.y - a.y;
+  var d2 = dx * dx + dy * dy;
+  var min = a.r + b.r;
+  if (d2 >= min * min || d2 < 1e-8) return;
+  var d = Math.sqrt(d2);
+  var nx = dx / d;
+  var ny = dy / d;
+  var ma = a.r * a.r;
+  var mb = b.r * b.r;
+  var overlap = min - d;
+  var corr = overlap + 0.04;
+  var share = 1 / (ma + mb);
+  a.x -= nx * corr * mb * share;
+  a.y -= ny * corr * mb * share;
+  b.x += nx * corr * ma * share;
+  b.y += ny * corr * ma * share;
+  if (posOnly) return;
+  var relN = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny;
+  if (relN > 0) {
+    var e = 0.94;
+    var j = (1 + e) * relN / (1 / ma + 1 / mb);
+    a.vx -= (j / ma) * nx;
+    a.vy -= (j / ma) * ny;
+    b.vx += (j / mb) * nx;
+    b.vy += (j / mb) * ny;
+    var tx = -ny;
+    var ty = nx;
+    var relT = (a.vx - b.vx) * tx + (a.vy - b.vy) * ty;
+    a.spin += relT / a.r * 0.04;
+    b.spin -= relT / b.r * 0.04;
+    if (knock && relN > R * 0.38) {
+      var power = relN;
+      if (power > knock.power) {
+        knock.power = power;
+        knock.x = (a.x + b.x) * 0.5;
+      }
+    }
+  }
+}
+
+function chooseStriker(remain) {
+  var cruise = R * 0.78;
+  var ideal = Math.min(R * 0.62, Math.max(R * 0.08, cruise * Math.max(0.1, remain)));
+  var best = null;
+  var bestS = 1e18;
+  for (var i = 0; i < balls.length; i++) {
+    var b = balls[i];
+    var rd = radialOf(b);
+    if (rd.gap < R * 0.045) continue;
+    var vRad = b.vx * rd.nx + b.vy * rd.ny;
+    var s = Math.abs(rd.gap - ideal);
+    if (vRad < -R * 0.15) s += R * 0.35;
+    var rec = recent.indexOf(b.id);
+    if (rec !== -1) s += (10 - rec) * R * 0.035;
+    s -= b.r * 0.35;
+    if (s < bestS) {
+      bestS = s;
+      best = b;
+    }
+  }
+  if (!best) {
+    var closest = balls[0];
+    var cg = 1e18;
+    for (var n = 0; n < balls.length; n++) {
+      var g = radialOf(balls[n]).gap;
+      if (g < cg) {
+        cg = g;
+        closest = balls[n];
+      }
+    }
+    best = closest;
+  }
+  recent.unshift(best.id);
+  if (recent.length > 10) recent.pop();
+  return best;
+}
+
+function steer(b, remain) {
+  var rd = radialOf(b);
+  var tx = -rd.ny;
+  var ty = rd.nx;
+  var vRad = b.vx * rd.nx + b.vy * rd.ny;
+  var vTan = b.vx * tx + b.vy * ty;
+  var T = Math.max(0.02, remain);
+  var desired = Math.max(0, rd.gap) / T;
+  var cap = R * 3;
+  if (desired > cap) desired = cap;
+  if (remain < 0.04) desired = Math.max(desired, R * 0.55);
+  var blend = 0.45;
+  var newRad = vRad + (desired - vRad) * blend;
+  b.vx = rd.nx * newRad + tx * vTan;
+  b.vy = rd.ny * newRad + ty * vTan;
+}
+
+function preSkim(b, h) {
+  var rd = radialOf(b);
+  var tx = -rd.ny;
+  var ty = rd.nx;
+  var vRad = b.vx * rd.nx + b.vy * rd.ny;
+  var vTan = b.vx * tx + b.vy * ty;
+  var skin = R * 0.08;
+  b.phase += h * b.freq;
+  var swing = 0.18 * Math.sin(b.phase);
+  var target = (R - b.r) * Math.max(0.2, Math.min(0.84, b.band + swing));
+  vRad += (target - rd.d) * 7 * h;
+  if (rd.gap < skin && vRad > 0) {
+    var bleed = Math.min(1, h * 18);
+    var cut = vRad * bleed;
+    vRad -= cut;
+    vTan += (vTan >= 0 ? 1 : -1) * cut * 0.4;
+  }
+  var vWall = OMEGA * rd.d;
+  vTan += (vWall - vTan) * Math.min(1, h * 0.15);
+  b.vx = rd.nx * vRad + tx * vTan;
+  b.vy = rd.ny * vRad + ty * vTan;
+  if (rd.gap < skin * 0.5) b.skim += h;
+  else b.skim = Math.max(0, b.skim - h);
+  if (b.skim > 0.4) {
+    var dive = R * (0.65 + Math.random() * 0.45);
+    b.vx = -rd.nx * dive + tx * vTan * 0.2;
+    b.vy = -rd.ny * dive + ty * vTan * 0.2;
+    b.skim = 0;
+  }
+}
+
+function minSpeed(b) {
+  var min = R * 0.2;
+  var s = Math.hypot(b.vx, b.vy);
+  if (s < min) {
+    if (s > 2) {
+      b.vx *= min / s;
+      b.vy *= min / s;
+    } else {
+      var rd2 = radialOf(b);
+      if (rd2.gap < R * 0.25) {
+        b.vx = -rd2.nx * min;
+        b.vy = -rd2.ny * min;
+      } else {
+        var ang = b.phase * 2;
+        b.vx = Math.cos(ang) * min;
+        b.vy = Math.sin(ang) * min;
+      }
+    }
+  }
+}
+
+function holdInside(b) {
+  var rd = radialOf(b);
+  var limit = R - b.r - 2.2;
+  if (rd.d > limit) {
+    b.x = cx + rd.nx * limit;
+    b.y = cy + rd.ny * limit;
+    var vRad = b.vx * rd.nx + b.vy * rd.ny;
+    if (vRad > 0) {
+      b.vx -= rd.nx * vRad;
+      b.vy -= rd.ny * vRad;
+    }
+  }
+}
+
+function clampSkim(b) {
+  var rd = radialOf(b);
+  var limit = R - b.r - 2.2;
+  if (rd.d > limit) {
+    b.x = cx + rd.nx * limit;
+    b.y = cy + rd.ny * limit;
+    var vRad = b.vx * rd.nx + b.vy * rd.ny;
+    if (vRad > 0) {
+      var tx = -rd.ny;
+      var ty = rd.nx;
+      var vTan = b.vx * tx + b.vy * ty;
+      var sign = vTan === 0 ? 1 : (vTan > 0 ? 1 : -1);
+      vTan += sign * vRad * 0.7;
+      b.vx = tx * vTan;
+      b.vy = ty * vTan;
+    }
+  }
+}
+
+function rebound(b, impact) {
+  var rd = radialOf(b);
+  var tx = -rd.ny;
+  var ty = rd.nx;
+  var vTan = b.vx * tx + b.vy * ty;
+  var vWall = OMEGA * Math.max(1, R - b.r);
+  vTan += (vWall - vTan) * 0.42;
+  var speed = Math.max(impact, R * 0.5);
+  b.vx = rd.nx * (-speed * 0.9) + tx * vTan;
+  b.vy = rd.ny * (-speed * 0.9) + ty * vTan;
+  var place = R - b.r - 0.8;
+  b.x = cx + rd.nx * place;
+  b.y = cy + rd.ny * place;
+  b.spin += (vWall - vTan) * 0.015;
+  b.squash = 0.66;
+  b.flash = 1;
+  bursts.push({
+    x: cx + rd.nx * R,
+    y: cy + rd.ny * R,
+    life: 1,
+    color: b.color,
+    r: Math.max(10, b.r)
+  });
+  ringPulse = 1;
+  return speed;
+}
+
+function nextEvent() {
+  if (musicT < START_DELAY) {
+    var acc0 = 0;
+    for (var i0 = 0; i0 < SCORE.length; i0++) {
+      var dur0 = SCORE[i0][1] * Q;
+      if (SCORE[i0][0] !== 0) {
+        return { id: i0, midi: SCORE[i0][0], start: START_DELAY + acc0, dur: dur0 };
+      }
+      acc0 += dur0;
+    }
+  }
+  var elapsed = musicT - START_DELAY;
+  var loops = Math.floor(elapsed / LOOP);
+  if (loops < 0) loops = 0;
+  for (var L = loops; L <= loops + 1; L++) {
+    var acc = 0;
+    for (var i = 0; i < SCORE.length; i++) {
+      var dur = SCORE[i][1] * Q;
+      var start = START_DELAY + L * LOOP + acc;
+      var id = L * SCORE.length + i;
+      if (SCORE[i][0] !== 0 && id > lastPlayed && musicT <= start + Math.max(dur, 0.22)) {
+        return { id: id, midi: SCORE[i][0], start: start, dur: dur };
+      }
+      acc += dur;
+    }
+  }
+  return null;
+}
+
+function armIfNeeded() {
+  if (awaiting) return;
+  var ev = nextEvent();
+  if (!ev) return;
+  if (musicT < ev.start - 0.46) return;
+  awaiting = true;
+  awaitId = ev.id;
+  awaitMidi = ev.midi;
+  awaitStart = ev.start;
+  designated = chooseStriker(ev.start - musicT);
+}
+
+function onStrike(b, impact) {
+  var midi = awaitMidi;
+  var pan = (b.x - cx) / R;
+  playNote(midi, impact, pan);
+  lastPlayed = awaitId;
+  awaiting = false;
+  designated = null;
+}
+
+function penetrating(b) {
+  var rd = radialOf(b);
+  var vRad = b.vx * rd.nx + b.vy * rd.ny;
+  if (rd.d + b.r >= R - 0.2 && vRad > 0) return { vRad: vRad };
+  return null;
+}
+
+function closestBall() {
+  var best = balls[0];
+  var g = 1e18;
+  for (var i = 0; i < balls.length; i++) {
+    var gap = radialOf(balls[i]).gap;
+    if (gap < g) {
+      g = gap;
+      best = balls[i];
+    }
+  }
+  return best;
+}
+
+function physics(h) {
+  musicT += h;
+  rot += OMEGA * h;
+  armIfNeeded();
+
+  for (var i = 0; i < balls.length; i++) {
+    var b = balls[i];
+    if (b === designated) steer(b, awaitStart - musicT);
+    else preSkim(b, h);
+    if (b !== designated) minSpeed(b);
+    capSpeed(b);
+  }
+
+  for (var k = 0; k < balls.length; k++) {
+    var ball = balls[k];
+    ball.x += ball.vx * h;
+    ball.y += ball.vy * h;
+    ball.ang += ball.spin * h;
+    ball.spin *= Math.exp(-0.65 * h);
+    ball.squash += (1 - ball.squash) * Math.min(1, 11 * h);
+    ball.flash *= Math.exp(-6.5 * h);
+  }
+
+  var knock = { power: 0, x: cx };
+  separatePass(knock);
+  separatePass(null);
+
+  if (designated) {
+    if (musicT < awaitStart - 0.01) {
+      holdInside(designated);
+    } else {
+      var hit = penetrating(designated);
+      if (hit) {
+        var speed = rebound(designated, hit.vRad);
+        onStrike(designated, speed);
+      } else if (musicT > awaitStart + 0.11) {
+        var alt = radialOf(designated).gap > 36 ? closestBall() : designated;
+        var spd = rebound(alt, R * 0.62);
+        onStrike(alt, spd);
+      }
+    }
+  }
+
+  for (var s = 0; s < balls.length; s++) {
+    if (balls[s] !== designated) clampSkim(balls[s]);
+  }
+
+  if (knock.power > 0 && musicT >= knockReady) {
+    playKnock(knock.power, (knock.x - cx) / R);
+    knockReady = musicT + 0.085;
+  }
+
+  ringPulse *= Math.exp(-5.5 * h);
+  for (var f = bursts.length - 1; f >= 0; f--) {
+    bursts[f].life -= h / 0.2;
+    if (bursts[f].life <= 0) bursts.splice(f, 1);
+  }
+}
+
+function separatePass(knock) {
+  for (var i = 0; i < balls.length; i++) {
+    for (var j = i + 1; j < balls.length; j++) {
+      resolvePair(balls[i], balls[j], false, knock);
+    }
+  }
+}
+
+function ensureAudio() {
+  var AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  try {
+    if (!actx) {
+      actx = new AC();
+      master = actx.createGain();
+      master.gain.value = 0.42;
+      var comp = actx.createDynamicsCompressor();
+      comp.threshold.value = -14;
+      comp.knee.value = 16;
+      comp.ratio.value = 3.2;
+      comp.attack.value = 0.003;
+      comp.release.value = 0.14;
+      master.connect(comp);
+      comp.connect(actx.destination);
+      var len = Math.floor(actx.sampleRate * 0.08);
+      noiseBuf = actx.createBuffer(1, len, actx.sampleRate);
+      var data = noiseBuf.getChannelData(0);
+      for (var i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+    }
+    if (actx.state === 'suspended') actx.resume();
+  } catch (err) {}
+}
+
+function audioLive() {
+  return actx && master && actx.state === 'running';
+}
+
+function connectPan(node, pan) {
+  var x = Math.max(-1, Math.min(1, pan || 0));
+  if (actx.createStereoPanner) {
+    var p = actx.createStereoPanner();
+    p.pan.setValueAtTime(x, actx.currentTime);
+    node.connect(p);
+    p.connect(master);
+  } else {
+    node.connect(master);
+  }
+}
+
+function playNote(midi, impact, pan) {
+  if (!audioLive() || !midi) return;
+  var t = actx.currentTime;
+  var freq = 440 * Math.pow(2, (midi - 69) / 12);
+  var vel = Math.max(0.62, Math.min(1, impact / (R * 1.35)));
+  var decay = midi >= 74 ? 0.3 : 0.46;
+  function partial(mult, type, gain, dur) {
+    var o = actx.createOscillator();
+    o.type = type;
+    o.frequency.setValueAtTime(freq * mult, t);
+    var g = actx.createGain();
+    g.gain.setValueAtTime(Math.max(0.0001, gain * vel), t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g);
+    connectPan(g, pan);
+    o.start(t);
+    o.stop(t + dur + 0.02);
+  }
+  partial(1, 'sine', 0.2, decay);
+  partial(2.003, 'sine', 0.055, decay * 0.72);
+  partial(3.01, 'sine', 0.02, decay * 0.45);
+  partial(5.15, 'triangle', 0.018, 0.08);
+  var src = actx.createBufferSource();
+  src.buffer = noiseBuf;
+  var hp = actx.createBiquadFilter();
+  hp.type = 'highpass';
+  hp.frequency.value = 1400;
+  var ng = actx.createGain();
+  ng.gain.setValueAtTime(0.07 * vel, t);
+  ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.03);
+  src.connect(hp);
+  hp.connect(ng);
+  connectPan(ng, pan);
+  src.start(t);
+  src.stop(t + 0.04);
+}
+
+function playKnock(speed, pan) {
+  if (!audioLive()) return;
+  var t = actx.currentTime;
+  var vol = Math.min(0.05, (speed / (R * 5)) * 0.05);
+  if (vol < 0.006) return;
+  var o = actx.createOscillator();
+  o.type = 'sine';
+  var f0 = Math.min(1700, 780 + speed * 0.35);
+  o.frequency.setValueAtTime(f0, t);
+  o.frequency.exponentialRampToValueAtTime(160, t + 0.055);
+  var g = actx.createGain();
+  g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.06);
+  o.connect(g);
+  connectPan(g, pan);
+  o.start(t);
+  o.stop(t + 0.07);
+}
+
+function sector(a0, a1, rIn, rOut) {
+  ctx.beginPath();
+  ctx.arc(cx, cy, rOut, a0, a1);
+  ctx.arc(cx, cy, rIn, a1, a0, true);
+  ctx.closePath();
+}
+
+function draw() {
+  ctx.setTransform(curDpr, 0, 0, curDpr, 0, 0);
+  var bg = ctx.createRadialGradient(cx, cy, R * 0.2, cx, cy, Math.max(cssW, cssH) * 0.72);
+  bg.addColorStop(0, '#4a1c78');
+  bg.addColorStop(0.42, '#2a0c4e');
+  bg.addColorStop(1, '#12041f');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, cssW, cssH);
+
+  for (var glow = 4; glow >= 1; glow--) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, (R + outerR) * 0.5, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255, 70, 180, ' + (0.045 * glow) + ')';
+    ctx.lineWidth = rim * (0.7 + glow * 0.55);
+    ctx.stroke();
+  }
+
+  var bowl = ctx.createRadialGradient(cx - R * 0.15, cy - R * 0.2, R * 0.1, cx, cy, R);
+  bowl.addColorStop(0, '#5a248c');
+  bowl.addColorStop(0.55, '#3a1468');
+  bowl.addColorStop(1, '#240845');
+  ctx.fillStyle = bowl;
+  ctx.beginPath();
+  ctx.arc(cx, cy, R, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, R, 0, Math.PI * 2);
+  ctx.clip();
+  for (var w = 0; w < 3; w++) {
+    var wa = rot * 0.65 + w * (Math.PI * 2 / 3);
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, R, wa, wa + 0.55);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(255,255,255,0.045)';
+    ctx.fill();
+  }
+  var shade = ctx.createRadialGradient(cx, cy, R * 0.62, cx, cy, R);
+  shade.addColorStop(0, 'rgba(0,0,0,0)');
+  shade.addColorStop(1, 'rgba(0,0,0,0.38)');
+  ctx.fillStyle = shade;
+  ctx.beginPath();
+  ctx.arc(cx, cy, R, 0, Math.PI * 2);
+  ctx.fill();
+
+  for (var i = 0; i < balls.length; i++) drawBall(balls[i]);
+  ctx.restore();
+
+  var SEG = 20;
+  var span = (Math.PI * 2) / SEG;
+  var gapA = 0.05;
+  var light = 52 + ringPulse * 14;
+  for (var s = 0; s < SEG; s++) {
+    var a0 = rot + s * span + gapA * 0.5;
+    var a1 = rot + (s + 1) * span - gapA * 0.5;
+    var hue = (s * 360 / SEG + 8) % 360;
+    sector(a0, a1, R, outerR);
+    ctx.fillStyle = 'hsl(' + hue + ', 100%, ' + light + '%)';
+    ctx.fill();
+  }
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, R, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(255,255,255,' + (0.82 + ringPulse * 0.18) + ')';
+  ctx.lineWidth = Math.max(2, rim * 0.09);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, outerR, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(255,255,255,0.38)';
+  ctx.lineWidth = Math.max(2, rim * 0.07);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, (R + outerR) * 0.5, rot - 0.15, rot + 0.72);
+  ctx.strokeStyle = 'rgba(255,255,255,0.62)';
+  ctx.lineWidth = rim * 0.22;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+
+  for (var p = 0; p < 12; p++) {
+    var a = rot + p * (Math.PI * 2 / 12);
+    var rr = (R + outerR) * 0.5;
+    ctx.beginPath();
+    ctx.arc(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, Math.max(3.5, rim * 0.2), 0, Math.PI * 2);
+    ctx.fillStyle = p % 2 ? '#ffffff' : '#ffe566';
+    ctx.fill();
+    ctx.lineWidth = 1.25;
+    ctx.strokeStyle = 'rgba(40, 0, 40, 0.45)';
+    ctx.stroke();
+  }
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (var u = 0; u < bursts.length; u++) {
+    var burst = bursts[u];
+    var rad = burst.r * (1.1 + (1 - burst.life) * 2.4);
+    var g = ctx.createRadialGradient(burst.x, burst.y, 0, burst.x, burst.y, rad);
+    g.addColorStop(0, rgba(burst.color, 0.8 * burst.life));
+    g.addColorStop(1, rgba(burst.color, 0));
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(burst.x, burst.y, rad, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawBall(b) {
+  ctx.beginPath();
+  ctx.arc(b.x, b.y, b.r * 1.28, 0, Math.PI * 2);
+  ctx.fillStyle = rgba(b.color, 0.3);
+  ctx.fill();
+
+  ctx.save();
+  ctx.translate(b.x, b.y);
+  ctx.rotate(Math.atan2(b.y - cy, b.x - cx));
+  var sx = b.squash;
+  var sy = 1 + (1 - sx) * 0.7;
+  ctx.scale(sx, sy);
+  ctx.beginPath();
+  ctx.arc(0, 0, b.r, 0, Math.PI * 2);
+  var g = ctx.createRadialGradient(-b.r * 0.36, -b.r * 0.4, b.r * 0.08, 0, 0, b.r);
+  var fl = Math.max(0, Math.min(1, b.flash));
+  g.addColorStop(0, '#ffffff');
+  g.addColorStop(0.2, mixWhite(b.color, Math.min(1, 0.62 + fl * 0.38)));
+  g.addColorStop(0.68, mixWhite(b.color, fl * 0.4));
+  g.addColorStop(1, mixWhite(b.dark, fl * 0.25));
+  ctx.fillStyle = g;
+  ctx.fill();
+  ctx.lineWidth = Math.max(1, b.r * 0.07);
+  ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+  ctx.stroke();
+  ctx.rotate(b.ang);
+  ctx.fillStyle = 'rgba(40, 0, 30, 0.22)';
+  ctx.beginPath();
+  ctx.arc(b.r * 0.32, 0, b.r * 0.26, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+var last = performance.now();
+function frame(now) {
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+  if (!balls.length || Math.abs(window.innerWidth - cssW) > 2 || Math.abs(window.innerHeight - cssH) > 2 || dpr !== curDpr) {
+    layout();
+  }
+  var dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
+  last = now;
+  if (dt > 0) {
+    var steps = Math.max(1, Math.round(dt / 0.008));
+    var h = dt / steps;
+    for (var i = 0; i < steps; i++) physics(h);
+  }
+  draw();
+  requestAnimationFrame(frame);
+}
+
+function unlock() { ensureAudio(); }
+window.addEventListener('pointerdown', unlock, { passive: true });
+window.addEventListener('keydown', unlock, { passive: true });
+window.addEventListener('touchstart', unlock, { passive: true });
+window.addEventListener('click', unlock, { passive: true });
+window.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+
+ensureAudio();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Für Elise</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #05010c;
+    overflow: hidden;
+    touch-action: none;
+  }
+  canvas {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+</style>
+</head>
+<body>
+<canvas id="c" aria-hidden="true"></canvas>
+<script>
+// Balls inside a slowly rotating circle. Each wall bounce plays the next note of Für Elise.
+(function () {
+  const BALL_COUNT = 40;
+  const OMEGA = (Math.PI * 2) / 34;
+  const MIN_IN = 58;
+  const MAX_TANGENT = 26;
+  const MIN_SPEED = 56;
+  const MAX_SPEED = 120;
+  const SWIRL = 3.2;
+
+  // Hummed line of Beethoven's Für Elise, looping back into the opening.
+  const MELODY = [
+    76, 75, 76, 75, 76, 71, 74, 72, 69,
+    60, 64, 69, 71,
+    64, 68, 71, 72,
+    64,
+    76, 75, 76, 75, 76, 71, 74, 72, 69,
+    60, 64, 69, 71,
+    64, 72, 71, 69,
+    71, 72, 74, 76,
+    67, 77, 76, 74,
+    65, 76, 74, 72,
+    64, 74, 72, 71,
+    71, 72, 74, 76,
+    67, 77, 76, 74,
+    65, 76, 74, 72,
+    64, 72, 71, 69
+  ];
+
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+
+  const balls = [];
+  const sparks = [];
+  const ripples = [];
+  const flashes = [];
+
+  let w = 1;
+  let h = 1;
+  let s = 1;
+  let cx = 0;
+  let cy = 0;
+  let boundR = 100;
+  let ringR = 120;
+  let ringWidth = 20;
+  let spin = 0;
+  let melodyAt = 0;
+
+  let audio = null;
+  let melodyBus = null;
+  let popBus = null;
+  let noiseBuffers = null;
+  let noiseAt = 0;
+
+  function clamp(v, a, b) {
+    return v < a ? a : v > b ? b : v;
+  }
+
+  function makeAudio() {
+    if (audio) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    try {
+      audio = new AC();
+    } catch (err) {
+      audio = null;
+      return;
+    }
+    melodyBus = audio.createGain();
+    popBus = audio.createGain();
+    const comp = audio.createDynamicsCompressor();
+    const master = audio.createGain();
+    melodyBus.gain.value = 0.95;
+    popBus.gain.value = 0.7;
+    comp.threshold.value = -16;
+    comp.knee.value = 18;
+    comp.ratio.value = 3.4;
+    comp.attack.value = 0.004;
+    comp.release.value = 0.16;
+    master.gain.value = 0.9;
+    melodyBus.connect(comp);
+    popBus.connect(comp);
+    comp.connect(master);
+    master.connect(audio.destination);
+  }
+
+  function tryStart() {
+    makeAudio();
+    if (!audio) return;
+    if (audio.state === 'suspended') audio.resume();
+  }
+
+  tryStart();
+  window.addEventListener('pointerdown', tryStart);
+  window.addEventListener('keydown', tryStart);
+  window.addEventListener('touchstart', tryStart, { passive: true });
+
+  function noiseBank() {
+    if (noiseBuffers || !audio) return noiseBuffers;
+    noiseBuffers = [];
+    const n = 4;
+    for (let i = 0; i < n; i++) {
+      const len = Math.max(1, Math.floor(audio.sampleRate * 0.045));
+      const buf = audio.createBuffer(1, len, audio.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let j = 0; j < len; j++) data[j] = Math.random() * 2 - 1;
+      noiseBuffers.push(buf);
+    }
+    return noiseBuffers;
+  }
+
+  function pannerTo(bus, pan, when) {
+    const node = audio.createStereoPanner();
+    node.pan.setValueAtTime(pan, when);
+    node.connect(bus);
+    return node;
+  }
+
+  function tone(dest, when, freq, type, peak, attack, dur, glide) {
+    const osc = audio.createOscillator();
+    const gain = audio.createGain();
+    osc.type = type;
+    const startF = Math.max(1, freq * glide);
+    osc.frequency.setValueAtTime(startF, when);
+    osc.frequency.exponentialRampToValueAtTime(Math.max(1, freq), when + Math.min(0.045, dur * 0.45));
+    gain.gain.setValueAtTime(0.0001, when);
+    gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), when + attack);
+    gain.gain.exponentialRampToValueAtTime(0.0001, when + Math.max(dur, attack + 0.02));
+    osc.connect(gain);
+    gain.connect(dest);
+    osc.start(when);
+    osc.stop(when + dur + 0.03);
+  }
+
+  function tick(dest, when, peak, band) {
+    const bank = noiseBank();
+    if (!bank) return;
+    const src = audio.createBufferSource();
+    src.buffer = bank[noiseAt];
+    noiseAt = (noiseAt + 1) % bank.length;
+    const filter = audio.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = band;
+    filter.Q.value = 0.8;
+    const gain = audio.createGain();
+    gain.gain.setValueAtTime(Math.max(0.0002, peak), when);
+    gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.04);
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(dest);
+    src.start(when);
+    src.stop(when + 0.05);
+  }
+
+  function playNote(ball, impact) {
+    if (!audio || audio.state !== 'running') return;
+    const midi = MELODY[melodyAt];
+    melodyAt = (melodyAt + 1) % MELODY.length;
+    const sizeN = clamp((ball.baseR - 22) / 24, 0, 1);
+    const freq = 440 * Math.pow(2, (midi - 69) / 12 + ball.cents / 1200);
+    const when = audio.currentTime;
+    const pan = clamp((ball.x / w - 0.5) * 1.7, -1, 1);
+    const impactN = clamp(impact / (150 * s), 0.6, 1);
+    const peak = 0.1 + 0.05 * impactN;
+    const dur = 0.1 + sizeN * 0.035;
+    const attack = 0.004 + sizeN * 0.008;
+    const dest = pannerTo(melodyBus, pan, when);
+    tone(dest, when, freq, 'sine', peak, attack, dur, 1.012);
+    tone(dest, when, freq * 2, sizeN > 0.55 ? 'sine' : 'triangle', peak * (0.34 - sizeN * 0.16), 0.003, dur * 0.62, 1.03);
+    if (sizeN > 0.5) tone(dest, when, freq * 0.5, 'sine', peak * 0.16, 0.006, 0.06, 1);
+    tick(dest, when, peak * (0.28 + (1 - sizeN) * 0.25), 1400 + (1 - sizeN) * 2200 + impactN * 400);
+  }
+
+  function playPop(a, b, rel) {
+    if (!audio || audio.state !== 'running') return;
+    const when = audio.currentTime;
+    const pan = clamp(((a.x + b.x) * 0.5 / w - 0.5) * 1.7, -1, 1);
+    const dest = pannerTo(popBus, pan, when);
+    const small = Math.min(a.baseR, b.baseR);
+    const freq = 280 + (48 - small) * 16;
+    const peak = clamp(0.01 + rel / (520 * s), 0.01, 0.04);
+    const kind = (a.id + b.id) % 3;
+    if (kind === 0) {
+      const osc = audio.createOscillator();
+      const gain = audio.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(Math.max(1, freq * 0.85), when);
+      osc.frequency.exponentialRampToValueAtTime(freq * 1.65, when + 0.08);
+      gain.gain.setValueAtTime(0.0001, when);
+      gain.gain.exponentialRampToValueAtTime(peak, when + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.1);
+      osc.connect(gain);
+      gain.connect(dest);
+      osc.start(when);
+      osc.stop(when + 0.12);
+    } else if (kind === 1) {
+      const osc = audio.createOscillator();
+      const gain = audio.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freq * 1.45, when);
+      osc.frequency.exponentialRampToValueAtTime(Math.max(1, freq * 0.5), when + 0.13);
+      gain.gain.setValueAtTime(0.0001, when);
+      gain.gain.exponentialRampToValueAtTime(peak * 1.15, when + 0.008);
+      gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.15);
+      osc.connect(gain);
+      gain.connect(dest);
+      osc.start(when);
+      osc.stop(when + 0.17);
+    } else {
+      tone(dest, when, freq * 1.7, 'triangle', peak * 0.7, 0.002, 0.05, 1.4);
+      tick(dest, when, peak * 0.55, 900 + small * 20);
+    }
+  }
+
+  function layout() {
+    const nw = Math.max(2, window.innerWidth);
+    const nh = Math.max(2, window.innerHeight);
+    const ns = Math.min(nw, nh) / 1080;
+    const nRingWidth = 22 * ns;
+    const nRingR = Math.min(nw, nh) * 0.5 - 42 * ns;
+    const nBound = nRingR - nRingWidth * 0.55;
+    const ncx = nw * 0.5;
+    const ncy = nh * 0.5;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(nw * dpr);
+    canvas.height = Math.round(nh * dpr);
+    canvas.style.width = nw + 'px';
+    canvas.style.height = nh + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    if (balls.length && boundR > 0) {
+      const k = nBound / boundR;
+      const move = function (p) {
+        p.x = ncx + (p.x - cx) * k;
+        p.y = ncy + (p.y - cy) * k;
+        if (p.vx) {
+          p.vx *= k;
+          p.vy *= k;
+        }
+        if (p.rad) p.rad *= k;
+      };
+      for (let i = 0; i < balls.length; i++) move(balls[i]);
+      for (let i = 0; i < sparks.length; i++) move(sparks[i]);
+      for (let i = 0; i < ripples.length; i++) move(ripples[i]);
+    }
+
+    w = nw;
+    h = nh;
+    s = ns;
+    cx = ncx;
+    cy = ncy;
+    ringWidth = nRingWidth;
+    ringR = nRingR;
+    boundR = nBound;
+    for (let i = 0; i < balls.length; i++) {
+      const b = balls[i];
+      b.r = Math.min(b.baseR * s, boundR * 0.085);
+    }
+  }
+
+  function pushInside(b) {
+    const dx = b.x - cx;
+    const dy = b.y - cy;
+    const dist = Math.hypot(dx, dy);
+    const limit = boundR - b.r;
+    if (dist > limit) {
+      if (dist < 0.0001) {
+        b.x = cx + limit;
+        b.y = cy;
+      } else {
+        const k = limit / dist;
+        b.x = cx + dx * k;
+        b.y = cy + dy * k;
+      }
+    }
+  }
+
+  function separate(a, b) {
+    let dx = b.x - a.x;
+    let dy = b.y - a.y;
+    let dist = Math.hypot(dx, dy);
+    const min = a.r + b.r;
+    if (dist >= min) return;
+    if (dist < 0.0001) {
+      dx = 1;
+      dy = 0;
+      dist = 1;
+    }
+    const overlap = min - dist;
+    const nx = dx / dist;
+    const ny = dy / dist;
+    const share = 1 / (a.m + b.m);
+    a.x -= nx * overlap * b.m * share;
+    a.y -= ny * overlap * b.m * share;
+    b.x += nx * overlap * a.m * share;
+    b.y += ny * overlap * a.m * share;
+  }
+
+  function spawn() {
+    const golden = Math.PI * (3 - Math.sqrt(5));
+    for (let i = 0; i < BALL_COUNT; i++) {
+      const baseR = 22 + ((i * 19) % 25);
+      const r = Math.min(baseR * s, boundR * 0.085);
+      const maxD = Math.max(0, boundR - r - 2);
+      const dist = maxD * Math.sqrt((i + 0.5) / BALL_COUNT);
+      const a = i * golden;
+      const ang = Math.random() * Math.PI * 2;
+      const speed = (60 + (i % 8) * 6) * s;
+      const ox = Math.cos(a);
+      const oy = Math.sin(a);
+      let vx = Math.cos(ang) * 0.55 + (-oy) * 0.42 + ox * 0.14;
+      let vy = Math.sin(ang) * 0.55 + ox * 0.42 + oy * 0.14;
+      const vm = Math.hypot(vx, vy) || 1;
+      balls.push({
+        id: i,
+        baseR: baseR,
+        r: r,
+        m: baseR * baseR,
+        hue: (i * 137.508) % 360,
+        cents: ((i * 13) % 9 - 4) * 1.4,
+        x: cx + ox * dist * 0.92,
+        y: cy + oy * dist * 0.92,
+        vx: vx / vm * speed,
+        vy: vy / vm * speed,
+        flash: 0,
+        hit: false
+      });
+    }
+    for (let step = 0; step < 80; step++) {
+      for (let i = 0; i < balls.length; i++) {
+        for (let j = i + 1; j < balls.length; j++) separate(balls[i], balls[j]);
+        pushInside(balls[i]);
+      }
+    }
+  }
+
+  function integrate(b, dt) {
+    const dx = b.x - cx;
+    const dy = b.y - cy;
+    const d = Math.hypot(dx, dy) || 1;
+    b.vx += (-dy / d) * SWIRL * s * dt;
+    b.vy += (dx / d) * SWIRL * s * dt;
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    b.flash = Math.max(0, b.flash - dt * 4.4);
+  }
+
+  function collidePair(a, b, audible) {
+    let dx = b.x - a.x;
+    let dy = b.y - a.y;
+    let dist = Math.hypot(dx, dy);
+    const min = a.r + b.r;
+    if (dist >= min) return;
+    if (dist < 0.0001) {
+      dx = 1;
+      dy = 0;
+      dist = 1;
+    }
+    const nx = dx / dist;
+    const ny = dy / dist;
+    const overlap = min - dist;
+    const share = 1 / (a.m + b.m);
+    a.x -= nx * overlap * b.m * share;
+    a.y -= ny * overlap * b.m * share;
+    b.x += nx * overlap * a.m * share;
+    b.y += ny * overlap * a.m * share;
+    const rv = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
+    if (rv >= 0) return;
+    const j = -(1 + 0.94) * rv / (1 / a.m + 1 / b.m);
+    a.vx -= (j * nx) / a.m;
+    a.vy -= (j * ny) / a.m;
+    b.vx += (j * nx) / b.m;
+    b.vy += (j * ny) / b.m;
+    if (audible && -rv > 100 * s) playPop(a, b, -rv);
+  }
+
+  function spray(x, y, nx, ny, hue) {
+    for (let i = 0; i < 6; i++) {
+      const a = Math.atan2(-ny, -nx) + (Math.random() - 0.5) * 1.5;
+      const sp = (28 + Math.random() * 130) * s;
+      sparks.push({
+        x: x,
+        y: y,
+        vx: Math.cos(a) * sp,
+        vy: Math.sin(a) * sp,
+        life: 1,
+        hue: hue,
+        rad: (1.6 + Math.random() * 2.1) * s
+      });
+    }
+    ripples.push({ x: x, y: y, life: 1, hue: hue });
+    flashes.push({ ang: Math.atan2(y - cy, x - cx), life: 1, hue: hue });
+  }
+
+  function collideWall(b) {
+    const dx = b.x - cx;
+    const dy = b.y - cy;
+    const dist = Math.hypot(dx, dy) || 0.0001;
+    const limit = boundR - b.r;
+    if (dist <= limit) return;
+    const nx = dx / dist;
+    const ny = dy / dist;
+    b.x = cx + nx * limit;
+    b.y = cy + ny * limit;
+    const vN = b.vx * nx + b.vy * ny;
+    if (vN <= 18 * s) {
+      if (vN > 0) {
+        b.vx -= vN * nx;
+        b.vy -= vN * ny;
+      }
+      return;
+    }
+    const tx = -ny;
+    const ty = nx;
+    const vT = b.vx * tx + b.vy * ty;
+    const wallSpeed = OMEGA * boundR;
+    let newVT = vT + (wallSpeed - vT) * 0.18;
+    const maxT = MAX_TANGENT * s;
+    if (newVT > maxT) newVT = maxT;
+    else if (newVT < -maxT) newVT = -maxT;
+    const punch = MIN_IN * s * (0.9 + 0.22 * Math.min(1, vN / (170 * s)));
+    b.vx = -punch * nx + newVT * tx;
+    b.vy = -punch * ny + newVT * ty;
+    if (!b.hit) {
+      b.hit = true;
+      b.flash = 1;
+      spray(cx + nx * boundR, cy + ny * boundR, nx, ny, b.hue);
+      playNote(b, vN);
+    }
+  }
+
+  function clampSpeed(b) {
+    const sp = Math.hypot(b.vx, b.vy);
+    const maxS = MAX_SPEED * s;
+    const minS = MIN_SPEED * s;
+    if (sp > maxS) {
+      b.vx *= maxS / sp;
+      b.vy *= maxS / sp;
+    } else if (sp < minS) {
+      if (sp < 1) {
+        const a = Math.random() * Math.PI * 2;
+        b.vx = Math.cos(a) * minS;
+        b.vy = Math.sin(a) * minS;
+      } else {
+        b.vx *= minS / sp;
+        b.vy *= minS / sp;
+      }
+    }
+  }
+
+  function ageList(list, dt, rate) {
+    let k = 0;
+    for (let i = 0; i < list.length; i++) {
+      const p = list[i];
+      p.life -= dt * rate;
+      if (p.life <= 0) continue;
+      if (p.vx) {
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.vx *= 0.96;
+        p.vy *= 0.96;
+      }
+      list[k++] = p;
+    }
+    list.length = k;
+  }
+
+  function step(dt) {
+    spin = (spin + OMEGA * dt) % (Math.PI * 2);
+    for (let i = 0; i < balls.length; i++) integrate(balls[i], dt);
+    for (let i = 0; i < balls.length; i++) balls[i].hit = false;
+    for (let n = 0; n < 3; n++) {
+      for (let i = 0; i < balls.length; i++) {
+        const a = balls[i];
+        for (let j = i + 1; j < balls.length; j++) collidePair(a, balls[j], n === 0);
+      }
+      for (let i = 0; i < balls.length; i++) collideWall(balls[i]);
+    }
+    for (let i = 0; i < balls.length; i++) clampSpeed(balls[i]);
+    ageList(sparks, dt, 1.7);
+    ageList(ripples, dt, 2.4);
+    ageList(flashes, dt, 2.8);
+  }
+
+  function drawBackground() {
+    const bg = ctx.createRadialGradient(cx, cy, ringR * 0.2, cx, cy, Math.max(w, h) * 0.72);
+    bg.addColorStop(0, '#3a1268');
+    bg.addColorStop(0.42, '#1a0636');
+    bg.addColorStop(1, '#05010c');
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, w, h);
+  }
+
+  function drawFloor() {
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, boundR, 0, Math.PI * 2);
+    ctx.clip();
+    if (ctx.createConicGradient) {
+      const g = ctx.createConicGradient(spin, cx, cy);
+      for (let i = 0; i <= 8; i++) g.addColorStop(i / 8, 'hsl(' + (i * 45) + ', 100%, 52%)');
+      ctx.fillStyle = g;
+      ctx.fillRect(cx - boundR, cy - boundR, boundR * 2, boundR * 2);
+    } else {
+      ctx.fillStyle = '#1a0840';
+      ctx.fillRect(cx - boundR, cy - boundR, boundR * 2, boundR * 2);
+    }
+    const veil = ctx.createRadialGradient(cx, cy, boundR * 0.12, cx, cy, boundR);
+    veil.addColorStop(0, 'rgba(8, 0, 20, 0.86)');
+    veil.addColorStop(0.5, 'rgba(8, 0, 22, 0.58)');
+    veil.addColorStop(1, 'rgba(8, 0, 20, 0.42)');
+    ctx.fillStyle = veil;
+    ctx.fillRect(cx - boundR, cy - boundR, boundR * 2, boundR * 2);
+    const sheen = ctx.createRadialGradient(cx - boundR * 0.28, cy - boundR * 0.34, s * 8, cx, cy, boundR * 0.95);
+    sheen.addColorStop(0, 'rgba(255, 255, 255, 0.16)');
+    sheen.addColorStop(0.45, 'rgba(255, 255, 255, 0)');
+    ctx.fillStyle = sheen;
+    ctx.fillRect(cx - boundR, cy - boundR, boundR * 2, boundR * 2);
+    ctx.restore();
+  }
+
+  function drawBall(b) {
+    const r = b.r * (1 + b.flash * 0.08);
+    ctx.beginPath();
+    ctx.ellipse(b.x + r * 0.15, b.y + r * 0.32, r * 0.8, r * 0.46, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
+    ctx.fill();
+
+    const g = ctx.createRadialGradient(b.x - r * 0.34, b.y - r * 0.4, r * 0.06, b.x, b.y, r);
+    g.addColorStop(0, 'hsl(' + b.hue + ', 100%, ' + (84 + b.flash * 12) + '%)');
+    g.addColorStop(0.4, 'hsl(' + b.hue + ', 100%, ' + (54 + b.flash * 22) + '%)');
+    g.addColorStop(1, 'hsl(' + b.hue + ', 100%, ' + (28 + b.flash * 8) + '%)');
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = g;
+    ctx.fill();
+    ctx.lineWidth = Math.max(1, r * 0.065);
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.24)';
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.ellipse(b.x - r * 0.28, b.y - r * 0.34, r * 0.26, r * 0.14, -0.55, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 255, 255, ' + (0.6 + b.flash * 0.35) + ')';
+    ctx.fill();
+  }
+
+  function drawEffects() {
+    for (let i = 0; i < ripples.length; i++) {
+      const p = ripples[i];
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, (1 - p.life) * 28 * s + 4 * s, 0, Math.PI * 2);
+      ctx.strokeStyle = 'hsla(' + p.hue + ', 100%, 68%, ' + (p.life * 0.85) + ')';
+      ctx.lineWidth = Math.max(1, 2.2 * s);
+      ctx.stroke();
+    }
+    for (let i = 0; i < sparks.length; i++) {
+      const p = sparks[i];
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.rad * (0.4 + p.life), 0, Math.PI * 2);
+      ctx.fillStyle = 'hsla(' + p.hue + ', 100%, 64%, ' + p.life + ')';
+      ctx.fill();
+    }
+  }
+
+  function drawRing() {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(spin);
+    ctx.lineCap = 'round';
+    ctx.lineWidth = ringWidth;
+    const beads = 48;
+    const full = (Math.PI * 2) / beads;
+    const gap = full * 0.3;
+    for (let i = 0; i < beads; i++) {
+      ctx.strokeStyle = 'hsl(' + (i / beads) * 360 + ', 100%, 58%)';
+      ctx.beginPath();
+      ctx.arc(0, 0, ringR, i * full + gap * 0.5, (i + 1) * full - gap * 0.5);
+      ctx.stroke();
+    }
+    const jewels = ['#ffe14a', '#35f2ff', '#ff3d8a'];
+    for (let k = 0; k < 3; k++) {
+      const a = (k / 3) * Math.PI * 2;
+      const jx = Math.cos(a) * ringR;
+      const jy = Math.sin(a) * ringR;
+      const jr = 7.5 * s;
+      const g = ctx.createRadialGradient(jx - jr * 0.3, jy - jr * 0.35, jr * 0.1, jx, jy, jr);
+      g.addColorStop(0, '#ffffff');
+      g.addColorStop(0.45, jewels[k]);
+      g.addColorStop(1, jewels[k]);
+      ctx.beginPath();
+      ctx.arc(jx, jy, jr, 0, Math.PI * 2);
+      ctx.fillStyle = g;
+      ctx.fill();
+    }
+    ctx.restore();
+
+    for (let i = 0; i < flashes.length; i++) {
+      const f = flashes[i];
+      ctx.beginPath();
+      ctx.strokeStyle = 'hsla(' + f.hue + ', 100%, 70%, ' + (f.life * 0.9) + ')';
+      ctx.lineWidth = ringWidth * 0.72;
+      ctx.lineCap = 'round';
+      ctx.arc(cx, cy, ringR, f.ang - 0.22, f.ang + 0.22);
+      ctx.stroke();
+    }
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, boundR, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.38)';
+    ctx.lineWidth = Math.max(1.25, 2.4 * s);
+    ctx.stroke();
+  }
+
+  function draw() {
+    drawBackground();
+    ctx.beginPath();
+    ctx.arc(cx, cy, ringR + ringWidth * 0.15, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255, 70, 210, 0.18)';
+    ctx.lineWidth = 28 * s;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx, cy, ringR, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(120, 80, 255, 0.2)';
+    ctx.lineWidth = 14 * s;
+    ctx.stroke();
+    drawFloor();
+    for (let i = 0; i < balls.length; i++) drawBall(balls[i]);
+    drawEffects();
+    drawRing();
+  }
+
+  let last = 0;
+  function frame(ts) {
+    const dt = last ? Math.min(0.032, (ts - last) / 1000) : 0.016;
+    last = ts;
+    step(dt);
+    draw();
+    requestAnimationFrame(frame);
+  }
+
+  layout();
+  spawn();
+  window.addEventListener('resize', layout);
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', layout);
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

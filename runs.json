@@ -773,5 +773,159 @@
     "elapsed_s": 943.9
    }
   }
+ },
+ "restore-1": {
+  "title": "Overgrown House Restoration",
+  "prompt": "Build an animated restoration of an old, overgrown, run-down house, as one self-contained file named index.html in this folder. Four AI coding agents will build it in turn, one stage each, and you go first. The page plays a 36-second restoration on a loop: from 0 to 6 seconds the house sits overgrown and run-down; 6 to 12 seconds is stage 1, clearing the overgrowth; 12 to 20 seconds is stage 2, repairing the roof and the walls; 20 to 28 seconds is stage 3, landscaping the garden and yard; 28 to 34 seconds is stage 4, the interior and the lights coming on; 34 to 36 seconds holds the finished house, then it loops. Build the house in its overgrown state and stage 1: tangled vines, tall weeds and debris being cleared away, with satisfying sound effects for each piece that comes off. Leave stages 2, 3 and 4 as clearly marked, empty sections of the code, with their time slots wired in, so the next builders can fill them. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Sound effects for your stage must be generated in code with the Web Audio API, with no audio files, and start as soon as the page loads, or on the first click or key press if the browser blocks that. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-25T05:25:43Z",
+    "elapsed_s": 187.0
+   }
+  }
+ },
+ "restore-2": {
+  "title": "Overgrown House Restoration",
+  "prompt": "The index.html file in this folder was started by other AI coding agents. It is an animated restoration of an old, overgrown house, and four agents are building it in turn, one stage each. The page plays a 36-second restoration on a loop: from 0 to 6 seconds the house sits overgrown and run-down; 6 to 12 seconds is stage 1, clearing the overgrowth; 12 to 20 seconds is stage 2, repairing the roof and the walls; 20 to 28 seconds is stage 3, landscaping the garden and yard; 28 to 34 seconds is stage 4, the interior and the lights coming on; 34 to 36 seconds holds the finished house, then it loops. You do stage 2: repair the roof and the walls: replace broken shingles, fix the windows and shutters, repaint the siding, during its time slot, with satisfying sound effects for each change. Keep everything the earlier stages built working and visible, and do not remove or redo their work. Leave any later stage's section for its builder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Sound effects for your stage must be generated in code with the Web Audio API, with no audio files, and start as soon as the page loads, or on the first click or key press if the browser blocks that. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "grok": {
+    "model": "grok-4.7",
+    "effort": "medium",
+    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
+    "start_utc": "2026-10-25T05:28:50Z",
+    "elapsed_s": 5220.2
+   }
+  }
+ },
+ "restore-3": {
+  "title": "Overgrown House Restoration",
+  "prompt": "The index.html file in this folder was started by other AI coding agents. It is an animated restoration of an old, overgrown house, and four agents are building it in turn, one stage each. The page plays a 36-second restoration on a loop: from 0 to 6 seconds the house sits overgrown and run-down; 6 to 12 seconds is stage 1, clearing the overgrowth; 12 to 20 seconds is stage 2, repairing the roof and the walls; 20 to 28 seconds is stage 3, landscaping the garden and yard; 28 to 34 seconds is stage 4, the interior and the lights coming on; 34 to 36 seconds holds the finished house, then it loops. You do stage 3: landscape the garden and yard: a fresh lawn, a path to the door, flower beds, shrubs and trees, during its time slot, with satisfying sound effects for each change. Keep everything the earlier stages built working and visible, and do not remove or redo their work. Leave any later stage's section for its builder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Sound effects for your stage must be generated in code with the Web Audio API, with no audio files, and start as soon as the page loads, or on the first click or key press if the browser blocks that. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "gemini": {
+    "model": "gemini-4-argon-medium",
+    "effort": "medium",
+    "cli": "1.4.7",
+    "start_utc": "2026-10-25T06:55:52Z",
+    "elapsed_s": 290.0
+   }
+  }
+ },
+ "restore-4": {
+  "title": "Overgrown House Restoration",
+  "prompt": "The index.html file in this folder was started by other AI coding agents. It is an animated restoration of an old, overgrown house, and four agents are building it in turn, one stage each. The page plays a 36-second restoration on a loop: from 0 to 6 seconds the house sits overgrown and run-down; 6 to 12 seconds is stage 1, clearing the overgrowth; 12 to 20 seconds is stage 2, repairing the roof and the walls; 20 to 28 seconds is stage 3, landscaping the garden and yard; 28 to 34 seconds is stage 4, the interior and the lights coming on; 34 to 36 seconds holds the finished house, then it loops. You do stage 4: bring the interior to life and turn the lights on: furnished rooms visible through the windows, warm lights switching on room by room, a porch light, during its time slot, with satisfying sound effects for each change. Keep everything the earlier stages built working and visible, and do not remove or redo their work. Leave any later stage's section for its builder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Sound effects for your stage must be generated in code with the Web Audio API, with no audio files, and start as soon as the page loads, or on the first click or key press if the browser blocks that. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "claude": {
+    "model": "claude-fable-5-1",
+    "effort": "medium",
+    "cli": "2.1.303 (Claude Code)",
+    "start_utc": "2026-10-25T07:00:43Z",
+    "elapsed_s": 677.8
+   }
+  }
+ },
+ "bounce-melody": {
+  "title": "Bouncing Balls Play F\u00fcr Elise",
+  "prompt": "Build dozens of colorful balls bouncing inside a slowly rotating circle, where every bounce plays the next note of Beethoven's F\u00fcr Elise, so the bounces play the melody, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it sound effects that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "claude": {
+    "model": "claude-fable-5-1",
+    "effort": "medium",
+    "cli": "2.1.303 (Claude Code)",
+    "start_utc": "2026-10-25T14:16:01Z",
+    "elapsed_s": 126.9
+   },
+   "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-25T14:18:08Z",
+    "elapsed_s": 127.7
+   },
+   "gemini": {
+    "model": "gemini-4-argon-medium",
+    "effort": "medium",
+    "cli": "1.4.7",
+    "start_utc": "2026-10-25T14:15:54Z",
+    "elapsed_s": 172.4
+   },
+   "grok": {
+    "model": "grok-4.7",
+    "effort": "medium",
+    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
+    "start_utc": "2026-10-25T14:16:00Z",
+    "elapsed_s": 1727.0
+   }
+  }
+ },
+ "bounce-melody-playful": {
+  "title": "Bouncing Balls Play F\u00fcr Elise",
+  "prompt": "Build dozens of colorful balls bouncing inside a slowly rotating circle, where every bounce plays the next note of Beethoven's F\u00fcr Elise, so the bounces play the melody, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it playful sound effects with personality that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "claude": {
+    "model": "claude-fable-5-1",
+    "effort": "medium",
+    "cli": "2.1.303 (Claude Code)",
+    "start_utc": "2026-10-25T14:16:01Z",
+    "elapsed_s": 263.7
+   },
+   "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-25T14:20:24Z",
+    "elapsed_s": 93.3
+   },
+   "gemini": {
+    "model": "gemini-4-argon-medium",
+    "effort": "medium",
+    "cli": "1.4.7",
+    "start_utc": "2026-10-25T14:18:46Z",
+    "elapsed_s": 242.5
+   },
+   "grok": {
+    "model": "grok-4.7",
+    "effort": "medium",
+    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
+    "start_utc": "2026-10-25T14:16:00Z",
+    "elapsed_s": 1001.0
+   }
+  }
+ },
+ "pendulum-notes": {
+  "title": "Pendulum Wave With Sound",
+  "prompt": "Build a pendulum wave of fifteen pendulums with slightly different lengths, swinging in and out of mesmerizing patterns, where each pendulum plays its own musical note at the bottom of every swing, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it sound effects that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "claude": {
+    "model": "claude-fable-5-1",
+    "effort": "medium",
+    "cli": "2.1.303 (Claude Code)",
+    "start_utc": "2026-10-25T14:20:16Z",
+    "elapsed_s": 195.0
+   },
+   "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-25T14:23:31Z",
+    "elapsed_s": 83.6
+   },
+   "gemini": {
+    "model": "gemini-4-argon-medium",
+    "effort": "medium",
+    "cli": "1.4.7",
+    "start_utc": "2026-10-25T14:22:49Z",
+    "elapsed_s": 93.3
+   },
+   "grok": {
+    "model": "grok-4.7",
+    "effort": "medium",
+    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
+    "start_utc": "2026-10-25T14:44:48Z",
+    "elapsed_s": 959.1
+   }
+  }
  }
 }

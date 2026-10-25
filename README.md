@@ -279,3 +279,68 @@ Note: Rebuilt on Oct 23, 2026 with the current prompt, which adds the vivid-colo
 | Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:05 | [open](https://darindeters.github.io/same-prompt/self-portrait/codex/) |
 | Gemini (4 Argon) | Antigravity CLI 1.4.5 | 3:10 | [open](https://darindeters.github.io/same-prompt/self-portrait/gemini/) |
 | Grok (4.7) | Grok Build 1.0.62 | 15:44 | [open](https://darindeters.github.io/same-prompt/self-portrait/grok/) |
+
+## Overgrown House Restoration
+
+> Build an animated restoration of an old, overgrown, run-down house, as one self-contained file named index.html in this folder. Four AI coding agents will build it in turn, one stage each, and you go first. The page plays a 36-second restoration on a loop: from 0 to 6 seconds the house sits overgrown and run-down; 6 to 12 seconds is stage 1, clearing the overgrowth; 12 to 20 seconds is stage 2, repairing the roof and the walls; 20 to 28 seconds is stage 3, landscaping the garden and yard; 28 to 34 seconds is stage 4, the interior and the lights coming on; 34 to 36 seconds holds the finished house, then it loops. Build the house in its overgrown state and stage 1: tangled vines, tall weeds and debris being cleared away, with satisfying sound effects for each piece that comes off. Leave stages 2, 3 and 4 as clearly marked, empty sections of the code, with their time slots wired in, so the next builders can fill them. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Sound effects for your stage must be generated in code with the Web Audio API, with no audio files, and start as soon as the page loads, or on the first click or key press if the browser blocks that. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 3:07 | [open](https://darindeters.github.io/same-prompt/restore-1/codex/) |
+
+## Overgrown House Restoration
+
+> The index.html file in this folder was started by other AI coding agents. It is an animated restoration of an old, overgrown house, and four agents are building it in turn, one stage each. The page plays a 36-second restoration on a loop: from 0 to 6 seconds the house sits overgrown and run-down; 6 to 12 seconds is stage 1, clearing the overgrowth; 12 to 20 seconds is stage 2, repairing the roof and the walls; 20 to 28 seconds is stage 3, landscaping the garden and yard; 28 to 34 seconds is stage 4, the interior and the lights coming on; 34 to 36 seconds holds the finished house, then it loops. You do stage 2: repair the roof and the walls: replace broken shingles, fix the windows and shutters, repaint the siding, during its time slot, with satisfying sound effects for each change. Keep everything the earlier stages built working and visible, and do not remove or redo their work. Leave any later stage's section for its builder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Sound effects for your stage must be generated in code with the Web Audio API, with no audio files, and start as soon as the page loads, or on the first click or key press if the browser blocks that. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Grok (4.7) | Grok Build 1.0.62 | 87:00 | [open](https://darindeters.github.io/same-prompt/restore-2/grok/) |
+
+## Overgrown House Restoration
+
+> The index.html file in this folder was started by other AI coding agents. It is an animated restoration of an old, overgrown house, and four agents are building it in turn, one stage each. The page plays a 36-second restoration on a loop: from 0 to 6 seconds the house sits overgrown and run-down; 6 to 12 seconds is stage 1, clearing the overgrowth; 12 to 20 seconds is stage 2, repairing the roof and the walls; 20 to 28 seconds is stage 3, landscaping the garden and yard; 28 to 34 seconds is stage 4, the interior and the lights coming on; 34 to 36 seconds holds the finished house, then it loops. You do stage 3: landscape the garden and yard: a fresh lawn, a path to the door, flower beds, shrubs and trees, during its time slot, with satisfying sound effects for each change. Keep everything the earlier stages built working and visible, and do not remove or redo their work. Leave any later stage's section for its builder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Sound effects for your stage must be generated in code with the Web Audio API, with no audio files, and start as soon as the page loads, or on the first click or key press if the browser blocks that. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Gemini (4 Argon) | Antigravity CLI 1.4.7 | 4:50 | [open](https://darindeters.github.io/same-prompt/restore-3/gemini/) |
+
+## Overgrown House Restoration
+
+> The index.html file in this folder was started by other AI coding agents. It is an animated restoration of an old, overgrown house, and four agents are building it in turn, one stage each. The page plays a 36-second restoration on a loop: from 0 to 6 seconds the house sits overgrown and run-down; 6 to 12 seconds is stage 1, clearing the overgrowth; 12 to 20 seconds is stage 2, repairing the roof and the walls; 20 to 28 seconds is stage 3, landscaping the garden and yard; 28 to 34 seconds is stage 4, the interior and the lights coming on; 34 to 36 seconds holds the finished house, then it loops. You do stage 4: bring the interior to life and turn the lights on: furnished rooms visible through the windows, warm lights switching on room by room, a porch light, during its time slot, with satisfying sound effects for each change. Keep everything the earlier stages built working and visible, and do not remove or redo their work. Leave any later stage's section for its builder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Sound effects for your stage must be generated in code with the Web Audio API, with no audio files, and start as soon as the page loads, or on the first click or key press if the browser blocks that. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 11:18 | [open](https://darindeters.github.io/same-prompt/restore-4/claude/) |
+
+## Bouncing Balls Play Für Elise
+
+> Build dozens of colorful balls bouncing inside a slowly rotating circle, where every bounce plays the next note of Beethoven's Für Elise, so the bounces play the melody, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it sound effects that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 2:07 | [open](https://darindeters.github.io/same-prompt/bounce-melody/claude/) |
+| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:08 | [open](https://darindeters.github.io/same-prompt/bounce-melody/codex/) |
+| Gemini (4 Argon) | Antigravity CLI 1.4.7 | 2:52 | [open](https://darindeters.github.io/same-prompt/bounce-melody/gemini/) |
+| Grok (4.7) | Grok Build 1.0.62 | 28:47 | [open](https://darindeters.github.io/same-prompt/bounce-melody/grok/) |
+
+## Bouncing Balls Play Für Elise
+
+> Build dozens of colorful balls bouncing inside a slowly rotating circle, where every bounce plays the next note of Beethoven's Für Elise, so the bounces play the melody, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it playful sound effects with personality that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 4:24 | [open](https://darindeters.github.io/same-prompt/bounce-melody-playful/claude/) |
+| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 1:33 | [open](https://darindeters.github.io/same-prompt/bounce-melody-playful/codex/) |
+| Gemini (4 Argon) | Antigravity CLI 1.4.7 | 4:02 | [open](https://darindeters.github.io/same-prompt/bounce-melody-playful/gemini/) |
+| Grok (4.7) | Grok Build 1.0.62 | 16:41 | [open](https://darindeters.github.io/same-prompt/bounce-melody-playful/grok/) |
+
+## Pendulum Wave With Sound
+
+> Build a pendulum wave of fifteen pendulums with slightly different lengths, swinging in and out of mesmerizing patterns, where each pendulum plays its own musical note at the bottom of every swing, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it sound effects that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 3:15 | [open](https://darindeters.github.io/same-prompt/pendulum-notes/claude/) |
+| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 1:24 | [open](https://darindeters.github.io/same-prompt/pendulum-notes/codex/) |
+| Gemini (4 Argon) | Antigravity CLI 1.4.7 | 1:33 | [open](https://darindeters.github.io/same-prompt/pendulum-notes/gemini/) |
+| Grok (4.7) | Grok Build 1.0.62 | 15:59 | [open](https://darindeters.github.io/same-prompt/pendulum-notes/grok/) |

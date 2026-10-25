@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Für Elise</title>
+<style>
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #04050c;
+    touch-action: none;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('stage');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  // Reference resolution optimized for 1080x1080 while filling any viewport
+  let width = window.innerWidth;
+  let height = window.innerHeight;
+  let dpr = Math.min(window.devicePixelRatio || 1, 2);
+  let centerX = width / 2;
+  let centerY = height / 2;
+  let scale = Math.min(width, height) / 1080;
+
+  function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    centerX = width / 2;
+    centerY = height / 2;
+    scale = Math.min(width, height) / 1080;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ============================================================================
+  // Beethoven's Für Elise (WoO 59) — Melody Sequence + Subtle Bass Harmonies
+  // ============================================================================
+  const NOTE_FREQ = {
+    'A2': 110.00, 'E3': 164.81, 'G3': 196.00, 'G#3': 207.65, 'A3': 220.00,
+    'C4': 261.63, 'D4': 293.66, 'E4': 329.63, 'F4': 349.23, 'G4': 392.00,
+    'G#4': 415.30, 'A4': 440.00, 'B4': 493.88,
+    'C5': 523.25, 'D5': 587.33, 'D#5': 622.25, 'E5': 659.25, 'F5': 698.46
+  };
+
+  // Each entry: [noteName, durationWeight, optionalBassRoot]
+  const FUR_ELISE = [
+    // Opening Phrase 1
+    ['E5', 1.0], ['D#5', 1.0], ['E5', 1.0], ['D#5', 1.0], ['E5', 1.0],
+    ['B4', 1.0], ['D5', 1.0], ['C5', 1.0], ['A4', 1.6, 'A2'],
+    ['C4', 1.0], ['E4', 1.0], ['A4', 1.0], ['B4', 1.6, 'E3'],
+    ['E4', 1.0], ['G#4', 1.0], ['B4', 1.0], ['C5', 1.6, 'A2'],
+    ['E4', 1.0],
+    // Phrase 2 (1st resolution)
+    ['E5', 1.0], ['D#5', 1.0], ['E5', 1.0], ['D#5', 1.0], ['E5', 1.0],
+    ['B4', 1.0], ['D5', 1.0], ['C5', 1.0], ['A4', 1.6, 'A2'],
+    ['C4', 1.0], ['E4', 1.0], ['A4', 1.0], ['B4', 1.6, 'E3'],
+    ['E4', 1.0], ['C5', 1.0], ['B4', 1.0], ['A4', 1.8, 'A2'],
+    // Repeat A section
+    ['E5', 1.0], ['D#5', 1.0], ['E5', 1.0], ['D#5', 1.0], ['E5', 1.0],
+    ['B4', 1.0], ['D5', 1.0], ['C5', 1.0], ['A4', 1.6, 'A2'],
+    ['C4', 1.0], ['E4', 1.0], ['A4', 1.0], ['B4', 1.6, 'E3'],
+    ['E4', 1.0], ['G#4', 1.0], ['B4', 1.0], ['C5', 1.6, 'A2'],
+    ['E4', 1.0],
+    ['E5', 1.0], ['D#5', 1.0], ['E5', 1.0], ['D#5', 1.0], ['E5', 1.0],
+    ['B4', 1.0], ['D5', 1.0], ['C5', 1.0], ['A4', 1.6, 'A2'],
+    ['C4', 1.0], ['E4', 1.0], ['A4', 1.0], ['B4', 1.6, 'E3'],
+    ['E4', 1.0], ['C5', 1.0], ['B4', 1.0], ['A4', 1.6, 'A2'],
+    // Section A2 (Middle Episode)
+    ['B4', 1.0], ['C5', 1.0], ['D5', 1.0], ['E5', 1.6, 'C4'],
+    ['G4', 1.0], ['F5', 1.0], ['E5', 1.0], ['D5', 1.6, 'G3'],
+    ['F4', 1.0], ['E5', 1.0], ['D5', 1.0], ['C5', 1.6, 'A3'],
+    ['E4', 1.0], ['D5', 1.0], ['C5', 1.0], ['B4', 1.6, 'E3'],
+    ['E4', 1.0], ['E5', 1.0], ['E4', 1.0], ['E5', 1.0], ['D#5', 1.0],
+    // Return to main theme
+    ['E5', 1.0], ['D#5', 1.0], ['E5', 1.0], ['B4', 1.0], ['D5', 1.0],
+    ['C5', 1.0], ['A4', 1.6, 'A2'],
+    ['C4', 1.0], ['E4', 1.0], ['A4', 1.0], ['B4', 1.6, 'E3'],
+    ['E4', 1.0], ['G#4', 1.0], ['B4', 1.0], ['C5', 1.6, 'A2'],
+    ['E4', 1.0],
+    ['E5', 1.0], ['D#5', 1.0], ['E5', 1.0], ['D#5', 1.0], ['E5', 1.0],
+    ['B4', 1.0], ['D5', 1.0], ['C5', 1.0], ['A4', 1.6, 'A2'],
+    ['C4', 1.0], ['E4', 1.0], ['A4', 1.0], ['B4', 1.6, 'E3'],
+    ['E4', 1.0], ['C5', 1.0], ['B4', 1.0], ['A4', 2.0, 'A2']
+  ];
+
+  let melodyIndex = 0;
+
+  // ============================================================================
+  // Web Audio API Synthesizer (Auto-start + Fallback on First Input)
+  // ============================================================================
+  let audioCtx = null;
+  let masterGain = null;
+  let reverbBus = null;
+  let nextScheduledNoteTime = 0;
+
+  function setupAudioGraph() {
+    if (audioCtx) return;
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return;
+
+    audioCtx = new AudioContextClass();
+
+    // Master dynamics compressor so polyphonic notes stay crystalline and never clip
+    const compressor = audioCtx.createDynamicsCompressor();
+    compressor.threshold.value = -16;
+    compressor.knee.value = 18;
+    compressor.ratio.value = 4;
+    compressor.attack.value = 0.003;
+    compressor.release.value = 0.22;
+    compressor.connect(audioCtx.destination);
+
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = 0.65;
+    masterGain.connect(compressor);
+
+    // Stereo Lush Echo / Reverb Network
+    reverbBus = audioCtx.createGain();
+    reverbBus.gain.value = 0.28;
+
+    const delayL = audioCtx.createDelay(1.0);
+    const delayR = audioCtx.createDelay(1.0);
+    delayL.delayTime.value = 0.19;
+    delayR.delayTime.value = 0.27;
+
+    const fbL = audioCtx.createGain();
+    const fbR = audioCtx.createGain();
+    fbL.gain.value = 0.36;
+    fbR.gain.value = 0.34;
+
+    const dampFilter = audioCtx.createBiquadFilter();
+    dampFilter.type = 'lowpass';
+    dampFilter.frequency.value = 2600;
+
+    const merger = audioCtx.createChannelMerger(2);
+
+    reverbBus.connect( dampFilter );
+    dampFilter.connect(delayL);
+    dampFilter.connect(delayR);
+
+    delayL.connect(fbL);
+    fbL.connect(delayR);
+    delayR.connect(fbR);
+    fbR.connect(delayL);
+
+    delayL.connect(merger, 0, 0);
+    delayR.connect(merger, 0, 1);
+    merger.connect(masterGain);
+
+    // Attempt immediate resume
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(() => {});
+    }
+  }
+
+  function unlockAudio() {
+    if (!audioCtx) {
+      setupAudioGraph();
+    }
+    if (audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(() => {});
+    }
+  }
+
+  // Try starting immediately on load
+  setupAudioGraph();
+  window.addEventListener('load', unlockAudio);
+
+  // Unlock on first click, key press, pointer, or touch if blocked by browser policy
+  const unlockEvents = ['click', 'keydown', 'mousedown', 'pointerdown', 'touchstart'];
+  unlockEvents.forEach(evt => {
+    window.addEventListener(evt, unlockAudio, { passive: true });
+    document.addEventListener(evt, unlockAudio, { passive: true });
+  });
+
+  function playBounceNote(panX, impactSpeedRatio) {
+    if (!audioCtx) setupAudioGraph();
+    if (!audioCtx) return { noteName: 'E5', freq: 659.25 };
+
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(() => {});
+    }
+
+    const step = FUR_ELISE[melodyIndex];
+    melodyIndex = (melodyIndex + 1) % FUR_ELISE.length;
+
+    const noteName = step[0];
+    const durWeight = step[1] || 1.0;
+    const bassNote = step[2] || null;
+    const freq = NOTE_FREQ[noteName] || 440;
+
+    // Only synthesize sound when the context is running, or schedule right away
+    const now = audioCtx.currentTime;
+    // Slight micro-stagger if two balls hit on the exact same frame so every note articulates clearly
+    const minSpacing = 0.068;
+    const startTime = Math.max(now, nextScheduledNoteTime);
+    nextScheduledNoteTime = Math.min(startTime + minSpacing, now + 0.28);
+
+    const dur = 0.72 * durWeight;
+    const velocity = Math.min(1.0, Math.max(0.45, impactSpeedRatio));
+
+    // Stereo Panner matching screen X position of the bounce
+    let destNode = masterGain;
+    if (audioCtx.createStereoPanner) {
+      const panner = audioCtx.createStereoPanner();
+      panner.pan.setValueAtTime(Math.max(-0.85, Math.min(0.85, panX)), startTime);
+      panner.connect(masterGain);
+      destNode = panner;
+    }
+
+    // 1. Warm Felt-Piano / Celesta Fundamental (Triangle + Sine blend)
+    const osc1 = audioCtx.createOscillator();
+    const osc2 = audioCtx.createOscillator();
+    osc1.type = 'triangle';
+    osc2.type = 'sine';
+    osc1.frequency.setValueAtTime(freq, startTime);
+    osc2.frequency.setValueAtTime(freq * 2.0, startTime); // 2nd harmonic shimmer
+
+    // Slight bell overtone for crystal clarity on mobile speakers
+    const osc3 = audioCtx.createOscillator();
+    osc3.type = 'sine';
+    osc3.frequency.setValueAtTime(freq * 3.0, startTime);
+
+    const noteGain = audioCtx.createGain();
+    const peakGain = 0.24 * velocity;
+    noteGain.gain.setValueAtTime(0.0001, startTime);
+    noteGain.gain.linearRampToValueAtTime(peakGain, startTime + 0.006);
+    noteGain.gain.exponentialRampToValueAtTime(peakGain * 0.35, startTime + 0.14);
+    noteGain.gain.exponentialRampToValueAtTime(0.0001, startTime + dur);
+
+    const overtoneGain = audioCtx.createGain();
+    overtoneGain.gain.setValueAtTime(0.0001, startTime);
+    overtoneGain.gain.linearRampToValueAtTime(peakGain * 0.28, startTime + 0.004);
+    overtoneGain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.18);
+
+    const thirdGain = audioCtx.createGain();
+    thirdGain.gain.setValueAtTime(0.0001, startTime);
+    thirdGain.gain.linearRampToValueAtTime(peakGain * 0.09, startTime + 0.003);
+    thirdGain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.075);
+
+    // 2. Physical Bounce Impact Transient (crisp wooden/glass mallet tap)
+    const tapOsc = audioCtx.createOscillator();
+    tapOsc.type = 'sine';
+    tapOsc.frequency.setValueAtTime(freq * 4.5, startTime);
+    tapOsc.frequency.exponentialRampToValueAtTime(freq * 0.8, startTime + 0.028);
+
+    const tapGain = audioCtx.createGain();
+    tapGain.gain.setValueAtTime(0.0001, startTime);
+    tapGain.gain.linearRampToValueAtTime(peakGain * 0.32, startTime + 0.002);
+    tapGain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.032);
+
+    osc1.connect(noteGain);
+    osc2.connect(overtoneGain);
+    osc3.connect(thirdGain);
+    tapOsc.connect(tapGain);
+
+    noteGain.connect(destNode);
+    overtoneGain.connect(destNode);
+    thirdGain.connect(destNode);
+    tapGain.connect(destNode);
+
+    noteGain.connect(reverbBus);
+    overtoneGain.connect(reverbBus);
+
+    osc1.start(startTime);
+    osc2.start(startTime);
+    osc3.start(startTime);
+    tapOsc.start(startTime);
+
+    osc1.stop(startTime + dur + 0.02);
+    osc2.stop(startTime + 0.22);
+    osc3.stop(startTime + 0.09);
+    tapOsc.stop(startTime + 0.04);
+
+    // 3. Optional Warm Bass Harmonic Root on cadence notes
+    if (bassNote && NOTE_FREQ[bassNote]) {
+      const bassFreq = NOTE_FREQ[bassNote];
+      const bassOsc = audioCtx.createOscillator();
+      bassOsc.type = 'triangle';
+      bassOsc.frequency.setValueAtTime(bassFreq, startTime);
+
+      const bassFilter = audioCtx.createBiquadFilter();
+      bassFilter.type = 'lowpass';
+      bassFilter.frequency.setValueAtTime(650, startTime);
+
+      const bassGain = audioCtx.createGain();
+      bassGain.gain.setValueAtTime(0.0001, startTime);
+      bassGain.gain.linearRampToValueAtTime(0.14, startTime + 0.015);
+      bassGain.gain.exponentialRampToValueAtTime(0.0001, startTime + 1.15);
+
+      bassOsc.connect(bassFilter);
+      bassFilter.connect(bassGain);
+      bassGain.connect(masterGain);
+      bassGain.connect(reverbBus);
+
+      bassOsc.start(startTime);
+      bassOsc.stop(startTime + 1.18);
+    }
+
+    return { noteName, freq };
+  }
+
+  // Subtle crystalline clink when two balls collide in mid-air
+  let lastClinkTime = 0;
+  function playMidairClink(panX, relSpeed) {
+    if (!audioCtx || audioCtx.state !== 'running') return;
+    const now = audioCtx.currentTime;
+    if (now - lastClinkTime < 0.09) return;
+    lastClinkTime = now;
+
+    const osc = audioCtx.createOscillator();
+    osc.type = 'sine';
+    const baseFreq = 1318.5 + Math.random() * 240; // High harmonic shimmer
+    osc.frequency.setValueAtTime(baseFreq, now);
+    osc.frequency.exponentialRampToValueAtTime(baseFreq * 0.7, now + 0.025);
+
+    const gain = audioCtx.createGain();
+    const amp = Math.min(0.025, relSpeed * 0.00008);
+    if (amp < 0.003) return;
+    gain.gain.setValueAtTime(amp, now);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.028);
+
+    osc.connect(gain);
+    gain.connect(masterGain);
+    osc.start(now);
+    osc.stop(now + 0.03);
+  }
+
+  // ============================================================================
+  // Simulation Configuration (1080x1080 Logical Coordinate Space)
+  // ============================================================================
+  const LOGICAL_SIZE = 1080;
+  const RING_RADIUS = 450;
+  const RING_SEGMENTS = 36;
+  const BALL_COUNT = 30; // Dozens of vivid colorful balls
+  const GRAVITY = 88;    // Tuned so 30 balls produce a steady musical cadence (~5-6 bounces/sec)
+  const RING_OMEGA = 0.34; // Slow, hypnotic clockwise rotation (rad/sec)
+
+  // Rotating ring state
+  let ringAngle = 0;
+  const segmentGlow = new Float32Array(RING_SEGMENTS);
+  let ringPulse = 0;
+
+  // Vivid, hyper-saturated palette designed for OLED/mobile screens
+  function getVividBallColor(index, total) {
+    const hue = Math.round((index / total) * 360);
+    return {
+      hue,
+      main: `hsl(${hue}, 100%, 58%)`,
+      core: `hsl(${hue}, 100%, 88%)`,
+      deep: `hsl(${hue}, 96%, 36%)`,
+      glow: `hsla(${hue}, 100%, 62%, 0.75)`
+    };
+  }
+
+  // Create 30 balls with staggered initial orbits and phases so the melody flows immediately
+  const balls = [];
+  for (let i = 0; i < BALL_COUNT; i++) {
+    const color = getVividBallColor(i, BALL_COUNT);
+    const radius = 15 + (i % 3) * 2;
+
+    // Golden-angle spiral distribution with carefully staggered outward radial trajectories
+    // so the very first bounces begin right after page load and continue at even intervals
+    const goldenAngle = i * 2.399963229728653;
+    const radialFraction = 0.22 + 0.68 * ((i + 0.5) / BALL_COUNT);
+    const r = (RING_RADIUS - radius - 28) * radialFraction;
+    const x = Math.cos(goldenAngle) * r;
+    const y = Math.sin(goldenAngle) * r;
+
+    // Initial velocity aimed so balls reach the perimeter in a smooth cascade
+    const speed = 175 + (i % 5) * 14;
+    const tangentOffset = 0.32 * Math.sin(i * 1.7);
+    const vAngle = goldenAngle + tangentOffset;
+
+    balls.push({
+      id: i,
+      x,
+      y,
+      vx: Math.cos(vAngle) * speed,
+      vy: Math.sin(vAngle) * speed,
+      radius,
+      color,
+      flash: 0,
+      bounceCooldown: 0,
+      trail: []
+    });
+  }
+
+  // Visual FX arrays: Wall shockwaves, spark particles, and harmonic chord beams
+  const ripples = [];
+  const sparks = [];
+  const beams = [];
+
+  function spawnBounceFX(x, y, normalX, normalY, hue, prevBallX, prevBallY) {
+    // Shockwave ripple on the circle wall
+    ripples.push({
+      x,
+      y,
+      radius: 10,
+      maxRadius: 115,
+      hue,
+      life: 1.0
+    });
+
+    // Subtle harmonic light chord connecting the previous bounce or center
+    beams.push({
+      x1: x,
+      y1: y,
+      x2: prevBallX,
+      y2: prevBallY,
+      hue,
+      life: 1.0
+    });
+
+    // Luminous spark shower spraying inward along normal + tangent
+    const baseAngle = Math.atan2(normalY, normalX);
+    const sparkCount = 12;
+    for (let i = 0; i < sparkCount; i++) {
+      const spread = (Math.random() - 0.5) * 1.5;
+      const spd = 90 + Math.random() * 240;
+      sparks.push({
+        x,
+        y,
+        vx: Math.cos(baseAngle + spread) * spd,
+        vy: Math.sin(baseAngle + spread) * spd,
+        size: 2.5 + Math.random() * 3.5,
+        hue: (hue + (Math.random() - 0.5) * 30 + 360) % 360,
+        life: 1.0,
+        decay: 1.4 + Math.random() * 1.2
+      });
+    }
+  }
+
+  let lastBouncePos = { x: 0, y: 0 };
+
+  // ============================================================================
+  // Physics Step
+  // ============================================================================
+  function updatePhysics(dt) {
+    ringAngle = (ringAngle + RING_OMEGA * dt) % (Math.PI * 2);
+    ringPulse = Math.max(0, ringPulse - dt * 2.8);
+
+    for (let s = 0; s < RING_SEGMENTS; s++) {
+      segmentGlow[s] = Math.max(0, segmentGlow[s] - dt * 2.2);
+    }
+
+    // 1. Move balls & check boundary bounces
+    for (let i = 0; i < balls.length; i++) {
+      const b = balls[i];
+      b.bounceCooldown = Math.max(0, b.bounceCooldown - dt);
+      b.flash = Math.max(0, b.flash - dt * 3.2);
+
+      // Apply gravity
+      b.vy += GRAVITY * dt;
+
+      // Integrate position
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+
+      // Record trail in logical coordinates
+      b.trail.push({ x: b.x, y: b.y });
+      if (b.trail.length > 14) {
+        b.trail.shift();
+      }
+
+      // Check collision with inside of rotating circle
+      const dist = Math.hypot(b.x, b.y);
+      const maxDist = RING_RADIUS - b.radius;
+
+      if (dist >= maxDist) {
+        const nx = -b.x / (dist || 1); // Inward unit normal
+        const ny = -b.y / (dist || 1);
+
+        // Push ball cleanly inside the boundary
+        b.x = -nx * (maxDist - 0.5);
+        b.y = -ny * (maxDist - 0.5);
+
+        // Reflect velocity across inward normal
+        const vn = b.vx * nx + b.vy * ny; // Negative when moving outward
+        if (vn < 0) {
+          // Tangential vector (clockwise direction of ring rotation)
+          const tx = -ny;
+          const ty = nx;
+          let vt = b.vx * tx + b.vy * ty;
+
+          // Rotating circle wall imparts gentle tangential spin + keeps balls lively
+          const wallTangentSpeed = RING_OMEGA * RING_RADIUS;
+          vt = vt * 0.92 + wallTangentSpeed * 0.24;
+
+          // Regulated inward rebound speed so balls always arc gracefully across the circle
+          // and never get trapped micro-bouncing at the bottom of the circle
+          const minRebound = 185;
+          const maxRebound = 250;
+          const reboundVn = Math.min(maxRebound, Math.max(minRebound, -vn * 1.01));
+
+          b.vx = nx * reboundVn + tx * vt;
+          b.vy = ny * reboundVn + ty * vt;
+
+          // Trigger Für Elise melody note & visual effects on every bounce
+          if (b.bounceCooldown <= 0) {
+            b.bounceCooldown = 0.08;
+            b.flash = 1.0;
+            ringPulse = Math.min(1.0, ringPulse + 0.35);
+
+            // Contact point on the circle wall
+            const contactX = -nx * RING_RADIUS;
+            const contactY = -ny * RING_RADIUS;
+
+            // Light up corresponding rotating ring segment
+            let worldAngle = Math.atan2(contactY, contactX);
+            let relAngle = (worldAngle - ringAngle) % (Math.PI * 2);
+            if (relAngle < 0) relAngle += Math.PI * 2;
+            const segIdx = Math.floor((relAngle / (Math.PI * 2)) * RING_SEGMENTS) % RING_SEGMENTS;
+            segmentGlow[segIdx] = 1.0;
+            segmentGlow[(segIdx + 1) % RING_SEGMENTS] = Math.max(segmentGlow[(segIdx + 1) % RING_SEGMENTS], 0.55);
+            segmentGlow[(segIdx + RING_SEGMENTS - 1) % RING_SEGMENTS] = Math.max(segmentGlow[(segIdx + RING_SEGMENTS - 1) % RING_SEGMENTS], 0.55);
+
+            // Play next note of Beethoven's Für Elise
+            const panX = contactX / RING_RADIUS;
+            const speedRatio = Math.hypot(b.vx, b.vy) / 260;
+            playBounceNote(panX, speedRatio);
+
+            // Visual shockwave & sparks
+            spawnBounceFX(contactX, contactY, nx, ny, b.color.hue, lastBouncePos.x, lastBouncePos.y);
+            lastBouncePos = { x: contactX, y: contactY };
+          }
+        }
+      }
+    }
+
+    // 2. Ball-to-Ball Elastic Collisions
+    for (let i = 0; i < balls.length; i++) {
+      const a = balls[i];
+      for (let j = i + 1; j < balls.length; j++) {
+        const b = balls[j];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const minDist = a.radius + b.radius;
+        const distSq = dx * dx + dy * dy;
+
+        if (distSq < minDist * minDist && distSq > 0.0001) {
+          const dist = Math.sqrt(distSq);
+          const nx = dx / dist;
+          const ny = dy / dist;
+
+          // Separate overlapping balls symmetrically
+          const overlap = (minDist - dist) * 0.5;
+          a.x -= nx * overlap;
+          a.y -= ny * overlap;
+          b.x += nx * overlap;
+          b.y += ny * overlap;
+
+          // Relative velocity along collision normal
+          const rvx = b.vx - a.vx;
+          const rvy = b.vy - a.vy;
+          const velAlongNormal = rvx * nx + rvy * ny;
+
+          if (velAlongNormal < 0) {
+            const impulse = -velAlongNormal * 0.98;
+            a.vx -= nx * impulse;
+            a.vy -= ny * impulse;
+            b.vx += nx * impulse;
+            b.vy += ny * impulse;
+
+            a.flash = Math.max(a.flash, 0.28);
+            b.flash = Math.max(b.flash, 0.28);
+
+            playMidairClink(((a.x + b.x) * 0.5) / RING_RADIUS, -velAlongNormal);
+          }
+        }
+      }
+    }
+
+    // 3. Speed Clamp so energy stays perpetually balanced
+    for (let i = 0; i < balls.length; i++) {
+      const b = balls[i];
+      const spd = Math.hypot(b.vx, b.vy);
+      if (spd > 310) {
+        const factor = 310 / spd;
+        b.vx *= factor;
+        b.vy *= factor;
+      } else if (spd < 115) {
+        const angle = Math.atan2(b.vy, b.vx);
+        b.vx = Math.cos(angle) * 115;
+        b.vy = Math.sin(angle) * 115;
+      }
+    }
+
+    // 4. Update Visual FX
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      const r = ripples[i];
+      r.radius += (r.maxRadius - r.radius) * dt * 6.5;
+      r.life -= dt * 1.9;
+      if (r.life <= 0) ripples.splice(i, 1);
+    }
+
+    for (let i = beams.length - 1; i >= 0; i--) {
+      beams[i].life -= dt * 2.4;
+      if (beams[i].life <= 0) beams.splice(i, 1);
+    }
+
+    for (let i = sparks.length - 1; i >= 0; i--) {
+      const sp = sparks[i];
+      sp.x += sp.vx * dt;
+      sp.y += sp.vy * dt;
+      sp.vx *= 0.96;
+      sp.vy *= 0.96;
+      sp.life -= sp.decay * dt;
+      if (sp.life <= 0) sparks.splice(i, 1);
+    }
+  }
+
+  // ============================================================================
+  // Rendering
+  // ============================================================================
+  function render() {
+    // Rich dark cosmic background
+    const bgGrad = ctx.createRadialGradient(
+      centerX, centerY, 20 * scale,
+      centerX, centerY, Math.max(width, height) * 0.72
+    );
+    bgGrad.addColorStop(0, '#0d1026');
+    bgGrad.addColorStop(0.55, '#070816');
+    bgGrad.addColorStop(1, '#020308');
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, width, height);
+
+    ctx.save();
+    ctx.translate(centerX, centerY);
+    ctx.scale(scale, scale);
+
+    // Subtle interior harmonic grid rings
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = `rgba(110, 140, 255, ${0.06 + ringPulse * 0.04})`;
+    ctx.beginPath();
+    ctx.arc(0, 0, RING_RADIUS * 0.33, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(0, 0, RING_RADIUS * 0.66, 0, Math.PI * 2);
+    ctx.stroke();
+
+    //Rotating geometric spokes in the background to accentuate the slow rotation
+    ctx.save();
+    ctx.rotate(ringAngle);
+    ctx.strokeStyle = 'rgba(130, 160, 255, 0.045)';
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * (RING_RADIUS * 0.18), Math.sin(a) * (RING_RADIUS * 0.18));
+      ctx.lineTo(Math.cos(a) * RING_RADIUS, Math.sin(a) * RING_RADIUS);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Draw harmonic light beams between consecutive bounces
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < beams.length; i++) {
+      const bm = beams[i];
+      ctx.strokeStyle = `hsla(${bm.hue}, 100%, 65%, ${bm.life * 0.22})`;
+      ctx.lineWidth = 2.5 * bm.life;
+      ctx.beginPath();
+      ctx.moveTo(bm.x1, bm.y1);
+      ctx.lineTo(bm.x2, bm.y2);
+      ctx.stroke();
+    }
+
+    // Draw wall impact shockwave ripples
+    for (let i = 0; i < ripples.length; i++) {
+      const r = ripples[i];
+      ctx.strokeStyle = `hsla(${r.hue}, 100%, 66%, ${r.life * 0.75})`;
+      ctx.lineWidth = 3.5 * r.life;
+      ctx.beginPath();
+      ctx.arc(r.x, r.y, r.radius, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Draw Slowly Rotating Outer Circle with 36 Vivid Segmented Arcs
+    const segArc = (Math.PI * 2) / RING_SEGMENTS;
+    const gap = 0.014;
+
+    // Outer ambient halo ring
+    ctx.strokeStyle = `rgba(90, 180, 255, ${0.14 + ringPulse * 0.16})`;
+    ctx.lineWidth = 26;
+    ctx.beginPath();
+    ctx.arc(0, 0, RING_RADIUS + 4, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Rotating segmented circle boundary
+    for (let s = 0; s < RING_SEGMENTS; s++) {
+      const startA = ringAngle + s * segArc + gap;
+      const endA = ringAngle + (s + 1) * segArc - gap;
+      const segHue = (s / RING_SEGMENTS) * 360;
+      const glow = segmentGlow[s];
+
+      // Main segment arc
+      ctx.strokeStyle = `hsl(${segHue}, 100%, ${52 + glow * 36}%)`;
+      ctx.lineWidth = 12 + glow * 10;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.arc(0, 0, RING_RADIUS + 4, startA, endA);
+      ctx.stroke();
+
+      // Rotating outer tick marks so the slow rotation is unmistakable
+      const midA = (startA + endA) * 0.5;
+      const innerTick = RING_RADIUS + 16;
+      const outerTick = RING_RADIUS + (s % 3 === 0 ? 34 : 24) + glow * 12;
+      ctx.strokeStyle = `hsla(${segHue}, 100%, ${65 + glow * 30}%, ${0.65 + glow * 0.35})`;
+      ctx.lineWidth = s % 3 === 0 ? 3.5 : 2;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(midA) * innerTick, Math.sin(midA) * innerTick);
+      ctx.lineTo(Math.cos(midA) * outerTick, Math.sin(midA) * outerTick);
+      ctx.stroke();
+    }
+
+    // Crisp inner reflection rim of the circle
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.32)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, RING_RADIUS, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Draw Ball Motion Trails
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < balls.length; i++) {
+      const b = balls[i];
+      const len = b.trail.length;
+      if (len < 2) continue;
+
+      for (let t = 1; t < len; t++) {
+        const frac = t / len;
+        const p0 = b.trail[t - 1];
+        const p1 = b.trail[t];
+        ctx.strokeStyle = `hsla(${b.color.hue}, 100%, 60%, ${frac * 0.38})`;
+        ctx.lineWidth = b.radius * 1.35 * frac;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(p0.x, p0.y);
+        ctx.lineTo(p1.x, p1.y);
+        ctx.stroke();
+      }
+    }
+
+    // Draw Spark Particles
+    for (let i = 0; i < sparks.length; i++) {
+      const sp = sparks[i];
+      ctx.fillStyle = `hsla(${sp.hue}, 100%, 72%, ${sp.life})`;
+      ctx.beginPath();
+      ctx.arc(sp.x, sp.y, sp.size * sp.life, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    // Draw Vivid Colorful Bouncing Balls
+    for (let i = 0; i < balls.length; i++) {
+      const b = balls[i];
+      const r = b.radius * (1 + b.flash * 0.22);
+
+      // Vivid outer glow when bouncing
+      if (b.flash > 0.02) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        const haloGrad = ctx.createRadialGradient(b.x, b.y, r * 0.2, b.x, b.y, r * 2.6);
+        haloGrad.addColorStop(0, `hsla(${b.color.hue}, 100%, 75%, ${b.flash * 0.85})`);
+        haloGrad.addColorStop(1, `hsla(${b.color.hue}, 100%, 55%, 0)`);
+        ctx.fillStyle = haloGrad;
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, r * 2.6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // 3D glossy sphere shading
+      const sphereGrad = ctx.createRadialGradient(
+        b.x - r * 0.32,
+        b.y - r * 0.32,
+        r * 0.12,
+        b.x,
+        b.y,
+        r
+      );
+      sphereGrad.addColorStop(0, '#ffffff');
+      sphereGrad.addColorStop(0.24, b.color.core);
+      sphereGrad.addColorStop(0.68, b.color.main);
+      sphereGrad.addColorStop(1, b.color.deep);
+
+      ctx.fillStyle = sphereGrad;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, r, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Crisp specular highlight dot
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.72)';
+      ctx.beginPath();
+      ctx.arc(b.x - r * 0.34, b.y - r * 0.34, r * 0.22, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  // ============================================================================
+  // Main Animation Loop (Starts Immediately on Load)
+  // ============================================================================
+  let lastTime = performance.now();
+
+  function animate(now) {
+    const dt = Math.min(0.033, Math.max(0.001, (now - lastTime) / 1000));
+    lastTime = now;
+
+    // Sub-step physics for crisp, accurate circular collisions
+    const subSteps = 2;
+    const subDt = dt / subSteps;
+    for (let s = 0; s < subSteps; s++) {
+      updatePhysics(subDt);
+    }
+
+    render();
+    requestAnimationFrame(animate);
+  }
+
+  requestAnimationFrame(animate);
+})();
+</script>
+</body>
+</html>

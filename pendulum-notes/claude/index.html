@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Pendulum Wave</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #06021a; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+  'use strict';
+
+  // ---------- configuration ----------
+  const N = 15;            // pendulums
+  const CYCLE = 72;        // seconds for the whole pattern to repeat
+  const BASE = 36;         // longest pendulum completes BASE swings per CYCLE
+  const AMP = 26 * Math.PI / 180;   // swing amplitude (radians)
+  const TRAIL_LEN = 34;
+  const PENT = [0, 2, 4, 7, 9];     // major pentatonic
+
+  // ---------- canvas ----------
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  let W = 1, H = 1, DPR = 1;
+
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = Math.round(W * DPR);
+    canvas.height = Math.round(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ---------- pendulums ----------
+  const pend = [];
+  for (let i = 0; i < N; i++) {
+    const T = CYCLE / (BASE + i);                          // period
+    const midi = 48 + 12 * Math.floor(i / 5) + PENT[i % 5]; // C3 .. A5
+    pend.push({
+      T,
+      freq: 440 * Math.pow(2, (midi - 69) / 12),
+      hue: ((300 - i * 22) % 360 + 360) % 360,
+      next: T / 4,          // first pass through the bottom
+      flashAt: -10,
+      trail: [],
+      rings: []
+    });
+  }
+
+  // ---------- audio ----------
+  let AC = null, master = null;
+
+  function initAudio() {
+    if (AC) return;
+    const Ctor = window.AudioContext || window.webkitAudioContext;
+    if (!Ctor) return;
+    try { AC = new Ctor(); } catch (e) { AC = null; return; }
+
+    const comp = AC.createDynamicsCompressor();
+    comp.threshold.value = -20; comp.knee.value = 14; comp.ratio.value = 6;
+    comp.attack.value = 0.004; comp.release.value = 0.2;
+    comp.connect(AC.destination);
+
+    master = AC.createGain();
+    master.gain.value = 0.55;
+    master.connect(comp);
+
+    // soft echo for a spacious, chime-like tail
+    const delay = AC.createDelay(1.0); delay.delayTime.value = 0.29;
+    const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2200;
+    const fb = AC.createGain(); fb.gain.value = 0.38;
+    const wet = AC.createGain(); wet.gain.value = 0.28;
+    master.connect(delay);
+    delay.connect(lp);
+    lp.connect(fb); fb.connect(delay);
+    lp.connect(wet); wet.connect(comp);
+  }
+
+  function unlockAudio() {
+    initAudio();
+    if (AC && AC.state !== 'running') AC.resume().catch(() => {});
+  }
+
+  function pluck(freq, when) {
+    if (!AC || AC.state !== 'running') return;
+    const t = Math.max(when, AC.currentTime);
+    const loud = 0.26 * Math.pow(220 / freq, 0.25); // slightly tame the high notes
+
+    const env = AC.createGain();
+    env.gain.setValueAtTime(0, t);
+    env.gain.linearRampToValueAtTime(loud, t + 0.006);
+    env.gain.exponentialRampToValueAtTime(0.0003, t + 1.8);
+    env.connect(master);
+
+    // fundamental
+    const o1 = AC.createOscillator(); o1.type = 'sine'; o1.frequency.value = freq;
+    o1.connect(env);
+    // warm second partial
+    const o2 = AC.createOscillator(); o2.type = 'triangle'; o2.frequency.value = freq * 2;
+    const g2 = AC.createGain();
+    g2.gain.setValueAtTime(0.32, t);
+    g2.gain.exponentialRampToValueAtTime(0.001, t + 0.55);
+    o2.connect(g2); g2.connect(env);
+    // bright, slightly detuned bell partial for the strike
+    const o3 = AC.createOscillator(); o3.type = 'sine'; o3.frequency.value = freq * 3.01;
+    const g3 = AC.createGain();
+    g3.gain.setValueAtTime(0.18, t);
+    g3.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+    o3.connect(g3); g3.connect(env);
+
+    o1.start(t); o2.start(t); o3.start(t);
+    o1.stop(t + 1.9); o2.stop(t + 0.6); o3.stop(t + 0.3);
+  }
+
+  // try to start immediately; fall back to the first gesture
+  unlockAudio();
+  const gestureEvents = ['pointerdown', 'touchstart', 'keydown', 'mousedown'];
+  const onGesture = () => {
+    unlockAudio();
+    if (AC && AC.state === 'running') gestureEvents.forEach(e => window.removeEventListener(e, onGesture));
+  };
+  gestureEvents.forEach(e => window.addEventListener(e, onGesture, { passive: true }));
+
+  // ---------- drawing helpers ----------
+  function hsla(h, s, l, a) { return `hsla(${h},${s}%,${l}%,${a})`; }
+
+  function drawBackground() {
+    const g = ctx.createRadialGradient(W * 0.5, H * 0.42, 0, W * 0.5, H * 0.42, Math.max(W, H) * 0.75);
+    g.addColorStop(0, '#1a0b4a');
+    g.addColorStop(0.55, '#0b0530');
+    g.addColorStop(1, '#030110');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // ---------- animation ----------
+  let t0 = null, lastT = 0;
+
+  function frame(now) {
+    if (t0 === null) t0 = now;
+    const t = (now - t0) / 1000;
+    const dt = Math.min(t - lastT, 0.1);
+    const bigJump = (t - lastT) > 0.5;
+    lastT = t;
+
+    const minDim = Math.min(W, H);
+    const barY = H * 0.10;
+    const Lmax = H * 0.70;
+    const T0 = pend[0].T;
+    const r = minDim * 0.017;
+    const audioNow = AC ? AC.currentTime : 0;
+
+    drawBackground();
+
+    // compute positions and handle bottom-of-swing events
+    for (let i = 0; i < N; i++) {
+      const p = pend[i];
+      const px = W * (0.08 + 0.84 * i / (N - 1));
+      const L = Lmax * (p.T / T0) * (p.T / T0);
+      const theta = AMP * Math.cos(2 * Math.PI * t / p.T);
+      p.px = px; p.L = L;
+      p.x = px + L * Math.sin(theta);
+      p.y = barY + L * Math.cos(theta);
+
+      if (bigJump) { p.trail.length = 0; p.rings.length = 0; while (p.next < t) p.next += p.T / 2; }
+
+      // schedule any crossings within the next 0.12 s
+      while (p.next <= t + 0.12) {
+        const ahead = p.next - t;
+        if (ahead > -0.15) {
+          pluck(p.freq, audioNow + Math.max(0, ahead));
+          p.flashAt = p.next;
+          p.rings.push({ x: px, y: barY + L, start: p.next });
+        }
+        p.next += p.T / 2;
+      }
+
+      p.trail.push(p.x, p.y);
+      if (p.trail.length > TRAIL_LEN * 2) p.trail.splice(0, p.trail.length - TRAIL_LEN * 2);
+    }
+
+    // trails
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (let i = 0; i < N; i++) {
+      const p = pend[i], tr = p.trail, n = tr.length / 2;
+      for (let k = 1; k < n; k++) {
+        const f = k / n;
+        ctx.strokeStyle = hsla(p.hue, 100, 65, 0.05 + 0.5 * f * f);
+        ctx.lineWidth = 0.8 + r * 0.9 * f;
+        ctx.beginPath();
+        ctx.moveTo(tr[(k - 1) * 2], tr[(k - 1) * 2 + 1]);
+        ctx.lineTo(tr[k * 2], tr[k * 2 + 1]);
+        ctx.stroke();
+      }
+    }
+
+    // wave line threading every bob
+    const grad = ctx.createLinearGradient(0, 0, W, 0);
+    for (let i = 0; i < N; i++) grad.addColorStop(i / (N - 1), hsla(pend[i].hue, 100, 70, 1));
+    ctx.save();
+    ctx.globalAlpha = 0.45;
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = Math.max(1.5, r * 0.22);
+    ctx.shadowColor = 'rgba(255,255,255,0.6)';
+    ctx.shadowBlur = r * 0.8;
+    ctx.beginPath();
+    ctx.moveTo(pend[0].x, pend[0].y);
+    for (let i = 1; i < N; i++) {
+      const a = pend[i - 1], b = pend[i];
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      if (i === 1) ctx.lineTo(mx, my); else ctx.quadraticCurveTo(a.x, a.y, mx, my);
+    }
+    ctx.lineTo(pend[N - 1].x, pend[N - 1].y);
+    ctx.stroke();
+    ctx.restore();
+
+    // rings from the strikes
+    for (let i = 0; i < N; i++) {
+      const p = pend[i];
+      for (let k = p.rings.length - 1; k >= 0; k--) {
+        const rg = p.rings[k];
+        const age = (t - rg.start) / 0.7;
+        if (age > 1) { p.rings.splice(k, 1); continue; }
+        if (age < 0) continue;
+        ctx.strokeStyle = hsla(p.hue, 100, 70, (1 - age) * 0.7);
+        ctx.lineWidth = Math.max(1, r * 0.35 * (1 - age));
+        ctx.beginPath();
+        ctx.arc(rg.x, rg.y, r * (1 + age * 7), 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
+    // strings and bobs
+    for (let i = 0; i < N; i++) {
+      const p = pend[i];
+      const since = t - p.flashAt;
+      const flash = since >= 0 ? Math.max(0, 1 - since / 0.35) : 0;
+
+      ctx.strokeStyle = hsla(p.hue, 100, 82, 0.5 + 0.5 * flash);
+      ctx.lineWidth = 1.2 + 1.6 * flash;
+      ctx.beginPath();
+      ctx.moveTo(p.px, barY);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+
+      const rr = r * (1 + 0.45 * flash);
+      ctx.save();
+      ctx.shadowColor = hsla(p.hue, 100, 60, 1);
+      ctx.shadowBlur = rr * (2.2 + 2.5 * flash);
+      const g = ctx.createRadialGradient(p.x - rr * 0.3, p.y - rr * 0.3, rr * 0.1, p.x, p.y, rr);
+      g.addColorStop(0, hsla(p.hue, 100, 92 + 8 * flash, 1));
+      g.addColorStop(0.5, hsla(p.hue, 100, 62, 1));
+      g.addColorStop(1, hsla(p.hue, 100, 42, 1));
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, rr, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // the support bar and pivots (drawn last so strings tuck under it)
+    const barH = Math.max(6, minDim * 0.012);
+    const bg = ctx.createLinearGradient(0, barY - barH, 0, barY + barH);
+    bg.addColorStop(0, '#ffe066');
+    bg.addColorStop(0.5, '#ff7a00');
+    bg.addColorStop(1, '#b3330f');
+    ctx.save();
+    ctx.shadowColor = 'rgba(255,140,0,0.8)';
+    ctx.shadowBlur = barH * 2;
+    ctx.fillStyle = bg;
+    ctx.beginPath();
+    ctx.roundRect ? ctx.roundRect(W * 0.04, barY - barH / 2, W * 0.92, barH, barH / 2)
+                  : ctx.rect(W * 0.04, barY - barH / 2, W * 0.92, barH);
+    ctx.fill();
+    ctx.restore();
+    for (let i = 0; i < N; i++) {
+      ctx.fillStyle = hsla(pend[i].hue, 100, 85, 1);
+      ctx.beginPath();
+      ctx.arc(pend[i].px, barY, barH * 0.42, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

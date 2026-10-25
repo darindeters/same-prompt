@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Für Elise Bounce</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #07031a; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+  'use strict';
+
+  // ---------- Melody: Für Elise (Beethoven), MIDI note numbers ----------
+  const A1 = [76,75,76,75,76,71,74,72,69, 45,52,57,60,64,69,71, 40,52,56,64,68,71,72, 45,52,57,64];
+  const A2 = [76,75,76,75,76,71,74,72,69, 45,52,57,60,64,69,71, 40,52,56,64,72,71,69];
+  const B  = [45,52,57,71,72,74,76, 48,55,60,67,77,76,74, 43,55,59,65,76,74,72, 45,52,57,64,76,76,77,76,75,76,75,76,75,76,75,76];
+  const MELODY = [].concat(A1, A2, A1, A2, B, A1, A2);
+  let noteIndex = 0;
+  const midiToHz = m => 440 * Math.pow(2, (m - 69) / 12);
+
+  // ---------- Audio ----------
+  let actx = null, master = null, comp = null, audioReady = false;
+  function initAudio() {
+    if (actx) { if (actx.state === 'suspended') actx.resume().then(() => { audioReady = actx.state === 'running'; }); return; }
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      actx = new AC();
+      comp = actx.createDynamicsCompressor();
+      comp.threshold.value = -18; comp.knee.value = 20; comp.ratio.value = 6; comp.attack.value = 0.003; comp.release.value = 0.2;
+      master = actx.createGain(); master.gain.value = 0.7;
+      master.connect(comp); comp.connect(actx.destination);
+      const check = () => { audioReady = actx.state === 'running'; };
+      actx.onstatechange = check;
+      if (actx.state === 'suspended') actx.resume().then(check, check);
+      check();
+    } catch (e) { actx = null; }
+  }
+  function unlock() {
+    initAudio();
+    if (actx && actx.state === 'suspended') actx.resume().then(() => { audioReady = actx.state === 'running'; });
+  }
+  ['pointerdown','keydown','touchstart','click'].forEach(ev => window.addEventListener(ev, unlock, { passive: true }));
+  initAudio();
+
+  // Piano-like pluck
+  function playNote(midi, vel) {
+    if (!actx || !audioReady) return;
+    const t = actx.currentTime;
+    const f = midiToHz(midi);
+    const dur = midi < 60 ? 1.4 : 1.0;
+    const g = actx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.32 * vel, t + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.12 * vel, t + 0.12);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    const lp = actx.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.setValueAtTime(Math.min(9000, f * 6), t);
+    lp.frequency.exponentialRampToValueAtTime(Math.max(400, f * 1.5), t + dur);
+    lp.Q.value = 0.6;
+    g.connect(lp); lp.connect(master);
+    const partials = [[1, 1.0, 'triangle'], [2, 0.35, 'sine'], [3, 0.12, 'sine'], [1, 0.5, 'sine']];
+    partials.forEach(([mult, amp, type]) => {
+      const o = actx.createOscillator();
+      o.type = type; o.frequency.value = f * mult;
+      o.detune.value = (Math.random() - 0.5) * 4;
+      const og = actx.createGain(); og.gain.value = amp;
+      o.connect(og); og.connect(g);
+      o.start(t); o.stop(t + dur + 0.05);
+    });
+    // hammer click
+    const n = actx.createOscillator(); n.type = 'square'; n.frequency.value = f * 4.01;
+    const ng = actx.createGain(); ng.gain.setValueAtTime(0.05 * vel, t); ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.03);
+    n.connect(ng); ng.connect(master); n.start(t); n.stop(t + 0.04);
+  }
+  // Soft tick for ball-on-ball collisions
+  let lastTick = 0;
+  function playTick(strength) {
+    if (!actx || !audioReady) return;
+    const t = actx.currentTime;
+    if (t - lastTick < 0.03) return; lastTick = t;
+    const o = actx.createOscillator(); o.type = 'sine';
+    const f = 900 + Math.random() * 600;
+    o.frequency.setValueAtTime(f, t); o.frequency.exponentialRampToValueAtTime(f * 0.5, t + 0.05);
+    const g = actx.createGain();
+    const v = Math.min(0.06, 0.012 + strength * 0.0004);
+    g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.06);
+    o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.07);
+  }
+
+  // ---------- Canvas ----------
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  let W = 0, H = 0, DPR = 1, CX = 0, CY = 0, R = 0;
+  function resize() {
+    DPR = Math.min(2, window.devicePixelRatio || 1);
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = Math.floor(W * DPR); canvas.height = Math.floor(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    CX = W / 2; CY = H / 2;
+    const newR = Math.min(W, H) * 0.44;
+    if (R > 0) { const s = newR / R; for (const b of balls) { b.x *= s; b.y *= s; } }
+    R = newR;
+  }
+
+  // ---------- Balls ----------
+  const N = 32;
+  const balls = [];
+  const COLORS = ['#ff2d75','#ff6a00','#ffd400','#3dff6a','#00f0ff','#5b6cff','#c84bff','#ff3cf0','#ff4d4d','#9dff00','#00ffb8','#ffa6ff'];
+  function rand(a, b) { return a + Math.random() * (b - a); }
+  const SPEED = 105; // px/s baseline, scaled with ring size
+  function initBalls() {
+    balls.length = 0;
+    for (let i = 0; i < N; i++) {
+      const r = rand(10, 20);
+      let x, y, ok = false, tries = 0;
+      while (!ok && tries++ < 200) {
+        const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()) * (R - r - 4);
+        x = Math.cos(a) * d; y = Math.sin(a) * d; ok = true;
+        for (const b of balls) { if (Math.hypot(b.x - x, b.y - y) < b.r + r + 2) { ok = false; break; } }
+      }
+      const ang = Math.random() * Math.PI * 2;
+      const sp = SPEED * rand(0.8, 1.25) * (R / 475);
+      balls.push({ x, y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, r, color: COLORS[i % COLORS.length], flash: 0, trail: [] });
+    }
+  }
+
+  // ripples & sparks
+  const ripples = [];
+  const sparks = [];
+
+  // Ring state
+  let ringAngle = 0;
+  const RING_SPEED = 0.18; // rad/s
+  const SEGMENTS = 24;
+  const segGlow = new Float32Array(SEGMENTS);
+
+  resize(); initBalls();
+  window.addEventListener('resize', resize);
+
+  function onWallBounce(b, nx, ny, speed) {
+    const midi = MELODY[noteIndex % MELODY.length]; noteIndex++;
+    const vel = Math.min(1, 0.55 + speed / 400);
+    playNote(midi, vel);
+    b.flash = 1;
+    const hx = nx * R, hy = ny * R;
+    ripples.push({ x: hx, y: hy, t: 0, color: b.color, big: midi < 60 });
+    // light up ring segment under the hit, accounting for rotation
+    let a = Math.atan2(ny, nx) - ringAngle;
+    a = ((a % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+    const seg = Math.floor(a / (Math.PI * 2) * SEGMENTS) % SEGMENTS;
+    segGlow[seg] = 1;
+    for (let i = 0; i < 10; i++) {
+      const sa = Math.atan2(-ny, -nx) + rand(-1.2, 1.2), ss = rand(60, 220) * (R / 475);
+      sparks.push({ x: hx, y: hy, vx: Math.cos(sa) * ss, vy: Math.sin(sa) * ss, life: 1, color: b.color, r: rand(1.5, 3.5) });
+    }
+  }
+
+  // ---------- Physics ----------
+  function step(dt) {
+    ringAngle += RING_SPEED * dt;
+    const tang = RING_SPEED * R; // tangential wall speed
+
+    for (const b of balls) {
+      b.x += b.vx * dt; b.y += b.vy * dt;
+      const d = Math.hypot(b.x, b.y);
+      const lim = R - b.r;
+      if (d > lim) {
+        const nx = b.x / d, ny = b.y / d;
+        b.x = nx * lim; b.y = ny * lim;
+        const vn = b.vx * nx + b.vy * ny;
+        if (vn > 0) {
+          const speed = Math.hypot(b.vx, b.vy);
+          b.vx -= 2 * vn * nx; b.vy -= 2 * vn * ny;
+          // rotating wall nudges tangentially
+          const tx = -ny, ty = nx;
+          b.vx += tx * tang * 0.25; b.vy += ty * tang * 0.25;
+          // keep speed within band so tempo stays musical
+          const s2 = Math.hypot(b.vx, b.vy);
+          const target = Math.max(SPEED * 0.75, Math.min(SPEED * 1.35, s2)) * (R / 475);
+          const k = target / s2; b.vx *= k; b.vy *= k;
+          onWallBounce(b, nx, ny, speed);
+        }
+      }
+      b.trail.push(b.x, b.y);
+      if (b.trail.length > 24) b.trail.splice(0, 2);
+      b.flash = Math.max(0, b.flash - dt * 3.5);
+    }
+    // ball-ball
+    for (let i = 0; i < balls.length; i++) {
+      const a = balls[i];
+      for (let j = i + 1; j < balls.length; j++) {
+        const c = balls[j];
+        const dx = c.x - a.x, dy = c.y - a.y;
+        const dist = Math.hypot(dx, dy), min = a.r + c.r;
+        if (dist < min && dist > 0.0001) {
+          const nx = dx / dist, ny = dy / dist;
+          const overlap = (min - dist) / 2;
+          a.x -= nx * overlap; a.y -= ny * overlap; c.x += nx * overlap; c.y += ny * overlap;
+          const rvx = c.vx - a.vx, rvy = c.vy - a.vy;
+          const rel = rvx * nx + rvy * ny;
+          if (rel < 0) {
+            const ma = a.r * a.r, mc = c.r * c.r;
+            const imp = (2 * rel) / (ma + mc);
+            a.vx += imp * mc * nx; a.vy += imp * mc * ny;
+            c.vx -= imp * ma * nx; c.vy -= imp * ma * ny;
+            playTick(-rel);
+            a.flash = Math.max(a.flash, 0.4); c.flash = Math.max(c.flash, 0.4);
+          }
+        }
+      }
+    }
+    for (let i = ripples.length - 1; i >= 0; i--) { ripples[i].t += dt; if (ripples[i].t > 0.7) ripples.splice(i, 1); }
+    for (let i = sparks.length - 1; i >= 0; i--) {
+      const s = sparks[i]; s.x += s.vx * dt; s.y += s.vy * dt; s.vx *= 0.96; s.vy *= 0.96; s.life -= dt * 2.2;
+      if (s.life <= 0) sparks.splice(i, 1);
+    }
+    for (let i = 0; i < SEGMENTS; i++) segGlow[i] = Math.max(0, segGlow[i] - dt * 2.2);
+  }
+
+  // ---------- Render ----------
+  function draw(t) {
+    ctx.globalCompositeOperation = 'source-over';
+    // background
+    const bg = ctx.createRadialGradient(CX, CY, R * 0.2, CX, CY, Math.max(W, H) * 0.75);
+    bg.addColorStop(0, '#140a3a'); bg.addColorStop(0.6, '#08041c'); bg.addColorStop(1, '#030110');
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+
+    ctx.save(); ctx.translate(CX, CY);
+
+    // inner disc glow
+    const disc = ctx.createRadialGradient(0, 0, 0, 0, 0, R);
+    disc.addColorStop(0, 'rgba(60,30,120,0.35)'); disc.addColorStop(1, 'rgba(20,10,60,0.05)');
+    ctx.fillStyle = disc; ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI * 2); ctx.fill();
+
+    // ring segments (rotating)
+    const segA = Math.PI * 2 / SEGMENTS;
+    ctx.lineCap = 'butt';
+    for (let i = 0; i < SEGMENTS; i++) {
+      const hue = (i / SEGMENTS * 360 + t * 20) % 360;
+      const g = segGlow[i];
+      const a0 = ringAngle + i * segA + 0.02, a1 = ringAngle + (i + 1) * segA - 0.02;
+      ctx.beginPath(); ctx.arc(0, 0, R + 10, a0, a1);
+      ctx.lineWidth = 8 + g * 10;
+      ctx.strokeStyle = `hsl(${hue} 100% ${55 + g * 40}%)`;
+      ctx.shadowColor = `hsl(${hue} 100% 60%)`; ctx.shadowBlur = 14 + g * 30;
+      ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+    // thin inner rim
+    ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI * 2);
+    ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.stroke();
+    // rotating spokes/ticks on outside to show rotation
+    for (let i = 0; i < 8; i++) {
+      const a = ringAngle + i * Math.PI / 4;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * (R + 18), Math.sin(a) * (R + 18));
+      ctx.lineTo(Math.cos(a) * (R + 30), Math.sin(a) * (R + 30));
+      ctx.lineWidth = 4; ctx.strokeStyle = '#ffffff'; ctx.lineCap = 'round'; ctx.stroke();
+    }
+
+    // clip to inside for trails/sparks
+    ctx.save(); ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI * 2); ctx.clip();
+    ctx.globalCompositeOperation = 'lighter';
+
+    // ripples
+    for (const rp of ripples) {
+      const p = rp.t / 0.7;
+      ctx.beginPath(); ctx.arc(rp.x, rp.y, 6 + p * (rp.big ? 160 : 90), 0, Math.PI * 2);
+      ctx.lineWidth = (1 - p) * (rp.big ? 8 : 5);
+      ctx.strokeStyle = rp.color; ctx.globalAlpha = (1 - p) * 0.9; ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    // sparks
+    for (const s of sparks) {
+      ctx.globalAlpha = Math.max(0, s.life);
+      ctx.fillStyle = s.color; ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    // trails
+    for (const b of balls) {
+      const tr = b.trail; if (tr.length < 4) continue;
+      ctx.strokeStyle = b.color; ctx.lineCap = 'round';
+      for (let i = 2; i < tr.length; i += 2) {
+        const p = i / tr.length;
+        ctx.globalAlpha = p * 0.45; ctx.lineWidth = b.r * 1.6 * p;
+        ctx.beginPath(); ctx.moveTo(tr[i - 2], tr[i - 1]); ctx.lineTo(tr[i], tr[i + 1]); ctx.stroke();
+      }
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+
+    // balls
+    ctx.globalCompositeOperation = 'source-over';
+    for (const b of balls) {
+      const rr = b.r * (1 + b.flash * 0.35);
+      ctx.shadowColor = b.color; ctx.shadowBlur = 18 + b.flash * 40;
+      ctx.fillStyle = b.color; ctx.beginPath(); ctx.arc(b.x, b.y, rr, 0, Math.PI * 2); ctx.fill();
+      ctx.shadowBlur = 0;
+      // highlight
+      const hl = ctx.createRadialGradient(b.x - rr * 0.35, b.y - rr * 0.35, 0, b.x, b.y, rr);
+      hl.addColorStop(0, `rgba(255,255,255,${0.75 + b.flash * 0.25})`); hl.addColorStop(0.45, 'rgba(255,255,255,0.1)'); hl.addColorStop(1, 'rgba(0,0,0,0.25)');
+      ctx.fillStyle = hl; ctx.beginPath(); ctx.arc(b.x, b.y, rr, 0, Math.PI * 2); ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  // ---------- Loop ----------
+  let last = performance.now();
+  function frame(now) {
+    let dt = (now - last) / 1000; last = now;
+    if (dt > 0.05) dt = 0.05;
+    const sub = 2;
+    for (let i = 0; i < sub; i++) step(dt / sub);
+    draw(now / 1000);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

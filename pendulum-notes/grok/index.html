@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pendulum Wave</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #07060d;
+    overflow: hidden;
+    color-scheme: dark;
+  }
+  canvas {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    touch-action: none;
+    background: #07060d;
+  }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<script>
+(() => {
+  'use strict';
+
+  const COUNT = 15;
+  const CYCLES0 = 72;
+  const AMP = Math.PI / 12;
+  const PERIOD0 = 1.58;
+  const PIVOT_Y = 128;
+  const LENGTH0 = 840;
+  const BOB = 20;
+  const EDGE = 30;
+  const DESIGN = 1080;
+  const BG = 'rgb(7, 6, 13)';
+
+  const STEPS = [0, 2, 4, 7, 9];
+
+  const canvas = document.getElementById('stage');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  function midiFreq(i) {
+    const semi = Math.floor(i / 5) * 12 + STEPS[i % 5];
+    return 440 * 2 ** ((50 + semi - 69) / 12);
+  }
+
+  const pendulums = [];
+  for (let i = 0; i < COUNT; i++) {
+    const cycles = CYCLES0 + i;
+    const period = PERIOD0 * CYCLES0 / cycles;
+    pendulums.push({
+      i,
+      period,
+      omega: Math.PI * 2 / period,
+      length: LENGTH0 * (CYCLES0 / cycles) ** 2,
+      hue: 262 - (i * 252) / (COUNT - 1),
+      freq: midiFreq(i),
+      x: 0,
+      lastHit: -20
+    });
+  }
+
+  (function placePivots() {
+    const sinA = Math.sin(AMP);
+    let best = null;
+    for (let d = BOB * 2 + 4; d <= 140; d += 0.02) {
+      let lo = -Infinity;
+      let hi = Infinity;
+      for (let i = 0; i < COUNT; i++) {
+        const swing = pendulums[i].length * sinA;
+        lo = Math.max(lo, EDGE + swing - i * d);
+        hi = Math.min(hi, DESIGN - EDGE - swing - i * d);
+      }
+      if (lo <= hi) best = { d, x0: (lo + hi) / 2 };
+    }
+    const d = best ? best.d : 46;
+    const x0 = best ? best.x0 : 250;
+    pendulums.forEach((p, i) => { p.x = x0 + i * d; });
+  })();
+
+  const rings = [];
+
+  let audio = null;
+  let master = null;
+  let noiseBuf = null;
+
+  function buildGraph() {
+    master = audio.createGain();
+    master.gain.value = 0.92;
+    const comp = audio.createDynamicsCompressor();
+    comp.threshold.value = -20;
+    comp.knee.value = 16;
+    comp.ratio.value = 5;
+    comp.attack.value = 0.004;
+    comp.release.value = 0.16;
+    master.connect(comp);
+    comp.connect(audio.destination);
+
+    const rate = audio.sampleRate;
+    const len = Math.floor(rate * 0.06);
+    noiseBuf = audio.createBuffer(1, len, rate);
+    const data = noiseBuf.getChannelData(0);
+    for (let i = 0; i < len; i++) {
+      const env = 1 - i / len;
+      data[i] = (Math.random() * 2 - 1) * env * env;
+    }
+  }
+
+  function setupAudio() {
+    if (audio) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    try {
+      audio = new AC();
+    } catch (err) {
+      audio = null;
+      return;
+    }
+    buildGraph();
+  }
+
+  function disarm() {
+    window.removeEventListener('pointerdown', unlock);
+    window.removeEventListener('keydown', unlock);
+  }
+
+  function unlock() {
+    setupAudio();
+    if (!audio) return;
+    const pending = audio.resume();
+    if (audio.state === 'running') disarm();
+    if (pending && pending.then) {
+      pending.then(() => {
+        if (audio && audio.state === 'running') disarm();
+      }).catch(() => {});
+    }
+  }
+
+  function play(p) {
+    if (!audio || audio.state !== 'running' || !master) return;
+    const t = audio.currentTime + 0.008;
+    const accent = 0.84 + 0.16 * (p.length / LENGTH0);
+    const peak = 0.046 * accent;
+    const life = 0.28 + 0.1 * (p.length / LENGTH0);
+    const pan = Math.max(-0.9, Math.min(0.9, (p.x - DESIGN / 2) / (DESIGN / 2)));
+
+    const panner = audio.createStereoPanner();
+    panner.pan.setValueAtTime(pan, t);
+    const bus = audio.createGain();
+    bus.gain.value = 1;
+    bus.connect(panner);
+    panner.connect(master);
+
+    const tone = audio.createOscillator();
+    tone.type = 'sine';
+    tone.frequency.setValueAtTime(p.freq * 1.4, t);
+    tone.frequency.exponentialRampToValueAtTime(p.freq, t + 0.028);
+    const g1 = audio.createGain();
+    g1.gain.setValueAtTime(0.0001, t);
+    g1.gain.exponentialRampToValueAtTime(peak, t + 0.007);
+    g1.gain.exponentialRampToValueAtTime(0.0001, t + life);
+    tone.connect(g1);
+    g1.connect(bus);
+    tone.start(t);
+    tone.stop(t + life + 0.03);
+
+    const over = audio.createOscillator();
+    over.type = 'sine';
+    over.frequency.setValueAtTime(p.freq * 2, t);
+    const g2 = audio.createGain();
+    g2.gain.setValueAtTime(0.0001, t);
+    g2.gain.exponentialRampToValueAtTime(peak * 0.32, t + 0.005);
+    g2.gain.exponentialRampToValueAtTime(0.0001, t + life * 0.42);
+    over.connect(g2);
+    g2.connect(bus);
+    over.start(t);
+    over.stop(t + life * 0.42 + 0.03);
+
+    const tick = audio.createBufferSource();
+    tick.buffer = noiseBuf;
+    const bp = audio.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(Math.min(4200, p.freq * 3.2), t);
+    bp.Q.setValueAtTime(0.8, t);
+    const gn = audio.createGain();
+    gn.gain.setValueAtTime(peak * 0.55, t);
+    gn.gain.exponentialRampToValueAtTime(0.0001, t + 0.04);
+    tick.connect(bp);
+    bp.connect(gn);
+    gn.connect(bus);
+    tick.start(t);
+    tick.stop(t + 0.05);
+
+    tone.onended = () => {
+      [tone, over, tick, g1, g2, gn, bp, bus, panner].forEach((node) => {
+        try { node.disconnect(); } catch (err) { /* already gone */ }
+      });
+    };
+  }
+
+  function strike(p, tc) {
+    p.lastHit = tc;
+    rings.push({
+      x: p.x,
+      y: PIVOT_Y + p.length,
+      hue: p.hue,
+      born: tc
+    });
+    if (rings.length > 48) rings.shift();
+    try { play(p); } catch (err) { /* keep the picture moving */ }
+  }
+
+  function collectStrikes(t0, t1) {
+    for (let i = 0; i < COUNT; i++) {
+      const p = pendulums[i];
+      const a = t0 * 4 / p.period;
+      const b = t1 * 4 / p.period;
+      let n = Math.floor((a - 1) / 2) + 1;
+      const nEnd = Math.floor((b - 1) / 2);
+      for (; n <= nEnd; n++) strike(p, (2 * n + 1) * p.period / 4);
+    }
+  }
+
+  function roundRect(x, y, w, h, r) {
+    const rr = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rr);
+    ctx.arcTo(x + w, y + h, x, y + h, rr);
+    ctx.arcTo(x, y + h, x, y, rr);
+    ctx.arcTo(x, y, x + w, y, rr);
+    ctx.closePath();
+  }
+
+  function flashOf(p, t) {
+    return Math.exp(-(t - p.lastHit) / 0.11);
+  }
+
+  function drawRig() {
+    const left = pendulums[0].x - 58;
+    const right = pendulums[COUNT - 1].x + 58;
+    const top = PIVOT_Y - 30;
+    const beamH = 32;
+
+    ctx.fillStyle = '#14111c';
+    ctx.fillRect(left, 0, 16, top + beamH);
+    ctx.fillRect(right - 16, 0, 16, top + beamH);
+    ctx.fillStyle = '#2a2438';
+    ctx.fillRect(left, 0, 16, 5);
+    ctx.fillRect(right - 16, 0, 16, 5);
+
+    const metal = ctx.createLinearGradient(0, top, 0, top + beamH);
+    metal.addColorStop(0, '#5c5678');
+    metal.addColorStop(0.16, '#3a3454');
+    metal.addColorStop(0.55, '#221d30');
+    metal.addColorStop(1, '#100e16');
+    roundRect(left, top, right - left, beamH, 8);
+    ctx.fillStyle = metal;
+    ctx.fill();
+
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(left + 12, top + 2);
+    ctx.lineTo(right - 12, top + 2);
+    ctx.stroke();
+  }
+
+  function drawScene(t) {
+    drawRig();
+
+    ctx.lineCap = 'round';
+    for (let i = 0; i < COUNT; i++) {
+      const p = pendulums[i];
+      const theta = AMP * Math.cos(p.omega * t);
+      p.theta = theta;
+      p.bx = p.x + Math.sin(theta) * p.length;
+      p.by = PIVOT_Y + Math.cos(theta) * p.length;
+      const flash = flashOf(p, t);
+      const string = ctx.createLinearGradient(p.x, PIVOT_Y, p.bx, p.by);
+      string.addColorStop(0, `hsla(${p.hue}, 80%, 82%, ${0.2 + flash * 0.35})`);
+      string.addColorStop(1, `hsla(${p.hue}, 100%, 64%, ${0.5 + flash * 0.45})`);
+      ctx.strokeStyle = string;
+      ctx.lineWidth = 2.4 + flash * 2;
+      ctx.beginPath();
+      ctx.moveTo(p.x, PIVOT_Y);
+      ctx.lineTo(p.bx, p.by);
+      ctx.stroke();
+    }
+
+    for (let i = 0; i < COUNT; i++) {
+      const p = pendulums[i];
+      ctx.beginPath();
+      ctx.fillStyle = `hsl(${p.hue}, 100%, 58%)`;
+      ctx.arc(p.x, PIVOT_Y, 6.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(8, 6, 14, 0.65)';
+      ctx.stroke();
+    }
+
+    for (let i = rings.length - 1; i >= 0; i--) {
+      const ring = rings[i];
+      const age = t - ring.born;
+      if (age < 0 || age > 0.48) {
+        rings.splice(i, 1);
+        continue;
+      }
+      const k = age / 0.48;
+      ctx.beginPath();
+      ctx.lineWidth = 3.4 * (1 - k) + 0.6;
+      ctx.strokeStyle = `hsla(${ring.hue}, 100%, 64%, ${0.85 * (1 - k)})`;
+      ctx.arc(ring.x, ring.y, BOB * 0.7 + k * 58, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    const order = pendulums.slice().sort((a, b) => a.by - b.by);
+    for (let i = 0; i < order.length; i++) {
+      const p = order[i];
+      const flash = flashOf(p, t);
+      const r = BOB + flash * 3.5;
+      const x = p.bx;
+      const y = p.by;
+
+      ctx.globalAlpha = 0.2 + flash * 0.45;
+      ctx.fillStyle = `hsl(${p.hue}, 100%, 56%)`;
+      ctx.beginPath();
+      ctx.arc(x, y, r * (1.85 + flash * 0.7), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+
+      const body = ctx.createRadialGradient(x - r * 0.34, y - r * 0.4, r * 0.08, x, y, r);
+      body.addColorStop(0, `hsl(${p.hue}, 100%, ${Math.min(96, 86 + flash * 10)}%)`);
+      body.addColorStop(0.28, `hsl(${p.hue}, 100%, ${64 + flash * 12}%)`);
+      body.addColorStop(0.72, `hsl(${p.hue}, 100%, 50%)`);
+      body.addColorStop(1, `hsl(${p.hue}, 100%, 32%)`);
+      ctx.fillStyle = body;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
+      ctx.beginPath();
+      ctx.ellipse(x - r * 0.28, y - r * 0.34, r * 0.26, r * 0.16, -0.7, 0, Math.PI * 2);
+      ctx.fill();
+
+      if (flash > 0.35) {
+        ctx.globalAlpha = (flash - 0.35) / 0.65;
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x - r * 2.4, y);
+        ctx.lineTo(x + r * 2.4, y);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+
+  let origin = 0;
+  let prevT = 0;
+  let armed = false;
+
+  function frame(now) {
+    if (!armed) {
+      origin = now;
+      armed = true;
+    }
+    const view = syncSize();
+    const t = (now - origin) / 1000;
+    const dt = t - prevT;
+
+    if (dt > 0 && dt < 0.25) collectStrikes(prevT, t);
+    prevT = t;
+
+    ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+    const fade = dt > 0.25 ? 1 : 1 - Math.exp(-Math.max(0, dt) / 0.2);
+    ctx.fillStyle = `rgba(7, 6, 13, ${fade})`;
+    ctx.fillRect(0, 0, view.w, view.h);
+
+    const s = Math.min(view.w, view.h);
+    const u = s / DESIGN;
+    ctx.translate((view.w - s) / 2, (view.h - s) / 2);
+    ctx.scale(u, u);
+    drawScene(t);
+
+    ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+    const vignette = ctx.createRadialGradient(
+      view.w / 2, view.h / 2, s * 0.32,
+      view.w / 2, view.h / 2, s * 0.74
+    );
+    vignette.addColorStop(0, 'rgba(0, 0, 0, 0)');
+    vignette.addColorStop(1, 'rgba(0, 0, 0, 0.4)');
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, view.w, view.h);
+
+    requestAnimationFrame(frame);
+  }
+
+  function syncSize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    const w = Math.max(1, canvas.clientWidth);
+    const h = Math.max(1, canvas.clientHeight);
+    const bw = Math.round(w * dpr);
+    const bh = Math.round(h * dpr);
+    if (canvas.width !== bw || canvas.height !== bh) {
+      canvas.width = bw;
+      canvas.height = bh;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.fillStyle = BG;
+      ctx.fillRect(0, 0, w, h);
+    }
+    return { w, h, dpr };
+  }
+
+  setupAudio();
+  unlock();
+  window.addEventListener('pointerdown', unlock);
+  window.addEventListener('keydown', unlock);
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

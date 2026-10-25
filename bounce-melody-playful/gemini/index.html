@@ -1,0 +1,972 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Für Elise — Bouncing Balls in a Rotating Circle</title>
+<style>
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #060712;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<script>
+(() => {
+  'use strict';
+
+  const canvas = document.getElementById('stage');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  // Virtual coordinate system centered at (0, 0), scaled to fit 1080x1080 ideally
+  const REF_SIZE = 1080;
+  let width = window.innerWidth;
+  let height = window.innerHeight;
+  let dpr = Math.min(window.devicePixelRatio || 1, 2);
+  let scale = 1;
+
+  function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    scale = Math.min(width, height) / REF_SIZE;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Vivid, high-saturation colors designed to pop on mobile OLED/LCD screens
+  const PALETTE = [
+    { main: '#FF1E6B', glow: '#FF5E97', rim: '#FFB3CC', hue: 340 }, // Electric Rose
+    { main: '#FF5500', glow: '#FF884D', rim: '#FFD1B3', hue: 20 },  // Tangerine Blaze
+    { main: '#FFCC00', glow: '#FFE066', rim: '#FFF5CC', hue: 48 },  // Solar Gold
+    { main: '#AAFF00', glow: '#CCFF66', rim: '#EEFFCC', hue: 80 },  // Acid Lime
+    { main: '#00F566', glow: '#5CFF9E', rim: '#C2FFDB', hue: 145 }, // Neon Emerald
+    { main: '#00E5FF', glow: '#66F0FF', rim: '#CCF9FF', hue: 186 }, // Cyber Cyan
+    { main: '#1E6BFF', glow: '#669BFF', rim: '#C2D9FF', hue: 220 }, // Hyper Cobalt
+    { main: '#9D2EFF', glow: '#BE73FF', rim: '#E6CCFF', hue: 273 }, // Ultraviolet
+    { main: '#FF00CC', glow: '#FF66E0', rim: '#FFCCF5', hue: 312 }  // Hot Magenta
+  ];
+
+  // Beethoven's Für Elise (WoO 59) — Complete A-B-A melody sequence
+  // Note names converted to frequencies at runtime
+  const NOTE_OFFSETS = {
+    'C': 0, 'C#': 1, 'Db': 1, 'D': 2, 'D#': 3, 'Eb': 3,
+    'E': 4, 'F': 5, 'F#': 6, 'Gb': 6, 'G': 7, 'G#': 8,
+    'Ab': 8, 'A': 9, 'A#': 10, 'Bb': 10, 'B': 11
+  };
+
+  function noteToFreq(noteStr) {
+    const match = /^([A-G][#b]?)(\d)$/.exec(noteStr);
+    if (!match) return 440;
+    const semitone = NOTE_OFFSETS[match[1]];
+    const octave = parseInt(match[2], 10);
+    const midi = (octave + 1) * 12 + semitone;
+    return 440 * Math.pow(2, (midi - 69) / 12);
+  }
+
+  // Melody phrases with optional bass accompaniment hints for extra personality
+  const PHRASE_A1 = [
+    { n: 'E5' }, { n: 'D#5' }, { n: 'E5' }, { n: 'D#5' }, { n: 'E5' },
+    { n: 'B4' }, { n: 'D5' }, { n: 'C5' },
+    { n: 'A4', bass: 'A2', accent: 1.25 }, { n: 'E3' }, { n: 'A3' },
+    { n: 'C4' }, { n: 'E4' }, { n: 'A4' },
+    { n: 'B4', bass: 'E2', accent: 1.2 }, { n: 'E3' }, { n: 'G#3' },
+    { n: 'E4' }, { n: 'G#4' }, { n: 'B4' },
+    { n: 'C5', bass: 'A2', accent: 1.2 }, { n: 'E3' }, { n: 'A3' }, { n: 'E4' }
+  ];
+
+  const PHRASE_A2 = [
+    { n: 'E5' }, { n: 'D#5' }, { n: 'E5' }, { n: 'D#5' }, { n: 'E5' },
+    { n: 'B4' }, { n: 'D5' }, { n: 'C5' },
+    { n: 'A4', bass: 'A2', accent: 1.25 }, { n: 'E3' }, { n: 'A3' },
+    { n: 'C4' }, { n: 'E4' }, { n: 'A4' },
+    { n: 'B4', bass: 'E2', accent: 1.2 }, { n: 'E3' }, { n: 'C5' },
+    { n: 'B4' }, { n: 'A4', bass: 'A2', accent: 1.35 }
+  ];
+
+  const PHRASE_B = [
+    { n: 'B4' }, { n: 'C5' }, { n: 'D5' },
+    { n: 'E5', bass: 'C3', accent: 1.3 }, { n: 'G4' }, { n: 'F5' }, { n: 'E5' },
+    { n: 'D5', bass: 'G2', accent: 1.25 }, { n: 'F4' }, { n: 'E5' }, { n: 'D5' },
+    { n: 'C5', bass: 'A2', accent: 1.25 }, { n: 'E4' }, { n: 'D5' }, { n: 'C5' },
+    { n: 'B4', bass: 'E2', accent: 1.2 }, { n: 'E4' }, { n: 'E5' },
+    { n: 'E4' }, { n: 'E5' }, { n: 'D#5' }, { n: 'E5' }, { n: 'D#5' }
+  ];
+
+  const PHRASE_C = [
+    { n: 'F4', bass: 'F2', accent: 1.25 }, { n: 'A4' }, { n: 'C5' },
+    { n: 'F5', accent: 1.2 }, { n: 'E5' }, { n: 'D5' }, { n: 'C5' },
+    { n: 'Bb4', bass: 'Bb2', accent: 1.2 }, { n: 'A4' }, { n: 'G4' }, { n: 'F4' },
+    { n: 'E4', bass: 'C3', accent: 1.2 }, { n: 'F4' }, { n: 'G4' },
+    { n: 'A4', bass: 'F2', accent: 1.25 }, { n: 'B4' }, { n: 'C5' }, { n: 'D5' }
+  ];
+
+  const MELODY = [
+    ...PHRASE_A1,
+    ...PHRASE_A2,
+    ...PHRASE_A1,
+    ...PHRASE_A2,
+    ...PHRASE_B,
+    ...PHRASE_A2,
+    ...PHRASE_C,
+    ...PHRASE_A1,
+    ...PHRASE_A2
+  ].map(item => ({
+    note: item.n,
+    freq: noteToFreq(item.n),
+    bassFreq: item.bass ? noteToFreq(item.bass) : 0,
+    accent: item.accent || 1.0
+  }));
+
+  let melodyIndex = 0;
+
+  // Web Audio API Synthesizer with playful physical-modeling character
+  let audioCtx = null;
+  let masterGain = null;
+  let reverbConv = null;
+  let reverbGain = null;
+  let lastNoteAudioTime = 0;
+
+  function createImpulseResponse(context, duration, decay) {
+    const rate = context.sampleRate;
+    const length = Math.floor(rate * duration);
+    const impulse = context.createBuffer(2, length, rate);
+    for (let ch = 0; ch < 2; ch++) {
+      const data = impulse.getChannelData(ch);
+      for (let i = 0; i < length; i++) {
+        const t = i / length;
+        data[i] = (Math.random() * 2 - 1) * Math.pow(1 - t, decay);
+      }
+    }
+    return impulse;
+  }
+
+  function initAudio() {
+    if (!audioCtx) {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return;
+      audioCtx = new AudioContextClass();
+
+      const compressor = audioCtx.createDynamicsCompressor();
+      compressor.threshold.setValueAtTime(-16, audioCtx.currentTime);
+      compressor.knee.setValueAtTime(18, audioCtx.currentTime);
+      compressor.ratio.setValueAtTime(5, audioCtx.currentTime);
+      compressor.attack.setValueAtTime(0.003, audioCtx.currentTime);
+      compressor.release.setValueAtTime(0.18, audioCtx.currentTime);
+      compressor.connect(audioCtx.destination);
+
+      masterGain = audioCtx.createGain();
+      masterGain.gain.setValueAtTime(0.65, audioCtx.currentTime);
+      masterGain.connect(compressor);
+
+      reverbConv = audioCtx.createConvolver();
+      reverbConv.buffer = createImpulseResponse(audioCtx, 1.45, 3.2);
+      reverbGain = audioCtx.createGain();
+      reverbGain.gain.setValueAtTime(0.26, audioCtx.currentTime);
+      reverbConv.connect(reverbGain);
+      reverbGain.connect(compressor);
+    }
+    if (audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(() => {});
+    }
+  }
+
+  // Start audio immediately on load, and unlock on any user gesture if blocked
+  initAudio();
+  const unlockEvents = ['pointerdown', 'mousedown', 'touchstart', 'keydown', 'click'];
+  function unlockAudio() {
+    initAudio();
+    if (audioCtx && audioCtx.state === 'running') {
+      unlockEvents.forEach(ev => window.removeEventListener(ev, unlockAudio));
+    }
+  }
+  unlockEvents.forEach(ev => window.addEventListener(ev, unlockAudio, { passive: true }));
+
+  // Play the next note of Für Elise with playful bounce character matching on-screen physics
+  function playNextMelodyNote(impactSpeed, panX, normY, ballRadiusRatio, spinFactor) {
+    const step = MELODY[melodyIndex];
+    melodyIndex = (melodyIndex + 1) % MELODY.length;
+
+    if (!audioCtx) initAudio();
+    if (!audioCtx || audioCtx.state !== 'running') return step;
+
+    const now = audioCtx.currentTime;
+    // Prevent audio queue backlog while keeping closely-spaced bounces crisp and distinct
+    if (lastNoteAudioTime > now + 0.14) {
+      return step;
+    }
+    const startTime = Math.max(now, lastNoteAudioTime + 0.055);
+    lastNoteAudioTime = startTime;
+
+    const freq = step.freq;
+    const vel = Math.min(Math.max(impactSpeed / 360, 0.42), 1.3) * step.accent;
+
+    const panner = audioCtx.createStereoPanner ? audioCtx.createStereoPanner() : null;
+    const voiceOut = panner || masterGain;
+    if (panner) {
+      panner.pan.setValueAtTime(Math.max(-0.88, Math.min(0.88, panX)), startTime);
+      panner.connect(masterGain);
+      panner.connect(reverbConv);
+    }
+
+    // 1. Playful elastic "boing" pitch-bend attack into warm marimba/celesta melody tone
+    // Bigger balls scoop up from slightly lower; smaller balls chirrup from slightly above
+    const mainOsc = audioCtx.createOscillator();
+    const mainGain = audioCtx.createGain();
+    mainOsc.type = 'triangle';
+    const bendRatio = ballRadiusRatio > 0.5 ? 0.91 : 1.07;
+    mainOsc.frequency.setValueAtTime(freq * bendRatio, startTime);
+    mainOsc.frequency.exponentialRampToValueAtTime(freq * 1.006, startTime + 0.022);
+    mainOsc.frequency.exponentialRampToValueAtTime(freq, startTime + 0.05);
+
+    mainGain.gain.setValueAtTime(0.0001, startTime);
+    mainGain.gain.linearRampToValueAtTime(0.28 * vel, startTime + 0.008);
+    mainGain.gain.exponentialRampToValueAtTime(0.10 * vel, startTime + 0.13);
+    mainGain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.65);
+
+    mainOsc.connect(mainGain);
+    mainGain.connect(voiceOut);
+    mainOsc.start(startTime);
+    mainOsc.stop(startTime + 0.68);
+
+    // 2. Glassy harmonic overtone (brighter when bouncing near top of circle, warmer near bottom)
+    const bellOsc = audioCtx.createOscillator();
+    const bellGain = audioCtx.createGain();
+    bellOsc.type = 'sine';
+    const harmonicMult = normY < 0 ? 3 : 2;
+    bellOsc.frequency.setValueAtTime(freq * harmonicMult, startTime);
+    bellOsc.frequency.exponentialRampToValueAtTime(freq * harmonicMult * (1 + spinFactor * 0.015), startTime + 0.24);
+
+    bellGain.gain.setValueAtTime(0.0001, startTime);
+    bellGain.gain.linearRampToValueAtTime(0.11 * vel, startTime + 0.004);
+    bellGain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.27);
+
+    bellOsc.connect(bellGain);
+    bellGain.connect(voiceOut);
+    bellOsc.start(startTime);
+    bellOsc.stop(startTime + 0.29);
+
+    // 3. Playful rubber-bubble "pop/bloop" transient scaled by ball size & impact speed
+    const popOsc = audioCtx.createOscillator();
+    const popGain = audioCtx.createGain();
+    popOsc.type = 'sine';
+    const popBase = Math.min(Math.max(freq * (1.8 - ballRadiusRatio * 0.6), 220), 1500);
+    popOsc.frequency.setValueAtTime(popBase * 0.65, startTime);
+    popOsc.frequency.exponentialRampToValueAtTime(popBase * 1.9, startTime + 0.018);
+    popOsc.frequency.exponentialRampToValueAtTime(popBase * 0.8, startTime + 0.038);
+
+    popGain.gain.setValueAtTime(0.15 * vel, startTime);
+    popGain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.042);
+
+    popOsc.connect(popGain);
+    popGain.connect(voiceOut);
+    popOsc.start(startTime);
+    popOsc.stop(startTime + 0.045);
+
+    // 4. Warm pizzicato bass accompaniment on harmonic downbeats
+    if (step.bassFreq > 0) {
+      const bassOsc = audioCtx.createOscillator();
+      const bassGain = audioCtx.createGain();
+      bassOsc.type = 'sine';
+      bassOsc.frequency.setValueAtTime(step.bassFreq * 1.05, startTime);
+      bassOsc.frequency.exponentialRampToValueAtTime(step.bassFreq, startTime + 0.035);
+
+      bassGain.gain.setValueAtTime(0.0001, startTime);
+      bassGain.gain.linearRampToValueAtTime(0.23, startTime + 0.01);
+      bassGain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.82);
+
+      bassOsc.connect(bassGain);
+      bassGain.connect(voiceOut);
+      bassOsc.start(startTime);
+      bassOsc.stop(startTime + 0.85);
+    }
+
+    return step;
+  }
+
+  // Arena & Physics Configuration
+  const RING_RADIUS = 445;
+  const RING_THICKNESS = 22;
+  const SEGMENT_COUNT = 36;
+  const NUB_COUNT = 12; // Rotating inner bumpers on the ring that stir & toss the balls
+  const NUB_RADIUS = 12;
+  const BALL_COUNT = 32; // Dozens of colorful balls
+  const GRAVITY = 230;   // Balanced gravity so bounces play at a natural musical tempo
+  let globalNoteCooldown = 0;
+
+  let ringAngle = 0;
+  const RING_OMEGA = 0.42; // Slow, steady rotation (rad/s)
+
+  // Visual ring segments that flare and flex when hit
+  const segments = [];
+  for (let i = 0; i < SEGMENT_COUNT; i++) {
+    const color = PALETTE[i % PALETTE.length];
+    segments.push({
+      color,
+      energy: 0,
+      springOffset: 0,
+      springVel: 0
+    });
+  }
+
+  // Rotating inner rim nubs that physically interact with balls
+  const nubs = [];
+  for (let i = 0; i < NUB_COUNT; i++) {
+    nubs.push({
+      baseAngle: (i / NUB_COUNT) * Math.PI * 2,
+      pulse: 0,
+      color: PALETTE[(i * 2) % PALETTE.length]
+    });
+  }
+
+  // Create 36 colorful bouncing balls
+  const balls = [];
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < BALL_COUNT; i++) {
+    const colorObj = PALETTE[i % PALETTE.length];
+    const radius = 15 + (i % 4) * 2.6; // Radii from 15 to 22.8
+    // Distribute inside the circle in a phyllotaxis spiral so no initial overlap
+    const r = 45 + Math.sqrt(i / BALL_COUNT) * (RING_RADIUS - 110);
+    const theta = i * goldenAngle;
+    const x = Math.cos(theta) * r;
+    const y = Math.sin(theta) * r;
+
+    // Give each ball an energetic initial tangential + radial velocity
+    const speed = 190 + (i % 7) * 38;
+    const velAngle = theta + Math.PI * 0.45 + ((i % 3) - 1) * 0.35;
+
+    balls.push({
+      id: i,
+      x,
+      y,
+      vx: Math.cos(velAngle) * speed,
+      vy: Math.sin(velAngle) * speed,
+      r: radius,
+      mass: radius * radius,
+      color: colorObj,
+      flash: 0,
+      squash: 0,
+      squashVel: 0,
+      squashAngle: 0,
+      bounceCooldown: 0.04 * (i % 8), // Stagger initial bounce triggers
+      trail: []
+    });
+  }
+
+  // Visual effects pools
+  const ripples = [];
+  const sparks = [];
+  const laserChords = [];
+  let lastBouncePos = { x: 0, y: 0, color: PALETTE[0].main, valid: false };
+  let centerPulse = 0;
+  let currentAccentColor = PALETTE[0];
+
+  function spawnBounceEffects(x, y, nx, ny, colorObj, intensity, isWall) {
+    // Expanding shockwave ring at impact point
+    ripples.push({
+      x,
+      y,
+      r: 8,
+      maxR: isWall ? 68 + intensity * 35 : 34 + intensity * 18,
+      alpha: isWall ? 0.95 : 0.55,
+      color: colorObj.glow,
+      lineWidth: isWall ? 4.5 : 2.5
+    });
+
+    // Vivid spark burst
+    const count = isWall ? 10 + Math.floor(intensity * 6) : 4;
+    const baseAngle = Math.atan2(ny, nx);
+    for (let i = 0; i < count; i++) {
+      const spread = (Math.random() - 0.5) * (isWall ? 1.9 : Math.PI * 2);
+      const spd = (isWall ? 130 : 70) + Math.random() * 240 * intensity;
+      const ang = baseAngle + spread;
+      sparks.push({
+        x,
+        y,
+        vx: Math.cos(ang) * spd,
+        vy: Math.sin(ang) * spd,
+        size: 2.5 + Math.random() * 3.5,
+        life: 1.0,
+        decay: 1.6 + Math.random() * 1.4,
+        color: Math.random() > 0.35 ? colorObj.main : colorObj.rim
+      });
+    }
+
+    // Harmonic ribbon connecting consecutive melody bounces
+    if (isWall) {
+      if (lastBouncePos.valid) {
+        laserChords.push({
+          x1: lastBouncePos.x,
+          y1: lastBouncePos.y,
+          x2: x,
+          y2: y,
+          color1: lastBouncePos.color,
+          color2: colorObj.main,
+          life: 1.0
+        });
+      }
+      lastBouncePos = { x, y, color: colorObj.main, valid: true };
+      centerPulse = Math.min(1.0, centerPulse + 0.38 * intensity);
+      currentAccentColor = colorObj;
+    }
+  }
+
+  function triggerBounceNote(ball, hitX, hitY, nx, ny, impactSpeed, isWall) {
+    const panX = Math.max(-1, Math.min(1, hitX / RING_RADIUS));
+    const normY = Math.max(-1, Math.min(1, hitY / RING_RADIUS));
+    const radiusRatio = (ball.r - 15) / 8;
+    const tx = -ny;
+    const ty = nx;
+    const spinFactor = Math.max(-1, Math.min(1, (ball.vx * tx + ball.vy * ty) / 350));
+
+    let step = null;
+    if (globalNoteCooldown <= 0) {
+      globalNoteCooldown = 0.115; // Musical cadence (~8.5 notes/sec max) so Für Elise sings clearly
+      step = playNextMelodyNote(impactSpeed, panX, normY, radiusRatio, spinFactor);
+    }
+
+    ball.flash = 1.0;
+    ball.squash = Math.min(0.38, 0.16 + impactSpeed / 1400);
+    ball.squashVel = 0;
+    ball.squashAngle = Math.atan2(ny, nx);
+
+    const intensity = Math.min(1.3, Math.max(0.4, impactSpeed / 360) * (step ? step.accent : 1));
+    spawnBounceEffects(hitX, hitY, nx, ny, ball.color, intensity, isWall && step !== null);
+  }
+
+  function stepPhysics(dt) {
+    const subSteps = 3;
+    const subDt = dt / subSteps;
+
+    for (let s = 0; s < subSteps; s++) {
+      ringAngle = (ringAngle + RING_OMEGA * subDt) % (Math.PI * 2);
+      if (globalNoteCooldown > 0) globalNoteCooldown -= subDt;
+
+      // Update ball positions & wall collisions
+      for (let i = 0; i < BALL_COUNT; i++) {
+        const b = balls[i];
+        if (b.bounceCooldown > 0) b.bounceCooldown -= subDt;
+
+        // Gravity + gentle swirl drag regulation so balls stay lively without exploding
+        b.vy += GRAVITY * subDt;
+        b.x += b.vx * subDt;
+        b.y += b.vy * subDt;
+
+        // 1. Collision with rotating rim nubs (inner pegs attached to the rotating circle)
+        const nubRingR = RING_RADIUS - RING_THICKNESS * 0.5 - 4;
+        for (let n = 0; n < NUB_COUNT; n++) {
+          const nub = nubs[n];
+          const na = ringAngle + nub.baseAngle;
+          const nxPos = Math.cos(na) * nubRingR;
+          const nyPos = Math.sin(na) * nubRingR;
+          const dx = b.x - nxPos;
+          const dy = b.y - nyPos;
+          const distSq = dx * dx + dy * dy;
+          const minDist = b.r + NUB_RADIUS;
+
+          if (distSq < minDist * minDist && distSq > 0.0001) {
+            const dist = Math.sqrt(distSq);
+            const nx = dx / dist;
+            const ny = dy / dist;
+            const overlap = minDist - dist;
+            b.x += nx * overlap;
+            b.y += ny * overlap;
+
+            // Linear velocity of the rotating nub at its position
+            const nubVx = -RING_OMEGA * nyPos;
+            const nubVy = RING_OMEGA * nxPos;
+
+            const rvx = b.vx - nubVx;
+            const rvy = b.vy - nubVy;
+            const normalVel = rvx * nx + rvy * ny;
+
+            if (normalVel < 0) {
+              const restitution = 0.96;
+              b.vx = nubVx + rvx - (1 + restitution) * normalVel * nx;
+              b.vy = nubVy + rvy - (1 + restitution) * normalVel * ny;
+
+              nub.pulse = 1.0;
+              if (b.bounceCooldown <= 0 && Math.abs(normalVel) > 65) {
+                b.bounceCooldown = 0.085;
+                triggerBounceNote(b, nxPos, nyPos, nx, ny, Math.abs(normalVel) * 1.15, true);
+              }
+            }
+          }
+        }
+
+        // 2. Collision with the slowly rotating outer circle boundary
+        const distFromCenter = Math.hypot(b.x, b.y);
+        const maxDist = RING_RADIUS - RING_THICKNESS * 0.5 - b.r;
+
+        if (distFromCenter > maxDist && distFromCenter > 0.001) {
+          // Normal pointing inward toward center
+          const nx = -b.x / distFromCenter;
+          const ny = -b.y / distFromCenter;
+
+          // Pull ball inside the boundary
+          b.x = -nx * maxDist;
+          b.y = -ny * maxDist;
+
+          // Tangential velocity of the rotating ring wall at the contact point
+          const hitX = -nx * (RING_RADIUS - RING_THICKNESS * 0.5);
+          const hitY = -ny * (RING_RADIUS - RING_THICKNESS * 0.5);
+          const wallVx = -RING_OMEGA * hitY;
+          const wallVy = RING_OMEGA * hitX;
+
+          // Velocity relative to rotating wall
+          const relVx = b.vx - wallVx;
+          const relVy = b.vy - wallVy;
+          const normalSpeed = -(relVx * nx + relVy * ny);
+
+          if (normalSpeed > 0) {
+            // Energetic bounce that keeps balls dancing across the arena
+            const restitution = 0.985;
+            const minBounceSpeed = 165;
+            const outNormalSpeed = Math.max(normalSpeed * restitution, minBounceSpeed);
+
+            // Tangential component picks up spin from the rotating wall
+            const tx = -ny;
+            const ty = nx;
+            const relTan = relVx * tx + relVy * ty;
+            const newTan = relTan * 0.92;
+
+            b.vx = wallVx + nx * outNormalSpeed + tx * newTan;
+            b.vy = wallVy + ny * outNormalSpeed + ty * newTan;
+
+            // Clamp maximum speed so physics remains readable and rhythmic
+            const totalSpeed = Math.hypot(b.vx, b.vy);
+            if (totalSpeed > 640) {
+              const sFactor = 640 / totalSpeed;
+              b.vx *= sFactor;
+              b.vy *= sFactor;
+            } else if (totalSpeed < 210) {
+              const sFactor = 210 / (totalSpeed || 1);
+              b.vx *= sFactor;
+              b.vy *= sFactor;
+            }
+
+            // Highlight the rotating ring segment that was struck
+            const worldAngle = Math.atan2(hitY, hitX);
+            let relAngle = (worldAngle - ringAngle) % (Math.PI * 2);
+            if (relAngle < 0) relAngle += Math.PI * 2;
+            const segIdx = Math.floor((relAngle / (Math.PI * 2)) * SEGMENT_COUNT) % SEGMENT_COUNT;
+            const seg = segments[segIdx];
+            seg.energy = 1.0;
+            seg.springVel = Math.min(260, 95 + normalSpeed * 0.35);
+
+            if (b.bounceCooldown <= 0 && normalSpeed > 45) {
+              b.bounceCooldown = 0.085;
+              triggerBounceNote(b, hitX, hitY, nx, ny, normalSpeed, true);
+            }
+          }
+        }
+      }
+
+      // 3. Ball-to-ball elastic collisions
+      for (let i = 0; i < BALL_COUNT; i++) {
+        const a = balls[i];
+        for (let j = i + 1; j < BALL_COUNT; j++) {
+          const b = balls[j];
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const minDist = a.r + b.r;
+          const distSq = dx * dx + dy * dy;
+
+          if (distSq < minDist * minDist && distSq > 0.0001) {
+            const dist = Math.sqrt(distSq);
+            const nx = dx / dist;
+            const ny = dy / dist;
+            const overlap = minDist - dist;
+
+            const totalMass = a.mass + b.mass;
+            const ratioA = b.mass / totalMass;
+            const ratioB = a.mass / totalMass;
+
+            a.x -= nx * overlap * ratioA;
+            a.y -= ny * overlap * ratioA;
+            b.x += nx * overlap * ratioB;
+            b.y += ny * overlap * ratioB;
+
+            const rvx = b.vx - a.vx;
+            const rvy = b.vy - a.vy;
+            const velAlongNormal = rvx * nx + rvy * ny;
+
+            if (velAlongNormal < 0) {
+              const restitution = 0.96;
+              const impulse = -(1 + restitution) * velAlongNormal / (1 / a.mass + 1 / b.mass);
+              const ix = impulse * nx;
+              const iy = impulse * ny;
+
+              a.vx -= ix / a.mass;
+              a.vy -= iy / a.mass;
+              b.vx += ix / b.mass;
+              b.vy += iy / b.mass;
+
+              const impactSpeed = -velAlongNormal;
+              const midX = a.x + nx * a.r;
+              const midY = a.y + ny * a.r;
+
+              // Strong mid-air collisions also advance the melody if neither ball is on cooldown
+              if (impactSpeed > 185 && a.bounceCooldown <= 0 && b.bounceCooldown <= 0) {
+                a.bounceCooldown = 0.11;
+                b.bounceCooldown = 0.11;
+                b.flash = 0.85;
+                b.squash = Math.min(0.32, 0.12 + impactSpeed / 1800);
+                b.squashAngle = Math.atan2(ny, nx);
+                triggerBounceNote(a, midX, midY, -nx, -ny, impactSpeed * 0.85, false);
+              } else if (impactSpeed > 90) {
+                a.squash = Math.max(a.squash, 0.15);
+                a.squashAngle = Math.atan2(ny, nx);
+                b.squash = Math.max(b.squash, 0.15);
+                b.squashAngle = Math.atan2(ny, nx);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Update trails, squash-and-stretch springs, and visual animations once per frame
+    for (let i = 0; i < BALL_COUNT; i++) {
+      const b = balls[i];
+      b.trail.push({ x: b.x, y: b.y });
+      if (b.trail.length > 9) b.trail.shift();
+
+      b.flash = Math.max(0, b.flash - dt * 2.8);
+
+      // Damped harmonic oscillator for playful squash & stretch
+      const k = 190;
+      const damp = 14;
+      const force = -k * b.squash - damp * b.squashVel;
+      b.squashVel += force * dt;
+      b.squash += b.squashVel * dt;
+    }
+
+    for (let i = 0; i < SEGMENT_COUNT; i++) {
+      const seg = segments[i];
+      seg.energy = Math.max(0, seg.energy - dt * 2.4);
+      const force = -220 * seg.springOffset - 16 * seg.springVel;
+      seg.springVel += force * dt;
+      seg.springOffset += seg.springVel * dt;
+    }
+
+    for (let i = 0; i < NUB_COUNT; i++) {
+      nubs[i].pulse = Math.max(0, nubs[i].pulse - dt * 3.0);
+    }
+
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      const rp = ripples[i];
+      rp.r += (rp.maxR - rp.r) * Math.min(1, dt * 8.5);
+      rp.alpha -= dt * 2.1;
+      if (rp.alpha <= 0.01) ripples.splice(i, 1);
+    }
+
+    for (let i = sparks.length - 1; i >= 0; i--) {
+      const sp = sparks[i];
+      sp.x += sp.vx * dt;
+      sp.y += sp.vy * dt;
+      sp.vx *= Math.pow(0.25, dt);
+      sp.vy *= Math.pow(0.25, dt);
+      sp.life -= sp.decay * dt;
+      if (sp.life <= 0) sparks.splice(i, 1);
+    }
+
+    for (let i = laserChords.length - 1; i >= 0; i--) {
+      laserChords[i].life -= dt * 2.6;
+      if (laserChords[i].life <= 0) laserChords.splice(i, 1);
+    }
+
+    centerPulse = Math.max(0, centerPulse - dt * 2.2);
+  }
+
+  function render(timeSec) {
+    ctx.save();
+    ctx.scale(dpr, dpr);
+
+    // Rich dark cosmic background that makes neon saturated colors pop
+    const bgGrad = ctx.createRadialGradient(
+      width * 0.5, height * 0.5, 10,
+      width * 0.5, height * 0.5, Math.max(width, height) * 0.65
+    );
+    bgGrad.addColorStop(0, '#10132e');
+    bgGrad.addColorStop(0.55, '#090b1c');
+    bgGrad.addColorStop(1, '#04050d');
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, width, height);
+
+    // Transform to 1080x1080 virtual stage centered in window
+    ctx.translate(width * 0.5, height * 0.5);
+    ctx.scale(scale, scale);
+
+    // Subtle ambient center harmonic mandala that reacts to the melody
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    const mandalaRadius = 115 + centerPulse * 42;
+    const centerGlow = ctx.createRadialGradient(0, 0, 4, 0, 0, mandalaRadius * 2.1);
+    centerGlow.addColorStop(0, currentAccentColor.main + '38');
+    centerGlow.addColorStop(0.5, currentAccentColor.glow + '14');
+    centerGlow.addColorStop(1, '#00000000');
+    ctx.fillStyle = centerGlow;
+    ctx.beginPath();
+    ctx.arc(0, 0, mandalaRadius * 2.1, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Counter-rotating sacred geometry harmonic rings in background
+    ctx.rotate(-ringAngle * 0.65);
+    ctx.strokeStyle = currentAccentColor.glow + '22';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    const petals = 12;
+    for (let a = 0; a <= 180; a++) {
+      const rad = (a / 180) * Math.PI * 2;
+      const r = 95 + Math.sin(rad * petals) * (16 + centerPulse * 22);
+      const px = Math.cos(rad) * r;
+      const py = Math.sin(rad) * r;
+      if (a === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.stroke();
+    ctx.restore();
+
+    // Outer decorative rotating compass ticks
+    ctx.save();
+    ctx.rotate(ringAngle);
+    const outerTickR = RING_RADIUS + 26;
+    for (let i = 0; i < 72; i++) {
+      const ang = (i / 72) * Math.PI * 2;
+      const isMajor = i % 6 === 0;
+      const len = isMajor ? 14 : 6;
+      const col = PALETTE[Math.floor(i / 2) % PALETTE.length].main;
+      ctx.strokeStyle = isMajor ? col + 'AA' : col + '44';
+      ctx.lineWidth = isMajor ? 3 : 1.5;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(ang) * outerTickR, Math.sin(ang) * outerTickR);
+      ctx.lineTo(Math.cos(ang) * (outerTickR + len), Math.sin(ang) * (outerTickR + len));
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Harmonic chord ribbons connecting recent melody bounces
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    for (let i = 0; i < laserChords.length; i++) {
+      const lc = laserChords[i];
+      const grad = ctx.createLinearGradient(lc.x1, lc.y1, lc.x2, lc.y2);
+      const alphaHex = Math.floor(lc.life * 110).toString(16).padStart(2, '0');
+      grad.addColorStop(0, lc.color1 + alphaHex);
+      grad.addColorStop(1, lc.color2 + alphaHex);
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = 2.5 * lc.life;
+      ctx.beginPath();
+      ctx.moveTo(lc.x1, lc.y1);
+      ctx.quadraticCurveTo(0, 0, lc.x2, lc.y2);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Draw the slowly rotating segmented circle arena
+    const segArc = (Math.PI * 2) / SEGMENT_COUNT;
+    const gap = 0.011;
+    for (let i = 0; i < SEGMENT_COUNT; i++) {
+      const seg = segments[i];
+      const a0 = ringAngle + i * segArc + gap;
+      const a1 = ringAngle + (i + 1) * segArc - gap;
+      const dynamicR = RING_RADIUS + seg.springOffset;
+
+      ctx.save();
+      ctx.lineCap = 'round';
+
+      // Outer neon bloom when segment is struck
+      if (seg.energy > 0.02) {
+        ctx.strokeStyle = seg.color.glow;
+        ctx.globalAlpha = seg.energy * 0.65;
+        ctx.lineWidth = RING_THICKNESS + 14 * seg.energy;
+        ctx.beginPath();
+        ctx.arc(0, 0, dynamicR, a0, a1);
+        ctx.stroke();
+      }
+
+      // Main vivid segment arc
+      ctx.globalAlpha = 0.85 + 0.15 * seg.energy;
+      ctx.strokeStyle = seg.energy > 0.35 ? seg.color.rim : seg.color.main;
+      ctx.lineWidth = RING_THICKNESS + 4 * seg.energy;
+      ctx.beginPath();
+      ctx.arc(0, 0, dynamicR, a0, a1);
+      ctx.stroke();
+
+      // Specular inner highlight line
+      ctx.globalAlpha = 0.7;
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      ctx.arc(0, 0, dynamicR - RING_THICKNESS * 0.32, a0 + 0.005, a1 - 0.005);
+      ctx.stroke();
+
+      ctx.restore();
+    }
+
+    // Draw the rotating inner rim nubs (bumpers that visibly rotate with the circle)
+    const nubRingR = RING_RADIUS - RING_THICKNESS * 0.5 - 4;
+    for (let i = 0; i < NUB_COUNT; i++) {
+      const nub = nubs[i];
+      const na = ringAngle + nub.baseAngle;
+      const nx = Math.cos(na) * nubRingR;
+      const ny = Math.sin(na) * nubRingR;
+      const r = NUB_RADIUS + nub.pulse * 5;
+
+      ctx.save();
+      if (nub.pulse > 0.05) {
+        ctx.fillStyle = nub.color.glow;
+        ctx.globalAlpha = nub.pulse * 0.7;
+        ctx.beginPath();
+        ctx.arc(nx, ny, r + 8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = nub.pulse > 0.3 ? '#FFFFFF' : nub.color.main;
+      ctx.beginPath();
+      ctx.arc(nx, ny, r, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath();
+      ctx.arc(nx - r * 0.25, ny - r * 0.25, r * 0.35, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Draw ball motion trails
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    for (let i = 0; i < BALL_COUNT; i++) {
+      const b = balls[i];
+      const tLen = b.trail.length;
+      if (tLen < 2) continue;
+      for (let t = 0; t < tLen - 1; t++) {
+        const frac = (t + 1) / tLen;
+        const p = b.trail[t];
+        ctx.fillStyle = b.color.main;
+        ctx.globalAlpha = frac * 0.28;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, b.r * frac * 0.78, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+
+    // Draw the 36 colorful bouncing balls with squash-and-stretch and glossy lighting
+    for (let i = 0; i < BALL_COUNT; i++) {
+      const b = balls[i];
+      ctx.save();
+      ctx.translate(b.x, b.y);
+
+      // Apply elastic squash-and-stretch along impact axis
+      if (Math.abs(b.squash) > 0.004) {
+        ctx.rotate(b.squashAngle);
+        const sx = 1 - b.squash;
+        const sy = 1 / sx;
+        ctx.scale(sx, sy);
+        ctx.rotate(-b.squashAngle);
+      }
+
+      // Outer glow when playing a melody note
+      if (b.flash > 0.02) {
+        ctx.fillStyle = b.color.glow;
+        ctx.globalAlpha = b.flash * 0.75;
+        ctx.beginPath();
+        ctx.arc(0, 0, b.r * (1.35 + b.flash * 0.45), 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Saturated sphere body with 3D radial shading
+      ctx.globalAlpha = 1;
+      const grad = ctx.createRadialGradient(
+        -b.r * 0.32, -b.r * 0.32, b.r * 0.1,
+        0, 0, b.r
+      );
+      grad.addColorStop(0, b.flash > 0.4 ? '#FFFFFF' : b.color.rim);
+      grad.addColorStop(0.38, b.color.main);
+      grad.addColorStop(1, '#090617');
+
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(0, 0, b.r, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Vivid rim stroke so every ball reads sharply on phone screens
+      ctx.strokeStyle = b.flash > 0.25 ? '#FFFFFF' : b.color.glow;
+      ctx.lineWidth = 2.2 + b.flash * 2;
+      ctx.stroke();
+
+      // Glossy specular shine dot
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.82)';
+      ctx.beginPath();
+      ctx.ellipse(-b.r * 0.34, -b.r * 0.34, b.r * 0.26, b.r * 0.16, -Math.PI * 0.25, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    // Draw expanding shockwave ripples on bounce
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    for (let i = 0; i < ripples.length; i++) {
+      const rp = ripples[i];
+      ctx.strokeStyle = rp.color;
+      ctx.globalAlpha = Math.max(0, rp.alpha);
+      ctx.lineWidth = rp.lineWidth;
+      ctx.beginPath();
+      ctx.arc(rp.x, rp.y, rp.r, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    // Draw spark particles
+    for (let i = 0; i < sparks.length; i++) {
+      const sp = sparks[i];
+      ctx.fillStyle = sp.color;
+      ctx.globalAlpha = Math.max(0, sp.life);
+      ctx.beginPath();
+      ctx.arc(sp.x, sp.y, sp.size * sp.life, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    ctx.restore();
+  }
+
+  // Main animation loop — starts immediately on page load
+  let lastTime = performance.now();
+  function animate(now) {
+    const dt = Math.min(0.033, Math.max(0.001, (now - lastTime) / 1000));
+    lastTime = now;
+
+    stepPhysics(dt);
+    render(now * 0.001);
+
+    requestAnimationFrame(animate);
+  }
+  requestAnimationFrame(animate);
+})();
+</script>
+</body>
+</html>

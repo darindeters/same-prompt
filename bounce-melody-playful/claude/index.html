@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Für Elise Bounce</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #07041a; overflow: hidden; touch-action: none;
+    -webkit-user-select: none; user-select: none;
+  }
+  canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+  'use strict';
+
+  /* ---------------------------------------------------------------
+     Für Elise (Beethoven, WoO 59) — main theme, note / length (eighths)
+     --------------------------------------------------------------- */
+  const SONG = [
+    ['E5',1],['D#5',1],['E5',1],['D#5',1],['E5',1],['B4',1],['D5',1],['C5',1],
+    ['A4',2],['C4',1],['E4',1],['A4',1],
+    ['B4',2],['E4',1],['G#4',1],['B4',1],
+    ['C5',2],['E4',1],['E5',1],['D#5',1],
+    ['E5',1],['D#5',1],['E5',1],['B4',1],['D5',1],['C5',1],
+    ['A4',2],['C4',1],['E4',1],['A4',1],
+    ['B4',2],['E4',1],['C5',1],['B4',1],
+    ['A4',2],
+    // B section
+    ['B4',1],['C5',1],['D5',1],
+    ['E5',3],['G4',1],['F5',1],['E5',1],
+    ['D5',3],['F4',1],['E5',1],['D5',1],
+    ['C5',3],['E4',1],['D5',1],['C5',1],
+    ['B4',3],['E4',1],['E5',1],['E4',1],['E5',1],['E5',1],['E6',1],
+    ['D#5',1],['E5',1],['D#5',1],['E5',1],['D#5',1],['E5',1],['D#5',1],
+    ['E5',1],['B4',1],['D5',1],['C5',1],
+    ['A4',2],['C4',1],['E4',1],['A4',1],
+    ['B4',2],['E4',1],['G#4',1],['B4',1],
+    ['C5',2],['E4',1],['E5',1],['D#5',1],
+    ['E5',1],['D#5',1],['E5',1],['B4',1],['D5',1],['C5',1],
+    ['A4',2],['C4',1],['E4',1],['A4',1],
+    ['B4',2],['E4',1],['C5',1],['B4',1],
+    ['A4',3],
+  ];
+  const NOTE_INDEX = { C:0,'C#':1,D:2,'D#':3,E:4,F:5,'F#':6,G:7,'G#':8,A:9,'A#':10,B:11 };
+  function freqOf(name) {
+    const m = /^([A-G]#?)(\d)$/.exec(name);
+    const semis = NOTE_INDEX[m[1]] + (parseInt(m[2],10) + 1) * 12;
+    return 440 * Math.pow(2, (semis - 69) / 12);
+  }
+  const NOTES = SONG.map(([n, l]) => ({ name: n, f: freqOf(n), len: l }));
+  let noteCursor = 0;
+
+  /* ---------------------------------------------------------------
+     Audio
+     --------------------------------------------------------------- */
+  const AC = window.AudioContext || window.webkitAudioContext;
+  let ctx = null, master = null, comp = null, delay = null, delayGain = null;
+  let audioReady = false;
+  let lastClickTime = 0;
+
+  function buildAudio() {
+    if (ctx) return;
+    try { ctx = new AC(); } catch (e) { return; }
+    master = ctx.createGain(); master.gain.value = 0.7;
+    comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -18; comp.knee.value = 20; comp.ratio.value = 6;
+    comp.attack.value = 0.004; comp.release.value = 0.18;
+    delay = ctx.createDelay(1.0); delay.delayTime.value = 0.27;
+    delayGain = ctx.createGain(); delayGain.gain.value = 0.22;
+    const delayFilter = ctx.createBiquadFilter();
+    delayFilter.type = 'lowpass'; delayFilter.frequency.value = 2400;
+    master.connect(comp); comp.connect(ctx.destination);
+    master.connect(delay); delay.connect(delayFilter); delayFilter.connect(delayGain);
+    delayGain.connect(delay); delayGain.connect(comp);
+  }
+  function tryStartAudio() {
+    buildAudio();
+    if (!ctx) return;
+    if (ctx.state === 'running') { audioReady = true; return; }
+    ctx.resume().then(() => { audioReady = ctx.state === 'running'; }).catch(() => {});
+  }
+  buildAudio();
+  tryStartAudio();
+  const unlock = () => {
+    tryStartAudio();
+    if (audioReady) {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+      window.removeEventListener('touchstart', unlock);
+    }
+  };
+  window.addEventListener('pointerdown', unlock);
+  window.addEventListener('keydown', unlock);
+  window.addEventListener('touchstart', unlock, { passive: true });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) tryStartAudio();
+  });
+
+  // Plucky music-box / bell voice for each melody note
+  function playNote(note, velocity) {
+    if (!audioReady) return;
+    const t = ctx.currentTime;
+    const vel = 0.35 + 0.65 * Math.min(1, velocity);
+    const sustain = 0.35 + note.len * 0.32;
+
+    const out = ctx.createGain();
+    out.gain.setValueAtTime(0, t);
+    out.gain.linearRampToValueAtTime(0.22 * vel, t + 0.004);
+    out.gain.exponentialRampToValueAtTime(0.0008, t + sustain);
+    out.connect(master);
+
+    // fundamental: triangle for body
+    const o1 = ctx.createOscillator();
+    o1.type = 'triangle'; o1.frequency.value = note.f;
+    const g1 = ctx.createGain(); g1.gain.value = 0.8;
+    o1.connect(g1); g1.connect(out);
+
+    // shimmer partials (bell-like, decaying faster)
+    const o2 = ctx.createOscillator();
+    o2.type = 'sine'; o2.frequency.value = note.f * 2.0;
+    const g2 = ctx.createGain();
+    g2.gain.setValueAtTime(0.35, t);
+    g2.gain.exponentialRampToValueAtTime(0.001, t + sustain * 0.45);
+    o2.connect(g2); g2.connect(out);
+
+    const o3 = ctx.createOscillator();
+    o3.type = 'sine'; o3.frequency.value = note.f * 3.01;
+    const g3 = ctx.createGain();
+    g3.gain.setValueAtTime(0.12 * vel, t);
+    g3.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+    o3.connect(g3); g3.connect(out);
+
+    // tiny pitch blip on attack gives it a "boing"
+    o1.frequency.setValueAtTime(note.f * 1.015, t);
+    o1.frequency.exponentialRampToValueAtTime(note.f, t + 0.03);
+
+    // bright click transient
+    const click = ctx.createOscillator();
+    click.type = 'square'; click.frequency.value = note.f * 4;
+    const cg = ctx.createGain();
+    cg.gain.setValueAtTime(0.05 * vel, t);
+    cg.gain.exponentialRampToValueAtTime(0.0005, t + 0.02);
+    const cf = ctx.createBiquadFilter(); cf.type = 'bandpass'; cf.frequency.value = 3000; cf.Q.value = 1.2;
+    click.connect(cf); cf.connect(cg); cg.connect(out);
+
+    [o1, o2, o3, click].forEach(o => { o.start(t); o.stop(t + sustain + 0.05); });
+  }
+
+  // Soft woody tick for ball-to-ball bumps (rate limited)
+  function playBump(strength, pan) {
+    if (!audioReady) return;
+    const t = ctx.currentTime;
+    if (t - lastClickTime < 0.035) return;
+    lastClickTime = t;
+    const s = Math.min(1, strength);
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    const f0 = 380 + 500 * Math.random();
+    o.frequency.setValueAtTime(f0 * 1.6, t);
+    o.frequency.exponentialRampToValueAtTime(f0, t + 0.035);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.045 + 0.08 * s, t);
+    g.gain.exponentialRampToValueAtTime(0.0005, t + 0.07);
+    let node = g;
+    if (ctx.createStereoPanner) {
+      const p = ctx.createStereoPanner(); p.pan.value = Math.max(-1, Math.min(1, pan));
+      g.connect(p); node = p;
+    }
+    o.connect(g); node.connect(master);
+    o.start(t); o.stop(t + 0.1);
+  }
+
+  // Sparkly glissando when the melody loops around
+  function playLoopSparkle() {
+    if (!audioReady) return;
+    const t = ctx.currentTime;
+    const base = 880;
+    for (let i = 0; i < 7; i++) {
+      const o = ctx.createOscillator(); o.type = 'sine';
+      o.frequency.value = base * Math.pow(2, [0, 4, 7, 12, 16, 19, 24][i] / 12);
+      const g = ctx.createGain();
+      const st = t + i * 0.045;
+      g.gain.setValueAtTime(0, st);
+      g.gain.linearRampToValueAtTime(0.07, st + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0005, st + 0.5);
+      o.connect(g); g.connect(master);
+      o.start(st); o.stop(st + 0.55);
+    }
+  }
+
+  /* ---------------------------------------------------------------
+     Canvas + world
+     --------------------------------------------------------------- */
+  const canvas = document.getElementById('c');
+  const g2d = canvas.getContext('2d');
+  let W = 0, H = 0, DPR = 1, CX = 0, CY = 0, R = 0, SCALE = 1;
+
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = Math.floor(W * DPR); canvas.height = Math.floor(H * DPR);
+    g2d.setTransform(DPR, 0, 0, DPR, 0, 0);
+    CX = W / 2; CY = H / 2;
+    const m = Math.min(W, H);
+    R = m * 0.44;
+    SCALE = m / 1080;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  const BALL_COUNT = 42;
+  const GRAVITY = 900;            // px/s^2 at 1080 scale
+  const RESTITUTION = 0.92;
+  const RING_OMEGA = 0.22;        // rad/s — slow rotation
+  let ringAngle = 0;
+
+  const balls = [];
+  const ripples = [];     // wall-hit ripples
+  const sparks = [];      // particle sparks
+  const hitFlashes = [];  // bright arcs on the ring where balls hit
+
+  function rand(a, b) { return a + Math.random() * (b - a); }
+
+  function makeBalls() {
+    balls.length = 0;
+    for (let i = 0; i < BALL_COUNT; i++) {
+      const hue = (i * 360 / BALL_COUNT + rand(-8, 8) + 360) % 360;
+      const r = rand(9, 17);
+      let x, y, tries = 0, ok = false;
+      while (!ok && tries++ < 200) {
+        const a = rand(0, Math.PI * 2), d = Math.sqrt(Math.random()) * (R - (r + 20) * SCALE) * 0.9;
+        x = Math.cos(a) * d; y = Math.sin(a) * d;
+        ok = balls.every(b => Math.hypot(b.x - x, b.y - y) > (b.r + r + 2) * SCALE);
+      }
+      balls.push({
+        x, y, r, hue,
+        vx: rand(-260, 260) * SCALE, vy: rand(-260, 260) * SCALE,
+        glow: 0,
+        trail: [],
+      });
+    }
+  }
+  makeBalls();
+
+  /* ---------------------------------------------------------------
+     Physics — positions in screen px relative to the ring center;
+     speeds and gravity scale with SCALE so it feels the same at any size
+     --------------------------------------------------------------- */
+  function step(dt) {
+    const gy = GRAVITY * SCALE;
+    ringAngle += RING_OMEGA * dt;
+    for (const b of balls) {
+      b.vy += gy * dt; b.x += b.vx * dt; b.y += b.vy * dt;
+      b.glow *= Math.pow(0.02, dt);
+      b.trail.push(b.x, b.y);
+      if (b.trail.length > 16) b.trail.splice(0, 2);
+    }
+    collideBalls();
+    collideWalls();
+    tickEffects(dt, gy);
+  }
+
+  function collideBalls() {
+    for (let i = 0; i < balls.length; i++) {
+      const a = balls[i];
+      for (let j = i + 1; j < balls.length; j++) {
+        const c = balls[j];
+        const dx = c.x - a.x, dy = c.y - a.y;
+        const minD = (a.r + c.r) * SCALE;
+        const d2 = dx * dx + dy * dy;
+        if (d2 >= minD * minD || d2 === 0) continue;
+        const d = Math.sqrt(d2);
+        const nx = dx / d, ny = dy / d;
+        const overlap = minD - d;
+        const ma = a.r * a.r, mc = c.r * c.r, tot = ma + mc;
+        a.x -= nx * overlap * (mc / tot); a.y -= ny * overlap * (mc / tot);
+        c.x += nx * overlap * (ma / tot); c.y += ny * overlap * (ma / tot);
+        const rvx = c.vx - a.vx, rvy = c.vy - a.vy;
+        const vn = rvx * nx + rvy * ny;
+        if (vn > 0) continue;
+        const jimp = -(1 + 0.9) * vn / (1 / ma + 1 / mc);
+        a.vx -= jimp * nx / ma; a.vy -= jimp * ny / ma;
+        c.vx += jimp * nx / mc; c.vy += jimp * ny / mc;
+        const strength = -vn / (600 * SCALE);
+        if (strength > 0.15) {
+          playBump(strength, (a.x + c.x) / (2 * R));
+          const k = 1 + Math.floor(strength * 3);
+          for (let s = 0; s < k; s++) spawnSpark((a.x + c.x) / 2, (a.y + c.y) / 2, (a.hue + c.hue) / 2, 120 * SCALE);
+        }
+      }
+    }
+  }
+
+  function collideWalls() {
+    for (const b of balls) {
+      const d = Math.hypot(b.x, b.y);
+      const limit = R - b.r * SCALE;
+      if (d <= limit) continue;
+      const nx = b.x / d, ny = b.y / d;          // outward normal
+      b.x = nx * limit; b.y = ny * limit;
+      const vn = b.vx * nx + b.vy * ny;
+      if (vn <= 0) continue;
+      // the rotating wall drags the ball a little along its surface
+      const tx = -ny, ty = nx;
+      const surf = RING_OMEGA * R;
+      let vt = b.vx * tx + b.vy * ty;
+      vt = vt * 0.985 + surf * 0.015;
+      let vnNew = -vn * RESTITUTION;
+      const minBounce = 320 * SCALE;              // keep the party going
+      if (-vnNew < minBounce) vnNew = -minBounce * rand(0.95, 1.15);
+      b.vx = vnNew * nx + vt * tx;
+      b.vy = vnNew * ny + vt * ty;
+
+      // every wall bounce plays the next note of the melody
+      const speed = Math.min(1, vn / (900 * SCALE));
+      b.glow = 1;
+      const note = NOTES[noteCursor];
+      noteCursor = (noteCursor + 1) % NOTES.length;
+      playNote(note, speed);
+      if (noteCursor === 0) { playLoopSparkle(); burstRing(); }
+
+      const ang = Math.atan2(ny, nx);
+      ripples.push({ x: nx * R, y: ny * R, t: 0, hue: b.hue, len: note.len });
+      hitFlashes.push({ ang, t: 0, hue: b.hue, width: 0.18 + 0.1 * note.len });
+      const n = 4 + Math.floor(speed * 10);
+      for (let s = 0; s < n; s++) spawnSpark(b.x, b.y, b.hue, (220 + speed * 300) * SCALE, -nx, -ny);
+    }
+  }
+
+  function tickEffects(dt, gy) {
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      ripples[i].t += dt;
+      if (ripples[i].t > 0.9) ripples.splice(i, 1);
+    }
+    for (let i = hitFlashes.length - 1; i >= 0; i--) {
+      hitFlashes[i].t += dt;
+      if (hitFlashes[i].t > 0.6) hitFlashes.splice(i, 1);
+    }
+    for (let i = sparks.length - 1; i >= 0; i--) {
+      const s = sparks[i];
+      s.t += dt;
+      s.vy += gy * 0.4 * dt;
+      s.x += s.vx * dt; s.y += s.vy * dt;
+      if (s.t > s.life) sparks.splice(i, 1);
+    }
+  }
+
+  function spawnSpark(x, y, hue, speed, dirx, diry) {
+    if (sparks.length > 400) return;
+    let a;
+    if (dirx !== undefined) a = Math.atan2(diry, dirx) + rand(-1.1, 1.1);
+    else a = rand(0, Math.PI * 2);
+    const sp = speed * rand(0.3, 1);
+    sparks.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, t: 0, life: rand(0.3, 0.7), hue: hue + rand(-20, 20), size: rand(1.5, 3.5) });
+  }
+  function burstRing() {
+    for (let i = 0; i < 80; i++) {
+      const a = (i / 80) * Math.PI * 2;
+      sparks.push({ x: Math.cos(a) * R, y: Math.sin(a) * R, vx: -Math.cos(a) * rand(80, 260), vy: -Math.sin(a) * rand(80, 260), t: 0, life: rand(0.5, 1), hue: rand(0, 360), size: rand(2, 4) });
+    }
+  }
+
+  /* ---------------------------------------------------------------
+     Rendering
+     --------------------------------------------------------------- */
+  let bgGrad = null, bgKey = '';
+  function drawBackground() {
+    const key = W + 'x' + H;
+    if (key !== bgKey) {
+      bgGrad = g2d.createRadialGradient(CX, CY, 0, CX, CY, Math.max(W, H) * 0.75);
+      bgGrad.addColorStop(0, '#1b0b4a');
+      bgGrad.addColorStop(0.55, '#0b0528');
+      bgGrad.addColorStop(1, '#04020f');
+      bgKey = key;
+    }
+    g2d.fillStyle = bgGrad;
+    g2d.fillRect(0, 0, W, H);
+  }
+
+  function drawRing(time) {
+    g2d.save();
+    g2d.translate(CX, CY);
+
+    // outer halo
+    const halo = g2d.createRadialGradient(0, 0, R * 0.96, 0, 0, R * 1.18);
+    halo.addColorStop(0, 'rgba(120,60,255,0.28)');
+    halo.addColorStop(1, 'rgba(120,60,255,0)');
+    g2d.fillStyle = halo;
+    g2d.beginPath(); g2d.arc(0, 0, R * 1.18, 0, Math.PI * 2); g2d.fill();
+
+    // inner glass tint
+    const inner = g2d.createRadialGradient(0, 0, 0, 0, 0, R);
+    inner.addColorStop(0, 'rgba(255,255,255,0.00)');
+    inner.addColorStop(0.85, 'rgba(90,40,180,0.05)');
+    inner.addColorStop(1, 'rgba(160,90,255,0.22)');
+    g2d.fillStyle = inner;
+    g2d.beginPath(); g2d.arc(0, 0, R, 0, Math.PI * 2); g2d.fill();
+
+    g2d.rotate(ringAngle);
+
+    // rainbow ring body
+    const segs = 72;
+    g2d.lineCap = 'butt';
+    for (let i = 0; i < segs; i++) {
+      const a0 = (i / segs) * Math.PI * 2, a1 = ((i + 1) / segs) * Math.PI * 2 + 0.004;
+      const hue = (i / segs) * 360 + time * 20;
+      g2d.strokeStyle = `hsl(${hue},100%,62%)`;
+      g2d.lineWidth = 7 * SCALE + 3;
+      g2d.beginPath(); g2d.arc(0, 0, R + g2d.lineWidth / 2, a0, a1); g2d.stroke();
+    }
+    // tick marks so rotation is visible
+    g2d.strokeStyle = 'rgba(255,255,255,0.85)';
+    for (let i = 0; i < 24; i++) {
+      const a = (i / 24) * Math.PI * 2;
+      const big = i % 6 === 0;
+      const len = (big ? 26 : 12) * SCALE + 4;
+      g2d.lineWidth = big ? 4 : 2;
+      g2d.beginPath();
+      g2d.moveTo(Math.cos(a) * (R + 10 * SCALE + 3), Math.sin(a) * (R + 10 * SCALE + 3));
+      g2d.lineTo(Math.cos(a) * (R + 10 * SCALE + 3 + len), Math.sin(a) * (R + 10 * SCALE + 3 + len));
+      g2d.stroke();
+    }
+    // little orbiting comet on the ring marks the spin
+    const ca = -Math.PI / 2;
+    g2d.fillStyle = '#fff';
+    g2d.shadowColor = '#ffffff'; g2d.shadowBlur = 20;
+    g2d.beginPath(); g2d.arc(Math.cos(ca) * (R + 4 * SCALE), Math.sin(ca) * (R + 4 * SCALE), 7 * SCALE + 2, 0, Math.PI * 2); g2d.fill();
+    g2d.shadowBlur = 0;
+    g2d.restore();
+
+    // hit flashes (in world space, not rotating)
+    g2d.save();
+    g2d.translate(CX, CY);
+    g2d.globalCompositeOperation = 'lighter';
+    for (const f of hitFlashes) {
+      const p = 1 - f.t / 0.6;
+      g2d.strokeStyle = `hsla(${f.hue},100%,75%,${p * 0.95})`;
+      g2d.lineWidth = (12 + 18 * p) * SCALE + 2;
+      g2d.beginPath(); g2d.arc(0, 0, R + 4 * SCALE, f.ang - f.width * (1 + (1 - p)), f.ang + f.width * (1 + (1 - p))); g2d.stroke();
+    }
+    g2d.restore();
+  }
+
+  function drawEffects() {
+    g2d.save();
+    g2d.translate(CX, CY);
+    g2d.globalCompositeOperation = 'lighter';
+
+    for (const rp of ripples) {
+      const p = rp.t / 0.9;
+      const rad = (20 + 140 * p * (0.6 + rp.len * 0.25)) * SCALE;
+      g2d.strokeStyle = `hsla(${rp.hue},100%,70%,${(1 - p) * 0.8})`;
+      g2d.lineWidth = (6 * (1 - p) + 1) * SCALE + 1;
+      g2d.beginPath(); g2d.arc(rp.x, rp.y, rad, 0, Math.PI * 2); g2d.stroke();
+    }
+
+    for (const s of sparks) {
+      const p = 1 - s.t / s.life;
+      g2d.fillStyle = `hsla(${s.hue},100%,70%,${p})`;
+      g2d.beginPath(); g2d.arc(s.x, s.y, s.size * SCALE * (0.5 + p), 0, Math.PI * 2); g2d.fill();
+    }
+    g2d.restore();
+  }
+
+  function drawBalls() {
+    g2d.save();
+    g2d.translate(CX, CY);
+    // clip to the ring interior
+    g2d.beginPath(); g2d.arc(0, 0, R + 2, 0, Math.PI * 2); g2d.clip();
+
+    // trails
+    g2d.globalCompositeOperation = 'lighter';
+    g2d.lineCap = 'round';
+    for (const b of balls) {
+      const tr = b.trail;
+      for (let i = 2; i < tr.length; i += 2) {
+        const p = i / tr.length;
+        g2d.strokeStyle = `hsla(${b.hue},100%,65%,${p * 0.35})`;
+        g2d.lineWidth = b.r * 1.4 * p * SCALE;
+        g2d.beginPath(); g2d.moveTo(tr[i - 2], tr[i - 1]); g2d.lineTo(tr[i], tr[i + 1]); g2d.stroke();
+      }
+    }
+    g2d.globalCompositeOperation = 'source-over';
+
+    for (const b of balls) {
+      const r = b.r * SCALE;
+      // glow
+      if (b.glow > 0.02) {
+        g2d.globalCompositeOperation = 'lighter';
+        const gl = g2d.createRadialGradient(b.x, b.y, r * 0.5, b.x, b.y, r * (2.2 + b.glow * 2));
+        gl.addColorStop(0, `hsla(${b.hue},100%,70%,${0.6 * b.glow})`);
+        gl.addColorStop(1, `hsla(${b.hue},100%,70%,0)`);
+        g2d.fillStyle = gl;
+        g2d.beginPath(); g2d.arc(b.x, b.y, r * (2.2 + b.glow * 2), 0, Math.PI * 2); g2d.fill();
+        g2d.globalCompositeOperation = 'source-over';
+      }
+      // body with specular highlight
+      const sq = 1 + b.glow * 0.25;
+      const body = g2d.createRadialGradient(b.x - r * 0.35, b.y - r * 0.4, r * 0.1, b.x, b.y, r * sq);
+      body.addColorStop(0, `hsl(${b.hue},100%,${80 + b.glow * 15}%)`);
+      body.addColorStop(0.5, `hsl(${b.hue},100%,58%)`);
+      body.addColorStop(1, `hsl(${b.hue},95%,32%)`);
+      g2d.fillStyle = body;
+      g2d.beginPath(); g2d.arc(b.x, b.y, r * sq, 0, Math.PI * 2); g2d.fill();
+      g2d.fillStyle = 'rgba(255,255,255,0.75)';
+      g2d.beginPath(); g2d.arc(b.x - r * 0.35, b.y - r * 0.4, r * 0.22, 0, Math.PI * 2); g2d.fill();
+    }
+    g2d.restore();
+  }
+
+  /* ---------------------------------------------------------------
+     Main loop
+     --------------------------------------------------------------- */
+  let last = performance.now();
+  let elapsed = 0;
+  function frame(now) {
+    let dt = (now - last) / 1000;
+    last = now;
+    if (dt > 0.05) dt = 0.05;
+    elapsed += dt;
+    const sub = 3;
+    for (let i = 0; i < sub; i++) step(dt / sub);
+    drawBackground();
+    drawRing(elapsed);
+    drawEffects();
+    drawBalls();
+    requestAnimationFrame(frame);
+  }
+
+  // keep balls inside the ring if the window shrinks
+  window.addEventListener('resize', () => {
+    for (const b of balls) {
+      const d = Math.hypot(b.x, b.y), lim = R - b.r * SCALE - 1;
+      if (d > lim) { b.x *= lim / d; b.y *= lim / d; }
+    }
+  });
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

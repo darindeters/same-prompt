@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#060611">
+<title>Pendulum Wave</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #060611; }
+  body { overscroll-behavior: none; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas aria-label="Fifteen luminous pendulums swing in evolving waves, playing a note each time they pass through the bottom of their arc."></canvas>
+<script>
+(() => {
+  'use strict';
+  const canvas = document.querySelector('canvas');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const TAU = Math.PI * 2;
+  const notes = [48, 50, 52, 55, 57, 60, 62, 64, 67, 69, 72, 74, 76, 79, 81];
+  const pendulums = notes.map((note, i) => ({
+    x: 168 + i * 53.15,
+    length: 462 * Math.pow(60 / (60 + i), 2),
+    omega: TAU * (60 + i) / 144,
+    hue: 335 + i * 21.8,
+    frequency: 440 * Math.pow(2, (note - 69) / 12),
+    lastCrossing: -1,
+    flash: 0,
+    trail: []
+  }));
+  let width, height, scale, offsetX, offsetY;
+  let audio, master, compressor, reverb, reverbInput;
+  let previousTime = 0;
+  const ripples = [];
+  const epoch = performance.now();
+
+  function resize() {
+    width = innerWidth;
+    height = innerHeight;
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    scale = Math.min(width / 1080, height / 1000);
+    offsetX = (width - 1080 * scale) / 2;
+    offsetY = (height - 1000 * scale) / 2;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  addEventListener('resize', resize, { passive: true });
+  resize();
+
+  function startAudio() {
+    try {
+      if (!audio) {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContext) return;
+        audio = new AudioContext();
+        master = audio.createGain();
+        master.gain.value = 0.64;
+        compressor = audio.createDynamicsCompressor();
+        compressor.threshold.value = -20;
+        compressor.knee.value = 18;
+        compressor.ratio.value = 5;
+        master.connect(compressor);
+        compressor.connect(audio.destination);
+        reverb = audio.createConvolver();
+        const duration = 2.4;
+        const impulse = audio.createBuffer(2, Math.floor(audio.sampleRate * duration), audio.sampleRate);
+        for (let channel = 0; channel < 2; channel++) {
+          const data = impulse.getChannelData(channel);
+          for (let j = 0; j < data.length; j++) {
+            data[j] = (Math.random() * 2 - 1) * Math.pow(1 - j / data.length, 3.3) * 0.38;
+          }
+        }
+        reverb.buffer = impulse;
+        reverbInput = audio.createGain();
+        reverbInput.gain.value = 0.3;
+        reverbInput.connect(reverb);
+        reverb.connect(master);
+      }
+      if (audio.state === 'suspended') audio.resume().catch(() => {});
+    } catch (_) { /* Animation remains available when audio is unavailable. */ }
+  }
+  addEventListener('pointerdown', startAudio, { passive: true });
+  addEventListener('keydown', startAudio);
+  startAudio();
+
+  function chime(p, index) {
+    if (!audio || audio.state !== 'running' || document.hidden) return;
+    const now = audio.currentTime;
+    const envelope = audio.createGain();
+    envelope.gain.setValueAtTime(0, now);
+    envelope.gain.linearRampToValueAtTime(0.065, now + 0.006);
+    envelope.gain.exponentialRampToValueAtTime(0.0001, now + 1.65);
+    const pan = audio.createStereoPanner();
+    pan.pan.value = (index / 14 - 0.5) * 1.5;
+    envelope.connect(pan);
+    pan.connect(master);
+    pan.connect(reverbInput);
+    // Soft mallet attack, a singing fundamental, and a quickly fading bell partial.
+    [[1, 1, 1.6], [2, 0.22, 0.72], [3.997, 0.08, 0.22]].forEach(([ratio, level, decay]) => {
+      const oscillator = audio.createOscillator();
+      const partial = audio.createGain();
+      oscillator.type = 'sine';
+      oscillator.frequency.value = p.frequency * ratio;
+      partial.gain.setValueAtTime(level, now);
+      partial.gain.exponentialRampToValueAtTime(0.0001, now + decay);
+      oscillator.connect(partial);
+      partial.connect(envelope);
+      oscillator.start(now);
+      oscillator.stop(now + 1.7);
+      oscillator.onended = () => { oscillator.disconnect(); partial.disconnect(); };
+    });
+    // Release the per-note routing after its tail has faded.
+    setTimeout(() => { envelope.disconnect(); pan.disconnect(); }, 1900);
+  }
+
+  function ellipse(x, y, rx, ry, fill) {
+    ctx.beginPath();
+    ctx.ellipse(x, y, rx, ry, 0, 0, TAU);
+    ctx.fillStyle = fill;
+    ctx.fill();
+  }
+
+  function render(timestamp) {
+    const time = (timestamp - epoch) / 1000;
+    const dt = Math.min(0.05, Math.max(0, time - previousTime));
+    const longGap = time - previousTime > 0.2;
+    previousTime = time;
+    ctx.fillStyle = '#060611';
+    ctx.fillRect(0, 0, width, height);
+    const ambient = ctx.createRadialGradient(width * 0.5, height * 0.53, 0, width * 0.5, height * 0.53, Math.max(width, height) * 0.7);
+    ambient.addColorStop(0, '#141334');
+    ambient.addColorStop(0.5, '#0b0b20');
+    ambient.addColorStop(1, '#03040c');
+    ctx.fillStyle = ambient;
+    ctx.fillRect(0, 0, width, height);
+    ctx.save();
+    ctx.translate(offsetX, offsetY);
+    ctx.scale(scale, scale);
+
+    // A quiet field of pinpricks gives the light room to breathe.
+    for (let i = 0; i < 65; i++) {
+      const x = ((i * 173.731) % 1010) + 35;
+      const y = ((i * 97.371) % 840) + 80;
+      ellipse(x, y, i % 7 === 0 ? 1.2 : 0.6, i % 7 === 0 ? 1.2 : 0.6,
+        `rgba(157,174,255,${0.09 + 0.1 * (0.5 + 0.5 * Math.sin(time * 0.35 + i))})`);
+    }
+    const pool = ctx.createRadialGradient(540, 785, 4, 540, 785, 410);
+    pool.addColorStop(0, 'rgba(69,42,130,0.14)');
+    pool.addColorStop(1, 'rgba(15,10,35,0)');
+    ctx.save();
+    ctx.translate(540, 785);
+    ctx.scale(1, 0.25);
+    ctx.translate(-540, -785);
+    ellipse(540, 785, 470, 470, pool);
+    ctx.restore();
+    ctx.beginPath();
+    ctx.ellipse(540, 785, 438, 71, 0, 0, TAU);
+    ctx.strokeStyle = 'rgba(123,119,219,0.08)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Fine metal suspension rail.
+    const rail = ctx.createLinearGradient(110, 0, 970, 0);
+    rail.addColorStop(0, 'rgba(117,133,195,0)');
+    rail.addColorStop(0.15, 'rgba(148,164,216,0.5)');
+    rail.addColorStop(0.5, 'rgba(219,226,255,0.8)');
+    rail.addColorStop(0.85, 'rgba(148,164,216,0.5)');
+    rail.addColorStop(1, 'rgba(117,133,195,0)');
+    ctx.fillStyle = rail;
+    ctx.fillRect(100, 230, 880, 2);
+    ctx.fillStyle = 'rgba(119,132,189,0.07)';
+    ctx.fillRect(100, 233, 880, 6);
+
+    pendulums.forEach((p, index) => {
+      const phase = p.omega * time;
+      const angle = 0.32 * Math.cos(phase);
+      const x = p.x + Math.sin(angle) * p.length;
+      const y = 237 + Math.cos(angle) * p.length;
+      const crossing = Math.floor((phase - Math.PI / 2) / Math.PI);
+      if (crossing > p.lastCrossing) {
+        if (!longGap) {
+          p.flash = 1;
+          ripples.push({ x: p.x, y: 237 + p.length, hue: p.hue, born: time });
+          chime(p, index);
+        }
+        p.lastCrossing = crossing;
+      }
+      p.flash *= Math.exp(-dt * 6);
+      if (longGap) p.trail.length = 0;
+      p.trail.push({ x, y, time });
+      while (p.trail.length && time - p.trail[0].time > 0.36) p.trail.shift();
+
+      // The short, fading path makes the changing phase relationships visible.
+      ctx.lineCap = 'round';
+      for (let j = 1; j < p.trail.length; j++) {
+        const a = p.trail[j - 1], b = p.trail[j];
+        const opacity = Math.max(0, 1 - (time - b.time) / 0.36);
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.strokeStyle = `hsla(${p.hue},100%,62%,${opacity * 0.28})`;
+        ctx.lineWidth = 3 + opacity * 6;
+        ctx.stroke();
+      }
+
+      const string = ctx.createLinearGradient(p.x, 237, x, y);
+      string.addColorStop(0, 'rgba(182,192,233,0.18)');
+      string.addColorStop(0.7, `hsla(${p.hue},75%,75%,0.36)`);
+      string.addColorStop(1, `hsla(${p.hue},100%,73%,0.8)`);
+      ctx.beginPath();
+      ctx.moveTo(p.x, 237);
+      ctx.lineTo(x, y);
+      ctx.strokeStyle = string;
+      ctx.lineWidth = 1.25;
+      ctx.stroke();
+      ellipse(p.x, 235, 3.1, 3.1, `hsla(${p.hue},85%,76%,0.8)`);
+
+      const radius = 13.5;
+      const glow = ctx.createRadialGradient(x, y, 1, x, y, 44 + p.flash * 23);
+      glow.addColorStop(0, `hsla(${p.hue},100%,65%,${0.37 + p.flash * 0.23})`);
+      glow.addColorStop(1, `hsla(${p.hue},100%,55%,0)`);
+      ellipse(x, y, 44 + p.flash * 23, 44 + p.flash * 23, glow);
+      const ball = ctx.createRadialGradient(x - 4, y - 5, 0, x + 1, y + 2, radius + 3);
+      ball.addColorStop(0, `hsl(${p.hue},100%,93%)`);
+      ball.addColorStop(0.24, `hsl(${p.hue},100%,74%)`);
+      ball.addColorStop(0.62, `hsl(${p.hue},100%,56%)`);
+      ball.addColorStop(1, `hsl(${p.hue},95%,27%)`);
+      ellipse(x, y, radius, radius, ball);
+      ellipse(x - 4, y - 5, 3.8, 2.4, 'rgba(255,255,255,0.62)');
+      if (p.flash > 0.05) ellipse(x, y, 5 * p.flash, 5 * p.flash, `rgba(255,255,255,${p.flash * 0.8})`);
+
+      const reflection = ctx.createRadialGradient(x, 783, 0, x, 783, 30);
+      reflection.addColorStop(0, `hsla(${p.hue},100%,60%,${0.11 + p.flash * 0.13})`);
+      reflection.addColorStop(1, `hsla(${p.hue},100%,60%,0)`);
+      ctx.save();
+      ctx.translate(x, 783);
+      ctx.scale(1, 0.2);
+      ctx.translate(-x, -783);
+      ellipse(x, 783, 30, 30, reflection);
+      ctx.restore();
+    });
+
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      const r = ripples[i];
+      const age = time - r.born;
+      if (age > 0.75) { ripples.splice(i, 1); continue; }
+      ctx.beginPath();
+      ctx.ellipse(r.x, r.y, 16 + age * 49, 16 + age * 49, 0, 0, TAU);
+      ctx.strokeStyle = `hsla(${r.hue},100%,72%,${Math.pow(1 - age / 0.75, 2) * 0.48})`;
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+    }
+    ctx.restore();
+    requestAnimationFrame(render);
+  }
+  requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>

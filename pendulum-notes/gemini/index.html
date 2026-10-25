@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Pendulum Wave</title>
+<style>
+  *, *::after, *::before {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background-color: #060711;
+    touch-action: none;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  // Configuration for the 15-pendulum wave
+  const NUM_PENDULUMS = 15;
+  const CYCLE_DURATION = 54; // Full realignment period in seconds
+  const BASE_CYCLES = 25;    // Lowest frequency pendulum completes 25 cycles per period
+  const MAX_ANGLE = 0.56;    // ~32 degrees swing amplitude
+
+  // 15-note C Major Pentatonic scale across 3 octaves (C3 to C6)
+  // Longest/slowest pendulum (index 0) = lowest pitch; shortest/fastest (index 14) = highest pitch
+  const MIDI_NOTES = [
+    48, 50, 52, 55, 57, // C3, D3, E3, G3, A3
+    60, 62, 64, 67, 69, // C4, D4, E4, G4, A4
+    72, 74, 76, 79, 81  // C5, D5, E5, G5, A5
+  ];
+
+  const pendulums = [];
+  const ripples = [];
+  const sparks = [];
+
+  for (let i = 0; i < NUM_PENDULUMS; i++) {
+    const cycles = BASE_CYCLES + i;
+    const freq = cycles / CYCLE_DURATION;
+    const omega = 2 * Math.PI * freq;
+    const lengthRatio = Math.pow(BASE_CYCLES / cycles, 2);
+
+    // Vivid, saturated rainbow spectrum from Electric Magenta/Coral to Cyan/Violet
+    const hue = (12 + i * (305 / (NUM_PENDULUMS - 1))) % 360;
+    const midi = MIDI_NOTES[i];
+    const noteFreq = 440 * Math.pow(2, (midi - 69) / 12);
+
+    // Stereo pan from left (-0.75) to right (+0.75) matching visual depth/index
+    const pan = ((i / (NUM_PENDULUMS - 1)) * 2 - 1) * 0.75;
+
+    pendulums.push({
+      index: i,
+      cycles,
+      freq,
+      omega,
+      lengthRatio,
+      hue,
+      color: `hsl(${hue}, 100%, 60%)`,
+      coreColor: `hsl(${hue}, 100%, 92%)`,
+      glowColor: `hsla(${hue}, 100%, 55%, 0.45)`,
+      noteFreq,
+      pan,
+      angle: MAX_ANGLE,
+      prevAngle: MAX_ANGLE,
+      x: 0,
+      y: 0,
+      pivotX: 0,
+      pivotY: 0,
+      lengthPx: 0,
+      pulse: 0,
+      trail: []
+    });
+  }
+
+  // Web Audio API Synthesizer (Marimba / Glass Vibraphone hybrid with stereo delay)
+  let audioCtx = null;
+  let masterGain = null;
+  let delayNodeL = null;
+  let delayNodeR = null;
+
+  function initAudio() {
+    if (!audioCtx) {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      audioCtx = new AudioCtx();
+
+      masterGain = audioCtx.createGain();
+      masterGain.gain.value = 0.42;
+
+      // Soft dynamics compressor so simultaneous aligned strikes sound lush and never clip
+      const compressor = audioCtx.createDynamicsCompressor();
+      compressor.threshold.setValueAtTime(-16, audioCtx.currentTime);
+      compressor.knee.setValueAtTime(18, audioCtx.currentTime);
+      compressor.ratio.setValueAtTime(6, audioCtx.currentTime);
+      compressor.attack.setValueAtTime(0.003, audioCtx.currentTime);
+      compressor.release.setValueAtTime(0.22, audioCtx.currentTime);
+
+      // Stereo ping-pong spatial echo
+      delayNodeL = audioCtx.createDelay(1.0);
+      delayNodeR = audioCtx.createDelay(1.0);
+      delayNodeL.delayTime.value = 0.21;
+      delayNodeR.delayTime.value = 0.315;
+
+      const feedbackL = audioCtx.createGain();
+      const feedbackR = audioCtx.createGain();
+      feedbackL.gain.value = 0.24;
+      feedbackR.gain.value = 0.24;
+
+      const filter = audioCtx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.value = 2600;
+
+      const wetMerger = audioCtx.createChannelMerger(2);
+      const wetGain = audioCtx.createGain();
+      wetGain.gain.value = 0.28;
+
+      masterGain.connect(compressor);
+      masterGain.connect(filter);
+
+      filter.connect(delayNodeL);
+      filter.connect(delayNodeR);
+
+      delayNodeL.connect(feedbackL);
+      feedbackL.connect(delayNodeR);
+
+      delayNodeR.connect(feedbackR);
+      feedbackR.connect(delayNodeL);
+
+      delayNodeL.connect(wetMerger, 0, 0);
+      delayNodeR.connect(wetMerger, 0, 1);
+
+      wetMerger.connect(wetGain);
+      wetGain.connect(compressor);
+
+      compressor.connect(audioCtx.destination);
+    }
+
+    if (audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(() => {});
+    }
+  }
+
+  function playNote(p, direction) {
+    if (!audioCtx) initAudio();
+    if (!audioCtx || audioCtx.state !== 'running') return;
+
+    const now = audioCtx.currentTime;
+    const freq = p.noteFreq;
+
+    // Panner for spatial separation
+    let voiceOut = masterGain;
+    if (audioCtx.createStereoPanner) {
+      const panner = audioCtx.createStereoPanner();
+      panner.pan.setValueAtTime(p.pan * 0.6 + direction * 0.15, now);
+      panner.connect(masterGain);
+      voiceOut = panner;
+    }
+
+    const voiceGain = audioCtx.createGain();
+    const level = 0.20 - (p.index / NUM_PENDULUMS) * 0.06;
+    voiceGain.gain.setValueAtTime(0.0001, now);
+    voiceGain.gain.linearRampToValueAtTime(level, now + 0.005);
+    voiceGain.gain.exponentialRampToValueAtTime(level * 0.28, now + 0.14);
+    voiceGain.gain.exponentialRampToValueAtTime(0.0001, now + 1.25);
+    voiceGain.connect(voiceOut);
+
+    // Fundamental warm sine wave
+    const osc1 = audioCtx.createOscillator();
+    osc1.type = 'sine';
+    osc1.frequency.setValueAtTime(freq, now);
+    osc1.connect(voiceGain);
+    osc1.start(now);
+    osc1.stop(now + 1.28);
+
+    // 2nd harmonic (octave) for body
+    const osc2 = audioCtx.createOscillator();
+    const gain2 = audioCtx.createGain();
+    osc2.type = 'triangle';
+    osc2.frequency.setValueAtTime(freq * 2, now);
+    gain2.gain.setValueAtTime(0.0001, now);
+    gain2.gain.linearRampToValueAtTime(level * 0.25, now + 0.004);
+    gain2.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
+    osc2.connect(gain2);
+    gain2.connect(voiceOut);
+    osc2.start(now);
+    osc2.stop(now + 0.38);
+
+    // 4th harmonic marimba/glass chime transient
+    const osc3 = audioCtx.createOscillator();
+    const gain3 = audioCtx.createGain();
+    osc3.type = 'sine';
+    osc3.frequency.setValueAtTime(freq * 4, now);
+    gain3.gain.setValueAtTime(0.0001, now);
+    gain3.gain.linearRampToValueAtTime(level * 0.18, now + 0.002);
+    gain3.gain.exponentialRampToValueAtTime(0.0001, now + 0.075);
+    osc3.connect(gain3);
+    gain3.connect(voiceOut);
+    osc3.start(now);
+    osc3.stop(now + 0.09);
+  }
+
+  // Start sound immediately on page load; if blocked, resume on first interaction
+  initAudio();
+  const unlockEvents = ['pointerdown', 'mousedown', 'touchstart', 'keydown', 'click'];
+  function unlockAudio() {
+    initAudio();
+    if (audioCtx && audioCtx.state === 'running') {
+      unlockEvents.forEach(e => window.removeEventListener(e, unlockAudio));
+    }
+  }
+  unlockEvents.forEach(e => window.addEventListener(e, unlockAudio, { passive: true }));
+
+  // Responsive layout metrics optimized for 1080x1080 square and arbitrary aspect ratios
+  let width = 1080;
+  let height = 1080;
+  let dpr = 1;
+  let unit = 1080;
+  let centerX = 540;
+  let topBarY = 90;
+  let minLenPx = 280;
+  let maxLenPx = 880;
+  let bobBaseRadius = 18;
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    unit = Math.min(width, height);
+    centerX = width * 0.5;
+    topBarY = height * 0.075;
+    maxLenPx = height * 0.835;
+    minLenPx = height * 0.255;
+    bobBaseRadius = Math.max(8, unit * 0.0175);
+
+    const minRatio = pendulums[NUM_PENDULUMS - 1].lengthRatio;
+    const maxRatio = pendulums[0].lengthRatio;
+
+    // Slight perspective spread along the top mount bar for 3D depth
+    const mountSpread = Math.min(width * 0.16, unit * 0.18);
+
+    for (let i = 0; i < NUM_PENDULUMS; i++) {
+      const p = pendulums[i];
+      const norm = (p.lengthRatio - minRatio) / (maxRatio - minRatio);
+      p.lengthPx = minLenPx + norm * (maxLenPx - minLenPx);
+      const depthNorm = (i / (NUM_PENDULUMS - 1)) - 0.5;
+      p.pivotX = centerX + depthNorm * mountSpread * 0.35;
+      p.pivotY = topBarY + (i / (NUM_PENDULUMS - 1)) * (height * 0.018);
+      p.trail.length = 0;
+    }
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+
+  function spawnStrikeEffects(p, direction) {
+    p.pulse = 1.0;
+
+    // Expanding luminous ring at the bottom of the swing
+    ripples.push({
+      x: p.x,
+      y: p.y,
+      radius: bobBaseRadius * 0.9,
+      maxRadius: bobBaseRadius * 5.2,
+      hue: p.hue,
+      alpha: 0.95
+    });
+
+    // Vivid spark burst traveling along the swing momentum
+    const count = 9;
+    for (let i = 0; i < count; i++) {
+      const spread = (Math.random() - 0.5) * 1.3;
+      const speed = (1.5 + Math.random() * 3.8) * (unit / 1080);
+      sparks.push({
+        x: p.x,
+        y: p.y,
+        vx: direction * Math.cos(spread) * speed + (Math.random() - 0.5) * 1.2,
+        vy: Math.sin(spread) * speed * 0.7 - Math.random() * 1.4,
+        radius: (2.2 + Math.random() * 2.5) * (unit / 1080),
+        hue: p.hue,
+        alpha: 1.0,
+        decay: 0.024 + Math.random() * 0.018
+      });
+    }
+  }
+
+  let startTime = null;
+  let lastFrameTime = 0;
+
+  function render(timestamp) {
+    if (startTime === null) {
+      startTime = timestamp;
+      lastFrameTime = timestamp;
+    }
+
+    const dt = Math.min((timestamp - lastFrameTime) / 1000, 0.1);
+    lastFrameTime = timestamp;
+    const elapsed = (timestamp - startTime) / 1000;
+
+    // Deep atmospheric radial background
+    const bgGrad = ctx.createRadialGradient(
+      centerX, height * 0.52, unit * 0.05,
+      centerX, height * 0.52, Math.max(width, height) * 0.78
+    );
+    bgGrad.addColorStop(0, '#10132e');
+    bgGrad.addColorStop(0.55, '#080919');
+    bgGrad.addColorStop(1, '#04040c');
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, width, height);
+
+    // Update pendulum physics & detect bottom-of-swing note triggers
+    for (let i = 0; i < NUM_PENDULUMS; i++) {
+      const p = pendulums[i];
+      p.prevAngle = p.angle;
+      p.angle = MAX_ANGLE * Math.cos(p.omega * elapsed);
+
+      // Check zero-crossing at the bottom of the arc (angle passes through 0)
+      if (elapsed > 0.02 && ((p.prevAngle > 0 && p.angle <= 0) || (p.prevAngle < 0 && p.angle >= 0))) {
+        const direction = p.angle >= p.prevAngle ? 1 : -1;
+        // Exact bottom coordinates (angle = 0)
+        p.x = p.pivotX + Math.sin(p.angle) * p.lengthPx;
+        p.y = p.pivotY + Math.cos(p.angle) * p.lengthPx;
+        playNote(p, direction);
+        spawnStrikeEffects(p, direction);
+      } else {
+        p.x = p.pivotX + Math.sin(p.angle) * p.lengthPx;
+        p.y = p.pivotY + Math.cos(p.angle) * p.lengthPx;
+      }
+
+      if (p.pulse > 0) {
+        p.pulse = Math.max(0, p.pulse - dt * 3.4);
+      }
+
+      // Record smooth motion trail
+      p.trail.push({ x: p.x, y: p.y });
+      if (p.trail.length > 22) {
+        p.trail.shift();
+      }
+    }
+
+    // Draw subtle swing-arc guide rails and central strike axis
+    ctx.save();
+    const strikeTopY = pendulums[0].pivotY + pendulums[NUM_PENDULUMS - 1].lengthPx - bobBaseRadius * 2.2;
+    const strikeBotY = pendulums[0].pivotY + pendulums[0].lengthPx + bobBaseRadius * 2.2;
+
+    const axisGrad = ctx.createLinearGradient(centerX, strikeTopY, centerX, strikeBotY);
+    axisGrad.addColorStop(0, 'rgba(120, 220, 255, 0.0)');
+    axisGrad.addColorStop(0.15, 'rgba(140, 230, 255, 0.22)');
+    axisGrad.addColorStop(0.5, 'rgba(200, 245, 255, 0.35)');
+    axisGrad.addColorStop(0.85, 'rgba(140, 230, 255, 0.22)');
+    axisGrad.addColorStop(1, 'rgba(120, 220, 255, 0.0)');
+
+    ctx.strokeStyle = axisGrad;
+    ctx.lineWidth = Math.max(1.5, unit * 0.0022);
+    ctx.beginPath();
+    ctx.moveTo(pendulums[NUM_PENDULUMS - 1].pivotX, strikeTopY);
+    ctx.lineTo(pendulums[0].pivotX, strikeBotY);
+    ctx.stroke();
+
+    // Subtle harmonic resonance nodes at each pendulum's bottom point
+    for (let i = 0; i < NUM_PENDULUMS; i++) {
+      const p = pendulums[i];
+      const botX = p.pivotX;
+      const botY = p.pivotY + p.lengthPx;
+
+      // Faint swing arc track
+      ctx.beginPath();
+      ctx.arc(p.pivotX, p.pivotY, p.lengthPx, Math.PI * 0.5 - MAX_ANGLE, Math.PI * 0.5 + MAX_ANGLE);
+      ctx.strokeStyle = `hsla(${p.hue}, 90%, 60%, ${0.045 + p.pulse * 0.14})`;
+      ctx.lineWidth = Math.max(1, unit * 0.0012);
+      ctx.stroke();
+
+      // Center trigger marker dot
+      ctx.beginPath();
+      ctx.arc(botX, botY, Math.max(2, unit * 0.0032), 0, Math.PI * 2);
+      ctx.fillStyle = `hsla(${p.hue}, 100%, 70%, ${0.28 + p.pulse * 0.72})`;
+      ctx.fill();
+    }
+    ctx.restore();
+
+    // Draw glowing harmonic wave ribbon connecting adjacent pendulums
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+
+    // Outer wide ribbon glow
+    for (let i = 0; i < NUM_PENDULUMS - 1; i++) {
+      const p1 = pendulums[i];
+      const p2 = pendulums[i + 1];
+      const grad = ctx.createLinearGradient(p1.x, p1.y, p2.x, p2.y);
+      grad.addColorStop(0, `hsla(${p1.hue}, 100%, 58%, ${0.28 + p1.pulse * 0.35})`);
+      grad.addColorStop(1, `hsla(${p2.hue}, 100%, 58%, ${0.28 + p2.pulse * 0.35})`);
+
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = bobBaseRadius * 0.72;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      ctx.stroke();
+
+      // Inner bright core line connecting bobs
+      ctx.lineWidth = Math.max(1.5, unit * 0.0026);
+      ctx.strokeStyle = `hsla(${(p1.hue + p2.hue) * 0.5}, 100%, 82%, 0.55)`;
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      ctx.stroke();
+    }
+
+    // Draw individual motion trails
+    for (let i = 0; i < NUM_PENDULUMS; i++) {
+      const p = pendulums[i];
+      const len = p.trail.length;
+      if (len < 2) continue;
+
+      for (let j = 1; j < len; j++) {
+        const frac = j / len;
+        const pt0 = p.trail[j - 1];
+        const pt1 = p.trail[j];
+        ctx.beginPath();
+        ctx.moveTo(pt0.x, pt0.y);
+        ctx.lineTo(pt1.x, pt1.y);
+        ctx.strokeStyle = `hsla(${p.hue}, 100%, 62%, ${frac * frac * 0.42})`;
+        ctx.lineWidth = bobBaseRadius * frac * 0.85;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+      }
+    }
+
+    // Update and draw sound-trigger ripples at bottom center
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      const r = ripples[i];
+      r.radius += (r.maxRadius - r.radius) * Math.min(1, dt * 8.5);
+      r.alpha -= dt * 1.65;
+      if (r.alpha <= 0.01) {
+        ripples.splice(i, 1);
+        continue;
+      }
+      ctx.beginPath();
+      ctx.arc(r.x, r.y, r.radius, 0, Math.PI * 2);
+      ctx.strokeStyle = `hsla(${r.hue}, 100%, 72%, ${r.alpha})`;
+      ctx.lineWidth = Math.max(1.5, unit * 0.0038 * r.alpha);
+      ctx.stroke();
+    }
+
+    // Update and draw spark particles
+    for (let i = sparks.length - 1; i >= 0; i--) {
+      const s = sparks[i];
+      s.x += s.vx;
+      s.y += s.vy;
+      s.alpha -= s.decay;
+      if (s.alpha <= 0.01) {
+        sparks.splice(i, 1);
+        continue;
+      }
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.radius * s.alpha, 0, Math.PI * 2);
+      ctx.fillStyle = `hsla(${s.hue}, 100%, 80%, ${s.alpha})`;
+      ctx.fill();
+    }
+    ctx.restore();
+
+    // Draw top suspension mount bar
+    ctx.save();
+    const firstPivot = pendulums[0];
+    const lastPivot = pendulums[NUM_PENDULUMS - 1];
+    const barPad = bobBaseRadius * 1.4;
+    const mountGrad = ctx.createLinearGradient(
+      firstPivot.pivotX - barPad, firstPivot.pivotY,
+      lastPivot.pivotX + barPad, lastPivot.pivotY
+    );
+    mountGrad.addColorStop(0, 'rgba(255, 90, 120, 0.65)');
+    mountGrad.addColorStop(0.5, 'rgba(120, 255, 220, 0.75)');
+    mountGrad.addColorStop(1, 'rgba(190, 110, 255, 0.65)');
+
+    ctx.strokeStyle = mountGrad;
+    ctx.lineWidth = Math.max(4, unit * 0.0065);
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(firstPivot.pivotX - barPad * 0.5, firstPivot.pivotY);
+    ctx.lineTo(lastPivot.pivotX + barPad * 0.5, lastPivot.pivotY);
+    ctx.stroke();
+    ctx.restore();
+
+    // Draw pendulum strings and luminous orbs from back (longest) to front (shortest)
+    for (let i = 0; i < NUM_PENDULUMS; i++) {
+      const p = pendulums[i];
+      const depthScale = 0.88 + (i / (NUM_PENDULUMS - 1)) * 0.24;
+      const radius = bobBaseRadius * depthScale * (1 + p.pulse * 0.36);
+
+      // Suspension string with gradient illumination near the bob
+      const strGrad = ctx.createLinearGradient(p.pivotX, p.pivotY, p.x, p.y);
+      strGrad.addColorStop(0, `hsla(${p.hue}, 80%, 65%, 0.18)`);
+      strGrad.addColorStop(0.7, `hsla(${p.hue}, 95%, 65%, ${0.32 + p.pulse * 0.35})`);
+      strGrad.addColorStop(1, `hsla(${p.hue}, 100%, 78%, ${0.75 + p.pulse * 0.25})`);
+
+      ctx.beginPath();
+      ctx.moveTo(p.pivotX, p.pivotY);
+      ctx.lineTo(p.x, p.y);
+      ctx.strokeStyle = strGrad;
+      ctx.lineWidth = Math.max(1.2, unit * 0.002 * (1 + p.pulse * 0.6));
+      ctx.stroke();
+
+      // Pivot pin glow
+      ctx.beginPath();
+      ctx.arc(p.pivotX, p.pivotY, Math.max(2.2, unit * 0.003), 0, Math.PI * 2);
+      ctx.fillStyle = `hsla(${p.hue}, 100%, 80%, 0.8)`;
+      ctx.fill();
+
+      // Outer halo bloom around bob
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const glowRadius = radius * (2.5 + p.pulse * 1.9);
+      const glowGrad = ctx.createRadialGradient(p.x, p.y, radius * 0.2, p.x, p.y, glowRadius);
+      glowGrad.addColorStop(0, `hsla(${p.hue}, 100%, 70%, ${0.58 + p.pulse * 0.42})`);
+      glowGrad.addColorStop(0.45, `hsla(${p.hue}, 100%, 55%, ${0.22 + p.pulse * 0.25})`);
+      glowGrad.addColorStop(1, `hsla(${p.hue}, 100%, 50%, 0)`);
+
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, glowRadius, 0, Math.PI * 2);
+      ctx.fillStyle = glowGrad;
+      ctx.fill();
+      ctx.restore();
+
+      // Main vivid saturated sphere body
+      const sphereGrad = ctx.createRadialGradient(
+        p.x - radius * 0.32, p.y - radius * 0.32, radius * 0.1,
+        p.x, p.y, radius
+      );
+      sphereGrad.addColorStop(0, '#ffffff');
+      sphereGrad.addColorStop(0.28, `hsl(${p.hue}, 100%, ${76 + p.pulse * 18}%)`);
+      sphereGrad.addColorStop(0.75, `hsl(${p.hue}, 100%, 54%)`);
+      sphereGrad.addColorStop(1, `hsl(${p.hue}, 100%, 36%)`);
+
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+      ctx.fillStyle = sphereGrad;
+      ctx.fill();
+
+      // Bright crisp rim highlight when striking a note
+      if (p.pulse > 0.02) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, radius * (1.05 + (1 - p.pulse) * 0.35), 0, Math.PI * 2);
+        ctx.strokeStyle = `hsla(${p.hue}, 100%, 92%, ${p.pulse * 0.9})`;
+        ctx.lineWidth = Math.max(1.5, unit * 0.0028);
+        ctx.stroke();
+      }
+    }
+
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>
