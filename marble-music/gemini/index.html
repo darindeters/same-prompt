@@ -1,0 +1,1402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>&#8203;</title>
+<style>
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #070814;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  // Logical coordinate system 1080x1080
+  const SIZE = 1080;
+  let scale = 1;
+  let offsetX = 0;
+  let offsetY = 0;
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    const s = Math.min(canvas.width, canvas.height) / SIZE;
+    scale = s;
+    offsetX = (canvas.width - SIZE * s) * 0.5;
+    offsetY = (canvas.height - SIZE * s) * 0.5;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Xylophone bars (6 pitches needed for complete Ode to Joy in C major / G3-G4)
+  // Indices: 0: G3, 1: C4, 2: D4, 3: E4, 4: F4, 5: G4
+  const BARS = [
+    {
+      note: 'G3',
+      freq: 196.00,
+      bassFreq: 98.00,
+      x: 165,
+      y: 855,
+      w: 132,
+      h: 42,
+      color: '#ff1e7a',
+      hiColor: '#ff8ec0',
+      darkColor: '#91063e',
+      glow: 'rgba(255, 30, 122, 0.75)',
+      marbleHue: 335,
+      pan: -0.65
+    },
+    {
+      note: 'C4',
+      freq: 261.63,
+      bassFreq: 130.81,
+      x: 315,
+      y: 848,
+      w: 124,
+      h: 40,
+      color: '#ff521b',
+      hiColor: '#ffaa85',
+      darkColor: '#9c2400',
+      glow: 'rgba(255, 82, 27, 0.75)',
+      marbleHue: 16,
+      pan: -0.39
+    },
+    {
+      note: 'D4',
+      freq: 293.66,
+      bassFreq: 146.83,
+      x: 465,
+      y: 841,
+      w: 116,
+      h: 38,
+      color: '#ffbe0b',
+      hiColor: '#ffe985',
+      darkColor: '#996d00',
+      glow: 'rgba(255, 190, 11, 0.75)',
+      marbleHue: 45,
+      pan: -0.13
+    },
+    {
+      note: 'E4',
+      freq: 329.63,
+      bassFreq: 164.81,
+      x: 615,
+      y: 834,
+      w: 110,
+      h: 36,
+      color: '#00f59b',
+      hiColor: '#9effd8',
+      darkColor: '#007a4c',
+      glow: 'rgba(0, 245, 155, 0.75)',
+      marbleHue: 156,
+      pan: 0.13
+    },
+    {
+      note: 'F4',
+      freq: 349.23,
+      bassFreq: 174.61,
+      x: 765,
+      y: 827,
+      w: 104,
+      h: 34,
+      color: '#00bbf9',
+      hiColor: '#9be7ff',
+      darkColor: '#005b82',
+      glow: 'rgba(0, 187, 249, 0.75)',
+      marbleHue: 196,
+      pan: 0.39
+    },
+    {
+      note: 'G4',
+      freq: 392.00,
+      bassFreq: 196.00,
+      x: 915,
+      y: 820,
+      w: 98,
+      h: 32,
+      color: '#9b5de5',
+      hiColor: '#d8bbff',
+      darkColor: '#481b85',
+      glow: 'rgba(155, 93, 229, 0.75)',
+      marbleHue: 270,
+      pan: 0.65
+    }
+  ];
+
+  // Runtime state for bar animations
+  const barState = BARS.map(() => ({
+    dip: 0,
+    vy: 0,
+    glow: 0,
+    tilt: 0,
+    vtilt: 0,
+    ringPhase: 0
+  }));
+
+  // Complete Ode to Joy melody (A1 - A2 - B - A3, 64 beats total)
+  // Note indices: 0=G3, 1=C4, 2=D4, 3=E4, 4=F4, 5=G4
+  // Format: [barIndex, durationInBeats, accent]
+  const MELODY_RAW = [
+    // Phrase A1 (16 beats)
+    [3, 1, 1.0], [3, 1, 0.85], [4, 1, 0.9], [5, 1, 1.0],
+    [5, 1, 1.0], [4, 1, 0.85], [3, 1, 0.9], [2, 1, 0.85],
+    [1, 1, 1.0], [1, 1, 0.85], [2, 1, 0.9], [3, 1, 0.95],
+    [3, 1.5, 1.05], [2, 0.5, 0.75], [2, 2, 0.95],
+
+    // Phrase A2 (16 beats)
+    [3, 1, 1.0], [3, 1, 0.85], [4, 1, 0.9], [5, 1, 1.0],
+    [5, 1, 1.0], [4, 1, 0.85], [3, 1, 0.9], [2, 1, 0.85],
+    [1, 1, 1.0], [1, 1, 0.85], [2, 1, 0.9], [3, 1, 0.95],
+    [2, 1.5, 1.05], [1, 0.5, 0.75], [1, 2, 1.1],
+
+    // Phrase B (16 beats)
+    [2, 1, 0.95], [2, 1, 0.85], [3, 1, 0.9], [1, 1, 0.9],
+    [2, 1, 0.95], [3, 0.5, 0.85], [4, 0.5, 0.9], [3, 1, 0.95], [1, 1, 0.85],
+    [2, 1, 0.95], [3, 0.5, 0.85], [4, 0.5, 0.9], [3, 1, 0.95], [2, 1, 0.85],
+    [1, 1, 0.95], [2, 1, 0.9], [0, 2, 1.1],
+
+    // Phrase A3 (16 beats)
+    [3, 1, 1.05], [3, 1, 0.85], [4, 1, 0.9], [5, 1, 1.05],
+    [5, 1, 1.0], [4, 1, 0.85], [3, 1, 0.9], [2, 1, 0.85],
+    [1, 1, 1.0], [1, 1, 0.85], [2, 1, 0.9], [3, 1, 0.95],
+    [2, 1.5, 1.05], [1, 0.5, 0.8], [1, 2, 1.15]
+  ];
+
+  const BPM = 128;
+  const BEAT_SEC = 60 / BPM; // 0.46875s per beat
+  const LOOP_BEATS = 64;
+  const LOOP_SEC = LOOP_BEATS * BEAT_SEC;
+
+  // Build schedule inside one 64-beat cycle
+  const MELODY_EVENTS = [];
+  let accumBeats = 0;
+  for (let i = 0; i < MELODY_RAW.length; i++) {
+    const [barIdx, durBeats, accent] = MELODY_RAW[i];
+    MELODY_EVENTS.push({
+      index: i,
+      barIdx,
+      beat: accumBeats,
+      timeOffset: accumBeats * BEAT_SEC,
+      durBeats,
+      accent,
+      isPhraseStart: (accumBeats % 8 === 0)
+    });
+    accumBeats += durBeats;
+  }
+
+  // Geometry of the Marble Machine
+  // 1. Left Elevator (Archimedes Spiral Lift) carries marbles from bottom collector (x=68, y=975) to top reservoir (x=68, y=96)
+  // 2. Top Sloped Feeder Rail carries marbles from (68, 96) to the Central Rotary Distributor Wheel at (540, 148)
+  // 3. From the Central Distributor (540, 148), 6 distinct curved & sloped tracks branch out to the 6 lanes!
+  //    Each lane has:
+  //    - Upper curved ramp from distributor to Upper Switch / Bumper Peg (peg1)
+  //    - Zig-zag sloped rail from peg1 to Lower Bumper Bell Peg (peg2)
+  //    - Precision drop funnel & vertical guide chute above the bar
+  //    - Impact on the xylophone bar at (bar.x, bar.y - bar.h/2 - MARBLE_R)
+  //    - Post-hit parabolic bounce onto the bottom slanted collector trough, rolling back to the elevator!
+
+  const MARBLE_R = 17;
+  const DISTRIBUTOR = { x: 540, y: 148, r: 52 };
+
+  // Define the 6 deterministic track paths so every marble's journey takes exactly TRAVEL_TIME seconds
+  // Segment timings before impact:
+  //   seg0: Release from distributor wheel onto upper chute (0.42s) -> hits Peg 1
+  //   seg1: Roll & bounce along upper rail (0.58s) -> hits Peg 2
+  //   seg2: Roll along lower rail to funnel lip (0.52s) -> enters Drop Funnel
+  //   seg3: Free-fall acceleration through guide chute onto Xylophone Bar (0.48s) -> IMPACT!
+  // Total pre-hit travel = 2.00s
+  const T_SEG0 = 0.42;
+  const T_SEG1 = 0.58;
+  const T_SEG2 = 0.52;
+  const T_SEG3 = 0.48;
+  const PRE_HIT_TIME = T_SEG0 + T_SEG1 + T_SEG2 + T_SEG3; // 2.00s
+
+  // Post-hit segments:
+  //   post0: High-energy bounce off xylophone bar into collector trough (0.55s)
+  //   post1: Roll down slanted collector trough toward left return elevator (1.25s)
+  const T_POST0 = 0.55;
+  const T_POST1 = 1.25;
+  const POST_HIT_TIME = T_POST0 + T_POST1;
+
+  // Build waypoints for each of the 6 tracks
+  const TRACKS = BARS.map((bar, i) => {
+    const spread = (i - 2.5); // -2.5 to +2.5
+    const startX = DISTRIBUTOR.x + spread * 18;
+    const startY = DISTRIBUTOR.y + 34;
+
+    // Peg 1 (Upper brass bumper bell)
+    const peg1X = 540 + spread * 128;
+    const peg1Y = 305 + Math.abs(spread) * 12;
+
+    // Intermediate rail knee
+    const dir = (i % 2 === 0) ? -1 : 1;
+    const knee1X = bar.x + dir * 48;
+    const knee1Y = 445 - i * 4;
+
+    // Peg 2 (Lower bumper wheel / escapement pin)
+    const peg2X = bar.x - dir * 34;
+    const peg2Y = 555 - i * 5;
+
+    // Funnel entry right above the bar
+    const funnelX = bar.x;
+    const funnelY = 668 - i * 6;
+
+    // Impact point on top surface of bar
+    const hitX = bar.x;
+    const hitY = bar.y - bar.h * 0.5 - MARBLE_R;
+
+    // Collector trough impact point below the bar
+    // Trough slopes from right (980, 935) down to left elevator intake (68, 995)
+    const troughYAtBar = 995 - ((bar.x - 68) / (980 - 68)) * 60;
+    const dropX = bar.x - 28;
+    const dropY = troughYAtBar - MARBLE_R;
+
+    return {
+      index: i,
+      bar,
+      start: { x: startX, y: startY },
+      peg1: { x: peg1X, y: peg1Y, r: 14, hitGlow: 0 },
+      knee1: { x: knee1X, y: knee1Y },
+      peg2: { x: peg2X, y: peg2Y, r: 13, hitGlow: 0, angle: 0, vAngle: 0 },
+      funnel: { x: funnelX, y: funnelY },
+      hit: { x: hitX, y: hitY },
+      troughDrop: { x: dropX, y: dropY },
+      troughEnd: { x: 82, y: 994 - MARBLE_R }
+    };
+  });
+
+  // Web Audio Synthesizer (pure procedural synthesis, zero external assets)
+  let audioCtx = null;
+  let masterGain = null;
+  let compressor = null;
+  let reverbNode = null;
+
+  function createImpulseResponse(ctx, duration, decay) {
+    const rate = ctx.sampleRate;
+    const length = Math.floor(rate * duration);
+    const impulse = ctx.createBuffer(2, length, rate);
+    for (let ch = 0; ch < 2; ch++) {
+      const data = impulse.getChannelData(ch);
+      for (let i = 0; i < length; i++) {
+        const t = i / length;
+        data[i] = (Math.random() * 2 - 1) * Math.pow(1 - t, decay);
+      }
+    }
+    return impulse;
+  }
+
+  function initAudio() {
+    if (!audioCtx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      audioCtx = new AC();
+
+      compressor = audioCtx.createDynamicsCompressor();
+      compressor.threshold.setValueAtTime(-14, audioCtx.currentTime);
+      compressor.knee.setValueAtTime(18, audioCtx.currentTime);
+      compressor.ratio.setValueAtTime(4, audioCtx.currentTime);
+      compressor.attack.setValueAtTime(0.003, audioCtx.currentTime);
+      compressor.release.setValueAtTime(0.18, audioCtx.currentTime);
+
+      masterGain = audioCtx.createGain();
+      masterGain.gain.setValueAtTime(0.85, audioCtx.currentTime);
+
+      // Lush hall reverb for the glass & rosewood xylophone
+      reverbNode = audioCtx.createConvolver();
+      reverbNode.buffer = createImpulseResponse(audioCtx, 1.65, 3.2);
+      const reverbGain = audioCtx.createGain();
+      reverbGain.gain.setValueAtTime(0.24, audioCtx.currentTime);
+
+      masterGain.connect(compressor);
+      masterGain.connect(reverbNode);
+      reverbNode.connect(reverbGain);
+      reverbGain.connect(compressor);
+      compressor.connect(audioCtx.destination);
+    }
+    if (audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(() => {});
+    }
+  }
+
+  // Try starting audio immediately on load, plus unlock on any interaction
+  initAudio();
+  const unlockEvents = ['pointerdown', 'mousedown', 'touchstart', 'keydown', 'click'];
+  unlockEvents.forEach(ev => {
+    window.addEventListener(ev, () => initAudio(), { passive: true });
+  });
+
+  function canPlayAudio() {
+    return audioCtx && audioCtx.state === 'running';
+  }
+
+  // Sound 1: Xylophone / Vibraphone bar strike + glass marble transient + optional bass resonance
+  function playXylophoneNote(barIdx, accent = 1.0, withBass = false) {
+    if (!canPlayAudio()) return;
+    const now = audioCtx.currentTime;
+    const bar = BARS[barIdx];
+    const freq = bar.freq;
+
+    const panner = audioCtx.createStereoPanner ? audioCtx.createStereoPanner() : null;
+    const dest = panner || masterGain;
+    if (panner) {
+      panner.pan.setValueAtTime(bar.pan, now);
+      panner.connect(masterGain);
+    }
+
+    // 1. Fundamental tone (warm marimba/xylophone body)
+    const osc1 = audioCtx.createOscillator();
+    const gain1 = audioCtx.createGain();
+    osc1.type = 'sine';
+    osc1.frequency.setValueAtTime(freq, now);
+    gain1.gain.setValueAtTime(0.0001, now);
+    gain1.gain.linearRampToValueAtTime(0.36 * accent, now + 0.004);
+    gain1.gain.exponentialRampToValueAtTime(0.08 * accent, now + 0.22);
+    gain1.gain.exponentialRampToValueAtTime(0.0001, now + 1.35);
+    osc1.connect(gain1);
+    gain1.connect(dest);
+    osc1.start(now);
+    osc1.stop(now + 1.38);
+
+    // 2. Xylophone characteristic 3rd & 4th bar overtones (gives authentic struck bar timbre)
+    const osc2 = audioCtx.createOscillator();
+    const gain2 = audioCtx.createGain();
+    osc2.type = 'triangle';
+    osc2.frequency.setValueAtTime(freq * 3.0, now);
+    gain2.gain.setValueAtTime(0.0001, now);
+    gain2.gain.linearRampToValueAtTime(0.14 * accent, now + 0.002);
+    gain2.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+    osc2.connect(gain2);
+    gain2.connect(dest);
+    osc2.start(now);
+    osc2.stop(now + 0.30);
+
+    // 3. Glassy crystal shimmer (high partial)
+    const osc3 = audioCtx.createOscillator();
+    const gain3 = audioCtx.createGain();
+    osc3.type = 'sine';
+    osc3.frequency.setValueAtTime(freq * 5.95, now);
+    gain3.gain.setValueAtTime(0.0001, now);
+    gain3.gain.linearRampToValueAtTime(0.075 * accent, now + 0.0015);
+    gain3.gain.exponentialRampToValueAtTime(0.0001, now + 0.095);
+    osc3.connect(gain3);
+    gain3.connect(dest);
+    osc3.start(now);
+    osc3.stop(now + 0.11);
+
+    // 4. Glass-on-wood mallet click transient (short pitched chirp)
+    const clickOsc = audioCtx.createOscillator();
+    const clickGain = audioCtx.createGain();
+    clickOsc.type = 'sine';
+    clickOsc.frequency.setValueAtTime(2400 + barIdx * 180, now);
+    clickOsc.frequency.exponentialRampToValueAtTime(420, now + 0.018);
+    clickGain.gain.setValueAtTime(0.18 * accent, now);
+    clickGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.02);
+    clickOsc.connect(clickGain);
+    clickGain.connect(dest);
+    clickOsc.start(now);
+    clickOsc.stop(now + 0.022);
+
+    // 5. Warm harmonic bass pluck on phrase downbeats
+    if (withBass) {
+      const bassOsc = audioCtx.createOscillator();
+      const bassGain = audioCtx.createGain();
+      bassOsc.type = 'triangle';
+      bassOsc.frequency.setValueAtTime(bar.bassFreq, now);
+      bassGain.gain.setValueAtTime(0.0001, now);
+      bassGain.gain.linearRampToValueAtTime(0.16, now + 0.012);
+      bassGain.gain.exponentialRampToValueAtTime(0.0001, now + 1.6);
+      bassOsc.connect(bassGain);
+      bassGain.connect(masterGain);
+      bassOsc.start(now);
+      bassOsc.stop(now + 1.65);
+    }
+  }
+
+  // Sound 2: Subtle mechanical escapement release click at top wheel
+  function playReleaseTick() {
+    if (!canPlayAudio()) return;
+    const now = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(920, now);
+    osc.frequency.exponentialRampToValueAtTime(280, now + 0.016);
+    g.gain.setValueAtTime(0.028, now);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.018);
+    osc.connect(g);
+    g.connect(masterGain);
+    osc.start(now);
+    osc.stop(now + 0.02);
+  }
+
+  // Sound 3: Soft metallic/glass peg ping when marble bounces off track pegs
+  function playPegClink(barIdx, step) {
+    if (!canPlayAudio()) return;
+    const now = audioCtx.currentTime;
+    const bar = BARS[barIdx];
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = 'sine';
+    const baseFreq = step === 1 ? bar.freq * 2.0 : bar.freq * 3.0;
+    osc.frequency.setValueAtTime(baseFreq, now);
+    osc.frequency.exponentialRampToValueAtTime(baseFreq * 0.92, now + 0.035);
+    g.gain.setValueAtTime(0.022, now);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.04);
+
+    if (audioCtx.createStereoPanner) {
+      const p = audioCtx.createStereoPanner();
+      p.pan.setValueAtTime(bar.pan * 0.7, now);
+      osc.connect(g);
+      g.connect(p);
+      p.connect(masterGain);
+    } else {
+      osc.connect(g);
+      g.connect(masterGain);
+    }
+    osc.start(now);
+    osc.stop(now + 0.045);
+  }
+
+  // Sound 4: Gentle glass marble landing in collector rail
+  function playTroughClack(barIdx) {
+    if (!canPlayAudio()) return;
+    const now = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(640 + barIdx * 45, now);
+    osc.frequency.exponentialRampToValueAtTime(190, now + 0.024);
+    g.gain.setValueAtTime(0.024, now);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.026);
+    osc.connect(g);
+    g.connect(masterGain);
+    osc.start(now);
+    osc.stop(now + 0.03);
+  }
+
+  // Visual Effects: Particles, Shockwave Rings, & Note Ripples
+  const particles = [];
+  const shockwaves = [];
+  const bgStars = [];
+
+  for (let i = 0; i < 65; i++) {
+    bgStars.push({
+      x: Math.random() * SIZE,
+      y: Math.random() * SIZE,
+      r: 0.8 + Math.random() * 1.8,
+      phase: Math.random() * Math.PI * 2,
+      speed: 1.2 + Math.random() * 2.5,
+      hue: Math.floor(Math.random() * 360)
+    });
+  }
+
+  function spawnBarImpactFX(bar, accent) {
+    const cx = bar.x;
+    const cy = bar.y - bar.h * 0.5;
+    shockwaves.push({
+      x: cx,
+      y: cy,
+      r: 14,
+      maxR: 95 * accent,
+      alpha: 0.95,
+      color: bar.color,
+      hiColor: bar.hiColor,
+      lineWidth: 4.5
+    });
+
+    const count = Math.floor(18 * accent);
+    for (let i = 0; i < count; i++) {
+      const ang = -Math.PI * (0.1 + 0.8 * Math.random());
+      const spd = (140 + Math.random() * 290) * accent;
+      particles.push({
+        x: cx + (Math.random() - 0.5) * bar.w * 0.5,
+        y: cy,
+        vx: Math.cos(ang) * spd,
+        vy: Math.sin(ang) * spd - 40,
+        r: 2.2 + Math.random() * 3.8,
+        life: 1,
+        decay: 1.4 + Math.random() * 1.1,
+        color: i % 3 === 0 ? '#ffffff' : (i % 2 === 0 ? bar.hiColor : bar.color)
+      });
+    }
+  }
+
+  function spawnPegSpark(x, y, color) {
+    shockwaves.push({
+      x,
+      y,
+      r: 8,
+      maxR: 38,
+      alpha: 0.75,
+      color,
+      hiColor: '#ffffff',
+      lineWidth: 2.5
+    });
+    for (let i = 0; i < 6; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const spd = 60 + Math.random() * 110;
+      particles.push({
+        x,
+        y,
+        vx: Math.cos(ang) * spd,
+        vy: Math.sin(ang) * spd,
+        r: 1.8 + Math.random() * 2.2,
+        life: 1,
+        decay: 2.4 + Math.random(),
+        color
+      });
+    }
+  }
+
+  // Helper: Quadratic Bezier interpolation
+  function quadBezier(p0, p1, p2, t) {
+    const inv = 1 - t;
+    return {
+      x: inv * inv * p0.x + 2 * inv * t * p1.x + t * t * p2.x,
+      y: inv * inv * p0.y + 2 * inv * t * p1.y + t * t * p2.y
+    };
+  }
+
+  // Compute exact marble position & rotation at time delta `dtHit = songTime - hitTime`
+  // `dtHit` ranges from -PRE_HIT_TIME (-2.00s) to +POST_HIT_TIME (+1.80s)
+  function getMarblePose(barIdx, dtHit) {
+    const tr = TRACKS[barIdx];
+
+    if (dtHit < 0) {
+      const elapsed = dtHit + PRE_HIT_TIME; // 0 to 2.00
+      // Segment 0: Distributor to Peg 1 (0 .. 0.42)
+      if (elapsed < T_SEG0) {
+        const u = elapsed / T_SEG0;
+        const ease = u * u * (3 - 2 * u);
+        const ctrl = {
+          x: (tr.start.x + tr.peg1.x) * 0.5 + (barIdx - 2.5) * 18,
+          y: tr.start.y + 28
+        };
+        const p = quadBezier(tr.start, ctrl, { x: tr.peg1.x, y: tr.peg1.y - tr.peg1.r - MARBLE_R }, ease);
+        return { x: p.x, y: p.y, rot: elapsed * 9 };
+      }
+
+      // Segment 1: Peg 1 bounce to Peg 2 (0.42 .. 1.00)
+      const e1 = elapsed - T_SEG0;
+      if (e1 < T_SEG1) {
+        const u = e1 / T_SEG1;
+        const p0 = { x: tr.peg1.x, y: tr.peg1.y - tr.peg1.r - MARBLE_R };
+        const p2 = { x: tr.peg2.x, y: tr.peg2.y - tr.peg2.r - MARBLE_R };
+        const ctrl = {
+          x: tr.knee1.x,
+          y: tr.knee1.y - 42
+        };
+        const p = quadBezier(p0, ctrl, p2, u);
+        return { x: p.x, y: p.y, rot: elapsed * 11 };
+      }
+
+      // Segment 2: Peg 2 to Drop Funnel Lip (1.00 .. 1.52)
+      const e2 = e1 - T_SEG1;
+      if (e2 < T_SEG2) {
+        const u = e2 / T_SEG2;
+        const p0 = { x: tr.peg2.x, y: tr.peg2.y - tr.peg2.r - MARBLE_R };
+        const p2 = { x: tr.funnel.x, y: tr.funnel.y };
+        const ctrl = {
+          x: (p0.x + p2.x) * 0.5,
+          y: p0.y + 78
+        };
+        const p = quadBezier(p0, ctrl, p2, u);
+        return { x: p.x, y: p.y, rot: elapsed * 13 };
+      }
+
+      // Segment 3: Vertical acceleration drop through funnel onto Xylophone Bar (1.52 .. 2.00)
+      const e3 = e2 - T_SEG2;
+      const u = Math.min(1, Math.max(0, e3 / T_SEG3));
+      const accel = u * u; // gravity acceleration
+      return {
+        x: tr.funnel.x,
+        y: tr.funnel.y + (tr.hit.y - tr.funnel.y) * accel,
+        rot: elapsed * 14
+      };
+    } else {
+      // Post-hit Segment 0: Parabolic bounce off the bar into the bottom collector trough
+      if (dtHit < T_POST0) {
+        const u = dtHit / T_POST0;
+        const p0 = tr.hit;
+        const p2 = tr.troughDrop;
+        const x = p0.x + (p2.x - p0.x) * u;
+        const arc = -115 * 4 * u * (1 - u);
+        const y = p0.y + (p2.y - p0.y) * (u * u) + arc;
+        return { x, y, rot: (PRE_HIT_TIME + dtHit) * 16 };
+      }
+
+      // Post-hit Segment 1: Roll down slanted bottom trough into the left spiral lift
+      const ePost = dtHit - T_POST0;
+      const u = Math.min(1, ePost / T_POST1);
+      const ease = u * (0.65 + 0.35 * u);
+      const x = tr.troughDrop.x + (tr.troughEnd.x - tr.troughDrop.x) * ease;
+      const y = tr.troughDrop.y + (tr.troughEnd.y - tr.troughDrop.y) * ease;
+      return { x, y, rot: (PRE_HIT_TIME + dtHit) * -14 };
+    }
+  }
+
+  // Track triggered state per cycle+event so every sound/animation fires once with sample-accurate visual sync
+  const triggeredReleases = new Set();
+  const triggeredPeg1 = new Set();
+  const triggeredPeg2 = new Set();
+  const triggeredHits = new Set();
+  const triggeredTrough = new Set();
+
+  let distributorPulse = 0;
+
+  // Drawing Helpers
+  function drawGlassMarble(x, y, r, hue, rot, glowBoost = 0) {
+    ctx.save();
+    ctx.translate(x, y);
+
+    // Outer ambient aura
+    const aura = ctx.createRadialGradient(0, 0, r * 0.4, 0, 0, r * (1.7 + glowBoost * 0.5));
+    aura.addColorStop(0, `hsla(${hue}, 100%, 65%, ${0.42 + glowBoost * 0.3})`);
+    aura.addColorStop(1, `hsla(${hue}, 100%, 50%, 0)`);
+    ctx.fillStyle = aura;
+    ctx.beginPath();
+    ctx.arc(0, 0, r * (1.7 + glowBoost * 0.5), 0, Math.PI * 2);
+    ctx.fill();
+
+    // Glass sphere body
+    const bodyGrad = ctx.createRadialGradient(-r * 0.32, -r * 0.32, r * 0.1, 0, 0, r);
+    bodyGrad.addColorStop(0, `hsl(${hue}, 100%, 92%)`);
+    bodyGrad.addColorStop(0.35, `hsl(${hue}, 95%, 62%)`);
+    bodyGrad.addColorStop(0.78, `hsl(${(hue + 14) % 360}, 95%, 36%)`);
+    bodyGrad.addColorStop(1, `hsl(${(hue + 24) % 360}, 100%, 20%)`);
+
+    ctx.fillStyle = bodyGrad;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Internal glass cat's-eye ribbon swirl that rotates as the marble rolls
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.92, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.rotate(rot);
+
+    ctx.strokeStyle = `hsla(${(hue + 40) % 360}, 100%, 88%, 0.75)`;
+    ctx.lineWidth = r * 0.28;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.65, -r * 0.2);
+    ctx.bezierCurveTo(-r * 0.2, -r * 0.7, r * 0.2, r * 0.7, r * 0.65, r * 0.2);
+    ctx.stroke();
+
+    ctx.strokeStyle = `hsla(${(hue + 190) % 360}, 100%, 85%, 0.5)`;
+    ctx.lineWidth = r * 0.16;
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.55, r * 0.35);
+    ctx.bezierCurveTo(-r * 0.1, r * 0.6, r * 0.1, -r * 0.6, r * 0.55, -r * 0.35);
+    ctx.stroke();
+    ctx.restore();
+
+    // Rim refraction + crisp specular highlights
+    ctx.strokeStyle = `hsla(${hue}, 100%, 85%, 0.7)`;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(0, 0, r - 0.75, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Top-left specular highlight
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+    ctx.beginPath();
+    ctx.ellipse(-r * 0.36, -r * 0.38, r * 0.32, r * 0.19, -Math.PI * 0.25, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Secondary pinpoint sparkle
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+    ctx.beginPath();
+    ctx.arc(r * 0.38, r * 0.36, r * 0.12, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  function drawBackground(songTime) {
+    // Deep saturated midnight-indigo radial stage backdrop
+    const bgGrad = ctx.createRadialGradient(540, 480, 60, 540, 540, 760);
+    bgGrad.addColorStop(0, '#16193b');
+    bgGrad.addColorStop(0.55, '#0b0d24');
+    bgGrad.addColorStop(1, '#050611');
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, SIZE, SIZE);
+
+    // Subtle harmonic cathedral arches in background
+    ctx.save();
+    ctx.strokeStyle = 'rgba(90, 120, 255, 0.06)';
+    ctx.lineWidth = 2;
+    for (let r = 160; r <= 640; r += 120) {
+      ctx.beginPath();
+      ctx.arc(540, 148, r, 0, Math.PI, false);
+      ctx.stroke();
+    }
+
+    // Vertical acoustic resonator columns behind each xylophone bar
+    for (let i = 0; i < BARS.length; i++) {
+      const bar = BARS[i];
+      const st = barState[i];
+      const pipeH = 155 - i * 11;
+      const pipeW = bar.w * 0.48;
+      const px = bar.x - pipeW * 0.5;
+      const py = bar.y + 18;
+
+      const pipeGrad = ctx.createLinearGradient(px, py, px + pipeW, py);
+      pipeGrad.addColorStop(0, '#12152e');
+      pipeGrad.addColorStop(0.35, '#2b3263');
+      pipeGrad.addColorStop(0.5, bar.darkColor);
+      pipeGrad.addColorStop(1, '#0d1024');
+
+      ctx.fillStyle = pipeGrad;
+      ctx.beginPath();
+      ctx.roundRect(px, py, pipeW, pipeH, [0, 0, pipeW * 0.45, pipeW * 0.45]);
+      ctx.fill();
+
+      ctx.strokeStyle = st.glow > 0.05 ? bar.color : 'rgba(140, 165, 255, 0.18)';
+      ctx.lineWidth = 2 + st.glow * 3;
+      ctx.stroke();
+
+      // Inner acoustic glow when bar rings
+      if (st.glow > 0.01) {
+        const gGrad = ctx.createLinearGradient(bar.x, bar.y, bar.x, py + pipeH);
+        gGrad.addColorStop(0, bar.color);
+        gGrad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.save();
+        ctx.globalAlpha = st.glow * 0.55;
+        ctx.fillStyle = gGrad;
+        ctx.beginPath();
+        ctx.roundRect(px + 4, py, pipeW - 8, pipeH - 4, [0, 0, pipeW * 0.4, pipeW * 0.4]);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    // Twinkling bokeh light motes
+    for (let i = 0; i < bgStars.length; i++) {
+      const s = bgStars[i];
+      const alpha = 0.2 + 0.35 * (0.5 + 0.5 * Math.sin(songTime * s.speed + s.phase));
+      ctx.fillStyle = `hsla(${s.hue}, 95%, 75%, ${alpha})`;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawElevatorAndFeeder(songTime) {
+    ctx.save();
+
+    // Left Archimedes Spiral Lift Column (x=68, y=96..995)
+    const liftX = 68;
+    const topY = 96;
+    const botY = 995;
+
+    // Glass tube housing
+    const tubeGrad = ctx.createLinearGradient(liftX - 28, 0, liftX + 28, 0);
+    tubeGrad.addColorStop(0, 'rgba(70, 110, 220, 0.28)');
+    tubeGrad.addColorStop(0.5, 'rgba(20, 35, 85, 0.12)');
+    tubeGrad.addColorStop(1, 'rgba(110, 175, 255, 0.32)');
+    ctx.fillStyle = tubeGrad;
+    ctx.fillRect(liftX - 26, topY, 52, botY - topY);
+
+    // Brass side rails of elevator
+    ctx.strokeStyle = '#ffbe0b';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(liftX - 26, topY);
+    ctx.lineTo(liftX - 26, botY);
+    ctx.moveTo(liftX + 26, topY);
+    ctx.lineTo(liftX + 26, botY);
+    ctx.stroke();
+
+    // Marbles rising inside the spiral lift
+    const liftSpeed = 135; // px/sec upward
+    const spacing = 82;
+    const offset = (songTime * liftSpeed) % spacing;
+    for (let y = botY - offset; y > topY + 12; y -= spacing) {
+      const idx = Math.abs(Math.round((y + songTime * liftSpeed) / spacing)) % BARS.length;
+      const sway = Math.sin((y - songTime * liftSpeed) * 0.045) * 7;
+      drawGlassMarble(liftX + sway, y, MARBLE_R * 0.88, BARS[idx].marbleHue, -songTime * 4);
+    }
+
+    // Rotating helical screw coil overlay in front of rising marbles
+    ctx.strokeStyle = 'rgba(255, 210, 90, 0.65)';
+    ctx.lineWidth = 3.5;
+    ctx.beginPath();
+    for (let y = topY; y <= botY; y += 6) {
+      const x = liftX + Math.sin(y * 0.075 + songTime * 6.5) * 23;
+      if (y === topY) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Top Feeder Ramp from (68, 96) to Central Distributor (540, 148)
+    ctx.strokeStyle = '#3a4685';
+    ctx.lineWidth = 14;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(liftX + 18, topY - 4);
+    ctx.quadraticCurveTo(300, 74, DISTRIBUTOR.x - 42, DISTRIBUTOR.y - 26);
+    ctx.stroke();
+
+    ctx.strokeStyle = '#00e5ff';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(liftX + 18, topY - 4);
+    ctx.quadraticCurveTo(300, 74, DISTRIBUTOR.x - 42, DISTRIBUTOR.y - 26);
+    ctx.stroke();
+
+    // Queue of marbles rolling along top feeder into the distributor
+    const feedCount = 5;
+    for (let k = 0; k < feedCount; k++) {
+      const u = ((songTime * 0.55 + k / feedCount) % 1);
+      const p = quadBezier(
+        { x: liftX + 20, y: topY - 16 },
+        { x: 300, y: 58 },
+        { x: DISTRIBUTOR.x - 44, y: DISTRIBUTOR.y - 38 },
+        u
+      );
+      const hue = BARS[(k * 2) % BARS.length].marbleHue;
+      drawGlassMarble(p.x, p.y, MARBLE_R * 0.9, hue, songTime * 7);
+    }
+
+    // Bottom Slanted Return Trough (from x=985, y=935 down to x=68, y=995)
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = '#1f2652';
+    ctx.lineWidth = 22;
+    ctx.beginPath();
+    ctx.moveTo(988, 935);
+    ctx.lineTo(68, 996);
+    ctx.stroke();
+
+    const railGrad = ctx.createLinearGradient(68, 996, 988, 935);
+    railGrad.addColorStop(0, '#ff1e7a');
+    railGrad.addColorStop(0.5, '#ffbe0b');
+    railGrad.addColorStop(1, '#9b5de5');
+    ctx.strokeStyle = railGrad;
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.moveTo(988, 938);
+    ctx.lineTo(68, 999);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  function drawTracksAndPegs(songTime) {
+    ctx.save();
+
+    // Draw all 6 track rails
+    for (let i = 0; i < TRACKS.length; i++) {
+      const tr = TRACKS[i];
+      const bar = tr.bar;
+      const st = barState[i];
+
+      // Track path segments matching the exact bezier curves the marbles follow
+      const p0 = { x: tr.peg1.x, y: tr.peg1.y - tr.peg1.r - 4 };
+      const p2 = { x: tr.peg2.x, y: tr.peg2.y - tr.peg2.r - 4 };
+      const ctrl1 = { x: tr.knee1.x, y: tr.knee1.y - 32 };
+      const ctrl0 = {
+        x: (tr.start.x + tr.peg1.x) * 0.5 + (i - 2.5) * 18,
+        y: tr.start.y + 34
+      };
+      const ctrl2 = {
+        x: (p2.x + tr.funnel.x) * 0.5,
+        y: p2.y + 84
+      };
+
+      // Outer dark track rail casing
+      ctx.strokeStyle = 'rgba(20, 26, 58, 0.92)';
+      ctx.lineWidth = 14;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(tr.start.x, tr.start.y + 8);
+      ctx.quadraticCurveTo(ctrl0.x, ctrl0.y, p0.x, p0.y);
+      ctx.quadraticCurveTo(ctrl1.x, ctrl1.y, p2.x, p2.y);
+      ctx.quadraticCurveTo(ctrl2.x, ctrl2.y, tr.funnel.x, tr.funnel.y + 6);
+      ctx.stroke();
+
+      // Inner neon track rail colored to match its target xylophone bar
+      ctx.save();
+      ctx.strokeStyle = bar.color;
+      ctx.globalAlpha = 0.48 + Math.min(0.52, st.glow * 0.6 + tr.peg1.hitGlow * 0.3 + tr.peg2.hitGlow * 0.3);
+      ctx.lineWidth = 4.5 + st.glow * 2.5;
+      ctx.beginPath();
+      ctx.moveTo(tr.start.x, tr.start.y + 8);
+      ctx.quadraticCurveTo(ctrl0.x, ctrl0.y, p0.x, p0.y);
+      ctx.quadraticCurveTo(ctrl1.x, ctrl1.y, p2.x, p2.y);
+      ctx.quadraticCurveTo(ctrl2.x, ctrl2.y, tr.funnel.x, tr.funnel.y + 6);
+      ctx.stroke();
+      ctx.restore();
+
+      // Precision Drop Funnel & Vertical Guide Chute right above each Xylophone Bar
+      const fx = tr.funnel.x;
+      const fy = tr.funnel.y;
+      const chuteBottom = tr.hit.y - 26;
+
+      // Vertical guide rails
+      ctx.strokeStyle = 'rgba(180, 210, 255, 0.26)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(fx - 26, fy - 6);
+      ctx.lineTo(fx - 20, fy + 22);
+      ctx.lineTo(fx - 20, chuteBottom);
+      ctx.moveTo(fx + 26, fy - 6);
+      ctx.lineTo(fx + 20, fy + 22);
+      ctx.lineTo(fx + 20, chuteBottom);
+      ctx.stroke();
+
+      // Glowing funnel collar
+      ctx.fillStyle = bar.darkColor;
+      ctx.strokeStyle = bar.color;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(fx - 28, fy - 6);
+      ctx.lineTo(fx + 28, fy - 6);
+      ctx.lineTo(fx + 21, fy + 16);
+      ctx.lineTo(fx - 21, fy + 16);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    // Draw Peg 1 (Upper brass bumper bells) & Peg 2 (Lower spinning star wheels)
+    for (let i = 0; i < TRACKS.length; i++) {
+      const tr = TRACKS[i];
+      const bar = tr.bar;
+
+      // Peg 1: Glowing bumper bell
+      const p1 = tr.peg1;
+      const r1 = p1.r + p1.hitGlow * 4;
+      if (p1.hitGlow > 0.02) {
+        ctx.fillStyle = bar.glow;
+        ctx.beginPath();
+        ctx.arc(p1.x, p1.y, r1 * 2.1, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      const p1Grad = ctx.createRadialGradient(p1.x - 4, p1.y - 4, 2, p1.x, p1.y, r1);
+      p1Grad.addColorStop(0, '#ffffff');
+      p1Grad.addColorStop(0.4, bar.hiColor);
+      p1Grad.addColorStop(1, bar.darkColor);
+      ctx.fillStyle = p1Grad;
+      ctx.beginPath();
+      ctx.arc(p1.x, p1.y, r1, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Peg 2: Spinning brass escapement paddle wheel
+      const p2 = tr.peg2;
+      ctx.save();
+      ctx.translate(p2.x, p2.y);
+      ctx.rotate(p2.angle);
+
+      const spokes = 6;
+      ctx.strokeStyle = p2.hitGlow > 0.1 ? bar.hiColor : '#ffcf56';
+      ctx.lineWidth = 4;
+      for (let s = 0; s < spokes; s++) {
+        const a = (s / spokes) * Math.PI * 2;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(Math.cos(a) * (p2.r + 9), Math.sin(a) * (p2.r + 9));
+        ctx.stroke();
+      }
+
+      ctx.fillStyle = bar.color;
+      ctx.beginPath();
+      ctx.arc(0, 0, p2.r * 0.85, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    ctx.restore();
+  }
+
+  function drawDistributorWheel(songTime) {
+    ctx.save();
+    ctx.translate(DISTRIBUTOR.x, DISTRIBUTOR.y);
+
+    // Outer halo pulse when releasing a marble
+    const pulseR = DISTRIBUTOR.r + 18 + distributorPulse * 18;
+    const halo = ctx.createRadialGradient(0, 0, DISTRIBUTOR.r * 0.5, 0, 0, pulseR);
+    halo.addColorStop(0, 'rgba(0, 229, 255, 0.45)');
+    halo.addColorStop(0.6, 'rgba(255, 30, 122, 0.22)');
+    halo.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(0, 0, pulseR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Brass gear teeth rotating in sync with the beat
+    const gearAngle = (songTime / BEAT_SEC) * (Math.PI / 4);
+    ctx.save();
+    ctx.rotate(gearAngle);
+    const teeth = 16;
+    ctx.fillStyle = '#ffbe0b';
+    for (let i = 0; i < teeth; i++) {
+      const a = (i / teeth) * Math.PI * 2;
+      ctx.save();
+      ctx.rotate(a);
+      ctx.beginPath();
+      ctx.roundRect(DISTRIBUTOR.r - 4, -5, 13, 10, 3);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Wheel rim
+    const wheelGrad = ctx.createRadialGradient(-12, -12, 8, 0, 0, DISTRIBUTOR.r);
+    wheelGrad.addColorStop(0, '#3a4685');
+    wheelGrad.addColorStop(0.7, '#181e42');
+    wheelGrad.addColorStop(1, '#ff9e00');
+    ctx.fillStyle = wheelGrad;
+    ctx.beginPath();
+    ctx.arc(0, 0, DISTRIBUTOR.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = '#ffe985';
+    ctx.stroke();
+
+    // 6 colored pocket sockets around the distributor wheel
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const px = Math.cos(a) * 29;
+      const py = Math.sin(a) * 29;
+      ctx.fillStyle = BARS[i].color;
+      ctx.beginPath();
+      ctx.arc(px, py, 9, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.8;
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Center jewel cap
+    const gemGrad = ctx.createRadialGradient(-4, -4, 2, 0, 0, 16);
+    gemGrad.addColorStop(0, '#ffffff');
+    gemGrad.addColorStop(0.4, '#00f5d4');
+    gemGrad.addColorStop(1, '#005b82');
+    ctx.fillStyle = gemGrad;
+    ctx.beginPath();
+    ctx.arc(0, 0, 16 + distributorPulse * 4, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  function drawXylophoneBars() {
+    ctx.save();
+
+    // Horizontal support frame rails under the xylophone bars
+    ctx.strokeStyle = '#2d356b';
+    ctx.lineWidth = 10;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(95, 868);
+    ctx.lineTo(985, 832);
+    ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(255, 200, 80, 0.45)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(95, 865);
+    ctx.lineTo(985, 829);
+    ctx.stroke();
+
+    for (let i = 0; i < BARS.length; i++) {
+      const bar = BARS[i];
+      const st = barState[i];
+
+      ctx.save();
+      ctx.translate(bar.x, bar.y + st.dip);
+      ctx.rotate(st.tilt);
+
+      const hw = bar.w * 0.5;
+      const hh = bar.h * 0.5;
+
+      // Intense bloom halo when struck
+      if (st.glow > 0.01) {
+        ctx.save();
+        ctx.shadowColor = bar.color;
+        ctx.shadowBlur = 35 * st.glow + 12;
+        ctx.fillStyle = bar.color;
+        ctx.globalAlpha = Math.min(1, st.glow * 0.9);
+        ctx.beginPath();
+        ctx.roundRect(-hw - 4, -hh - 4, bar.w + 8, bar.h + 8, 14);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // 3D Bottom bevel of the xylophone bar
+      ctx.fillStyle = bar.darkColor;
+      ctx.beginPath();
+      ctx.roundRect(-hw, -hh + 7, bar.w, bar.h, 12);
+      ctx.fill();
+
+      // Vivid saturated top surface of the bar
+      const barGrad = ctx.createLinearGradient(-hw, -hh, hw, hh);
+      barGrad.addColorStop(0, bar.hiColor);
+      barGrad.addColorStop(0.35, bar.color);
+      barGrad.addColorStop(1, bar.darkColor);
+      ctx.fillStyle = barGrad;
+      ctx.beginPath();
+      ctx.roundRect(-hw, -hh, bar.w, bar.h, 12);
+      ctx.fill();
+
+      // Flash white overlay on fresh impact
+      if (st.glow > 0.05) {
+        ctx.save();
+        ctx.fillStyle = '#ffffff';
+        ctx.globalAlpha = st.glow * 0.65;
+        ctx.beginPath();
+        ctx.roundRect(-hw + 2, -hh + 2, bar.w - 4, bar.h - 4, 10);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // Specular top edge sheen
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.42)';
+      ctx.beginPath();
+      ctx.roundRect(-hw + 8, -hh + 4, bar.w - 16, bar.h * 0.26, 6);
+      ctx.fill();
+
+      // Acoustic nodal mounting pins (2 brass rivets at 22% and 78% of bar width)
+      const pinOffset = hw * 0.56;
+      for (const px of [-pinOffset, pinOffset]) {
+        ctx.fillStyle = '#141833';
+        ctx.beginPath();
+        ctx.arc(px, 0, 5.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#ffdf70';
+        ctx.beginPath();
+        ctx.arc(px, -0.5, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.restore();
+    }
+
+    ctx.restore();
+  }
+
+  function drawShockwavesAndParticles() {
+    ctx.save();
+
+    for (let i = shockwaves.length - 1; i >= 0; i--) {
+      const sw = shockwaves[i];
+      ctx.strokeStyle = sw.color;
+      ctx.globalAlpha = Math.max(0, sw.alpha);
+      ctx.lineWidth = sw.lineWidth * sw.alpha;
+      ctx.beginPath();
+      ctx.arc(sw.x, sw.y, sw.r, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      ctx.globalAlpha = Math.max(0, p.life);
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r * (0.4 + 0.6 * p.life), 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  // Main Animation & Schedule Loop
+  // Start songTime so that the very first marble is already halfway down its chute and strikes note 1 within ~0.95s of page load!
+  let startTime = null;
+  let lastFrameTime = 0;
+  const INITIAL_SONG_OFFSET = -0.95;
+
+  function tick(timestamp) {
+    if (startTime === null) {
+      startTime = timestamp;
+      lastFrameTime = timestamp;
+    }
+    const dt = Math.min(0.05, Math.max(0.001, (timestamp - lastFrameTime) * 0.001));
+    lastFrameTime = timestamp;
+
+    const songTime = (timestamp - startTime) * 0.001 + INITIAL_SONG_OFFSET;
+
+    // Update spring physics on xylophone bars
+    for (let i = 0; i < BARS.length; i++) {
+      const st = barState[i];
+      // Damped harmonic spring for vertical dip
+      const k = 340;
+      const damp = 16;
+      const ay = -k * st.dip - damp * st.vy;
+      st.vy += ay * dt;
+      st.dip += st.vy * dt;
+
+      const at = -k * st.tilt - damp * st.vtilt;
+      st.vtilt += at * dt;
+      st.tilt += st.vtilt * dt;
+
+      st.glow = Math.max(0, st.glow - dt * 2.4);
+    }
+
+    // Update peg glow & spin
+    for (let i = 0; i < TRACKS.length; i++) {
+      const tr = TRACKS[i];
+      tr.peg1.hitGlow = Math.max(0, tr.peg1.hitGlow - dt * 3.2);
+      tr.peg2.hitGlow = Math.max(0, tr.peg2.hitGlow - dt * 3.2);
+      tr.peg2.angle += tr.peg2.vAngle * dt;
+      tr.peg2.vAngle *= Math.pow(0.18, dt);
+    }
+    distributorPulse = Math.max(0, distributorPulse - dt * 3.8);
+
+    // Update shockwaves & particles
+    for (let i = shockwaves.length - 1; i >= 0; i--) {
+      const sw = shockwaves[i];
+      sw.r += (sw.maxR - sw.r) * Math.min(1, dt * 8.5);
+      sw.alpha -= dt * 2.1;
+      if (sw.alpha <= 0.01) shockwaves.splice(i, 1);
+    }
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.vy += 460 * dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.life -= p.decay * dt;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+
+    // Determine active marbles across current & neighboring 64-beat loop cycles
+    const currentCycle = Math.floor(songTime / LOOP_SEC);
+    const activeMarbles = [];
+
+    for (let cycle = Math.max(0, currentCycle - 1); cycle <= currentCycle + 1; cycle++) {
+      const cycleBaseTime = cycle * LOOP_SEC;
+
+      for (let eIdx = 0; eIdx < MELODY_EVENTS.length; eIdx++) {
+        const ev = MELODY_EVENTS[eIdx];
+        const hitTime = cycleBaseTime + ev.timeOffset;
+        const dtHit = songTime - hitTime;
+
+        // If marble is within its visible journey [-PRE_HIT_TIME, +POST_HIT_TIME]
+        if (dtHit >= -PRE_HIT_TIME && dtHit <= POST_HIT_TIME) {
+          const key = `${cycle}:${eIdx}`;
+          const tr = TRACKS[ev.barIdx];
+
+          // 1. Trigger distributor wheel release
+          if (dtHit >= -PRE_HIT_TIME && !triggeredReleases.has(key)) {
+            triggeredReleases.add(key);
+            distributorPulse = 1.0;
+            playReleaseTick();
+          }
+
+          // 2. Trigger Peg 1 bounce at dtHit >= -(PRE_HIT_TIME - T_SEG0)
+          if (dtHit >= -(PRE_HIT_TIME - T_SEG0) && !triggeredPeg1.has(key)) {
+            triggeredPeg1.add(key);
+            tr.peg1.hitGlow = 1.0;
+            spawnPegSpark(tr.peg1.x, tr.peg1.y, tr.bar.hiColor);
+            playPegClink(ev.barIdx, 1);
+          }
+
+          // 3. Trigger Peg 2 spin & ping at dtHit >= -(PRE_HIT_TIME - T_SEG0 - T_SEG1)
+          if (dtHit >= -(PRE_HIT_TIME - T_SEG0 - T_SEG1) && !triggeredPeg2.has(key)) {
+            triggeredPeg2.add(key);
+            tr.peg2.hitGlow = 1.0;
+            tr.peg2.vAngle = (ev.barIdx % 2 === 0 ? 1 : -1) * 14;
+            spawnPegSpark(tr.peg2.x, tr.peg2.y, tr.bar.color);
+            playPegClink(ev.barIdx, 2);
+          }
+
+          // 4. Trigger Xylophone Bar Strike at dtHit >= 0
+          if (dtHit >= 0 && !triggeredHits.has(key)) {
+            triggeredHits.add(key);
+            const st = barState[ev.barIdx];
+            st.dip = 13 * ev.accent;
+            st.vy = 95 * ev.accent;
+            st.vtilt = ((eIdx % 2 === 0) ? 1 : -1) * 0.9 * ev.accent;
+            st.glow = 1.0;
+
+            spawnBarImpactFX(tr.bar, ev.accent);
+            playXylophoneNote(ev.barIdx, ev.accent, ev.isPhraseStart);
+          }
+
+          // 5. Trigger Collector Trough landing sound at dtHit >= T_POST0
+          if (dtHit >= T_POST0 && !triggeredTrough.has(key)) {
+            triggeredTrough.add(key);
+            playTroughClack(ev.barIdx);
+          }
+
+          const pose = getMarblePose(ev.barIdx, dtHit);
+          const impactGlow = (dtHit >= -0.05 && dtHit <= 0.25) ? (1 - Math.abs(dtHit - 0.08) / 0.25) : 0;
+          activeMarbles.push({
+            x: pose.x,
+            y: pose.y,
+            rot: pose.rot,
+            hue: tr.bar.marbleHue,
+            glowBoost: Math.max(0, impactGlow)
+          });
+        }
+      }
+    }
+
+    // Render Scene
+    ctx.fillStyle = '#050611';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.save();
+    ctx.translate(offsetX, offsetY);
+    ctx.scale(scale, scale);
+
+    drawBackground(songTime);
+    drawElevatorAndFeeder(songTime);
+    drawTracksAndPegs(songTime);
+    drawDistributorWheel(songTime);
+    drawXylophoneBars();
+
+    // Draw all rolling & falling glass marbles
+    for (let i = 0; i < activeMarbles.length; i++) {
+      const m = activeMarbles[i];
+      drawGlassMarble(m.x, m.y, MARBLE_R, m.hue, m.rot, m.glowBoost);
+    }
+
+    drawShockwavesAndParticles();
+
+    ctx.restore();
+
+    requestAnimationFrame(tick);
+  }
+
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>

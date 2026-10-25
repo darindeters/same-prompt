@@ -671,5 +671,107 @@
     "elapsed_s": 1667.2
    }
   }
+ },
+ "fluid-pour": {
+  "title": "Liquid Pour",
+  "prompt": "Build a stream of glossy, colorful liquid pouring from above into a clear glass, splashing, swirling and slowly filling it up, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it sound effects that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "claude": {
+    "model": "claude-fable-5-1",
+    "effort": "medium",
+    "cli": "2.1.303 (Claude Code)",
+    "start_utc": "2026-10-24T17:06:15Z",
+    "elapsed_s": 526.0
+   },
+   "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-24T17:15:01Z",
+    "elapsed_s": 131.7
+   },
+   "gemini": {
+    "model": "gemini-4-argon-medium",
+    "effort": "medium",
+    "cli": "1.4.5",
+    "start_utc": "2026-10-24T17:06:13Z",
+    "elapsed_s": 214.9
+   },
+   "grok": {
+    "model": "grok-4.7",
+    "effort": "medium",
+    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
+    "start_utc": "2026-10-24T17:06:15Z",
+    "elapsed_s": 1088.4
+   }
+  }
+ },
+ "marble-music": {
+  "title": "Marble Music Machine",
+  "prompt": "Build a marble music machine where glass marbles roll down tracks and drop onto xylophone bars, and each hit plays the next note of Beethoven's Ode to Joy, so the marbles play the melody, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it sound effects that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "claude": {
+    "model": "claude-fable-5-1",
+    "effort": "medium",
+    "cli": "2.1.303 (Claude Code)",
+    "start_utc": "2026-10-24T18:19:30Z",
+    "elapsed_s": 609.8
+   },
+   "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-24T18:29:40Z",
+    "elapsed_s": 137.4
+   },
+   "gemini": {
+    "model": "gemini-4-argon-medium",
+    "effort": "medium",
+    "cli": "1.4.5",
+    "start_utc": "2026-10-24T18:19:24Z",
+    "elapsed_s": 186.1
+   },
+   "grok": {
+    "model": "grok-4.7",
+    "effort": "medium",
+    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
+    "start_utc": "2026-10-24T18:19:30Z",
+    "elapsed_s": 1800.0
+   }
+  }
+ },
+ "self-portrait": {
+  "title": "If AIs Were People",
+  "prompt": "Build an animated portrait of yourself, the AI model writing this file, showing how you would look if you were a person, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give yourself a signature sound that fits who you are, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "claude": {
+    "model": "claude-fable-5-1",
+    "effort": "medium",
+    "cli": "2.1.303 (Claude Code)",
+    "start_utc": "2026-10-24T18:19:30Z",
+    "elapsed_s": 367.0
+   },
+   "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-24T18:25:37Z",
+    "elapsed_s": 124.7
+   },
+   "gemini": {
+    "model": "gemini-4-argon-medium",
+    "effort": "medium",
+    "cli": "1.4.5",
+    "start_utc": "2026-10-24T18:22:30Z",
+    "elapsed_s": 189.7
+   },
+   "grok": {
+    "model": "grok-4.7",
+    "effort": "medium",
+    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
+    "start_utc": "2026-10-24T18:19:30Z",
+    "elapsed_s": 943.9
+   }
+  }
  }
 }

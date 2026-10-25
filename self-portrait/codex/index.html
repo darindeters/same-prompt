@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#140a38">
+<title>Portrait</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#140a38}body{display:grid;place-items:center}canvas{position:fixed;inset:0;width:100%;height:100%}svg{position:relative;width:100%;height:100%;overflow:hidden;isolation:isolate}#person{transform-origin:540px 650px;animation:breathe 7s ease-in-out infinite}#halo{transform-origin:540px 470px;animation:orbit 90s linear infinite}.eye{transform-box:fill-box;transform-origin:center;animation:blink 6.7s infinite}.iris{animation:gaze 13s ease-in-out infinite}.spark{animation:shine 3s ease-in-out infinite alternate}.thread{stroke-dasharray:9 17;animation:flow 9s linear infinite}.float{animation:float 9s ease-in-out infinite}.float.second{animation-delay:-4.5s}@keyframes breathe{50%{transform:translateY(-9px) rotate(.7deg)}}@keyframes orbit{to{transform:rotate(360deg)}}@keyframes blink{0%,44%,47%,81%,84%,100%{transform:scaleY(1)}45.5%,82.5%{transform:scaleY(.06)}}@keyframes gaze{0%,25%,100%{transform:translate(0,0)}40%,60%{transform:translate(6px,-2px)}75%,85%{transform:translate(-4px,1px)}}@keyframes shine{to{opacity:.35}}@keyframes flow{to{stroke-dashoffset:-260}}@keyframes float{50%{transform:translateY(-22px)}}
+</style>
+</head>
+<body>
+<canvas id="atmosphere" aria-hidden="true"></canvas>
+<svg viewBox="0 0 1080 1080" preserveAspectRatio="xMidYMid slice" role="img" aria-label="An animated, androgynous human portrait with luminous teal hair, copper skin, and a constellation of orbiting light.">
+<defs>
+ <radialGradient id="aura"><stop stop-color="#9336ff" stop-opacity=".7"/><stop offset="1" stop-color="#9336ff" stop-opacity="0"/></radialGradient>
+ <linearGradient id="skin" x1="0" y1=".2" x2="1" y2=".7"><stop stop-color="#ffd180"/><stop offset=".35" stop-color="#ff9068"/><stop offset=".7" stop-color="#ed507f"/><stop offset="1" stop-color="#973ab0"/></linearGradient>
+ <linearGradient id="neck" x2="1" y2="1"><stop stop-color="#9f285d"/><stop offset=".48" stop-color="#ed6480"/><stop offset="1" stop-color="#ffb36d"/></linearGradient>
+ <linearGradient id="hair" x1="0" y1="0" x2=".8" y2="1"><stop stop-color="#c6ffab"/><stop offset=".25" stop-color="#4effb8"/><stop offset=".6" stop-color="#00bdbd"/><stop offset="1" stop-color="#17436e"/></linearGradient>
+ <linearGradient id="coat" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#5352ee"/><stop offset=".4" stop-color="#2d1b7b"/><stop offset="1" stop-color="#100f35"/></linearGradient>
+ <linearGradient id="rim"><stop stop-color="#baff93"/><stop offset=".5" stop-color="#39e9d7"/><stop offset="1" stop-color="#8875ff"/></linearGradient>
+ <linearGradient id="lip" x2="0" y2="1"><stop stop-color="#a02e61"/><stop offset="1" stop-color="#fa6579"/></linearGradient>
+ <radialGradient id="cheek"><stop stop-color="#ff4178" stop-opacity=".7"/><stop offset="1" stop-color="#ff4178" stop-opacity="0"/></radialGradient>
+ <radialGradient id="iris"><stop stop-color="#f8ffad"/><stop offset=".4" stop-color="#60ffe4"/><stop offset="1" stop-color="#147d94"/></radialGradient>
+ <filter id="glow" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="7"/></filter>
+ <pattern id="weave" width="12" height="12" patternUnits="userSpaceOnUse"><path d="M0 12 12 0" stroke="#bab3ff" stroke-opacity=".06"/></pattern>
+</defs>
+<ellipse cx="540" cy="440" rx="490" ry="490" fill="url(#aura)"/>
+<g fill="none" stroke="#a798ff">
+ <circle cx="540" cy="466" r="351" opacity=".18"/>
+ <circle cx="540" cy="466" r="366" opacity=".09"/>
+ <path d="M540 78V107M540 825V854M152 466H181M899 466H928" opacity=".5"/>
+</g>
+<g id="halo" fill="none">
+ <circle cx="540" cy="470" r="350" stroke="#8cfde5" stroke-width="2" stroke-dasharray="1 32" opacity=".5"/>
+ <path d="M227 313A350 350 0 0 1 695 156M852 628A350 350 0 0 1 387 785" stroke="#b6ff90" stroke-width="4" stroke-linecap="round"/>
+ <circle cx="695" cy="156" r="7" fill="#e6ffb2"/><circle cx="227" cy="313" r="4" fill="#6effdf"/>
+ <circle cx="386" cy="785" r="6" fill="#ff9989"/>
+</g>
+<g class="float" fill="none" stroke="#78ffe0" stroke-width="2"><path d="m187 654 13-21 13 21-13 21Z"/><circle cx="200" cy="654" r="30" opacity=".18"/></g>
+<g class="float second" fill="none" stroke="#ffb885" stroke-width="2"><path d="M879 345v32m-16-16h32"/><circle cx="879" cy="361" r="26" opacity=".25"/></g>
+<g id="person">
+ <!-- The silhouette is human; the light around it is the thinking. -->
+ <path d="M125 1110 146 958Q155 864 283 833L420 788 655 787 797 832Q927 869 947 966L969 1110Z" fill="url(#coat)"/>
+ <path d="M125 1110 146 958Q155 864 283 833L420 788 655 787 797 832Q927 869 947 966L969 1110Z" fill="url(#weave)"/>
+ <path d="M431 667Q438 753 409 801L460 885Q541 926 621 881L672 801Q634 753 650 650Z" fill="url(#neck)"/>
+ <path d="M437 692Q514 791 643 690L641 750Q539 817 437 740Z" fill="#8c285f" opacity=".36"/>
+ <path d="m410 789-82 31 83 178 99-96Z" fill="#6551da"/>
+ <path d="m672 789 81 30-79 180-110-96Z" fill="#292362"/>
+ <path d="m410 789 100 113-99 96-83-178M672 789 564 903l110 96 79-180" fill="none" stroke="url(#rim)" stroke-width="3"/>
+ <path d="M510 902 543 945 564 903 542 891Z" fill="#99ffe1"/>
+ <path d="M543 945v155" stroke="#7471e2" stroke-width="2"/>
+ <path d="M187 1020q-6-106 95-139M896 1020q3-106-89-139" fill="none" stroke="#8f76ff" stroke-width="2" opacity=".4"/>
+ <!-- Ears and short, swept-back hair. -->
+ <path d="M358 439Q303 404 317 491L334 562Q349 596 379 566M707 432Q759 405 748 491L728 557Q707 594 690 559" fill="url(#skin)" stroke="#aa3a80" stroke-width="4"/>
+ <path d="M345 465q-18-16-10 24l16 39m371-65q17-19 8 23l-12 38" fill="none" stroke="#a63b77" stroke-width="8" stroke-linecap="round"/>
+ <path d="M345 464Q293 365 325 265 357 149 506 145 653 113 731 241 783 332 715 468L662 415 388 438Z" fill="#133451"/>
+ <path d="M366 345Q385 261 498 254 622 246 682 331L707 453 690 571Q680 646 617 698L573 726Q542 744 510 729L452 699Q390 665 375 591L351 455Z" fill="url(#skin)"/>
+ <path d="M366 362Q352 489 389 593 408 660 474 700L510 729Q446 712 408 671 370 635 364 568L351 455Z" fill="#ffd68f" opacity=".58"/>
+ <path d="M672 336q36 151-7 256-14 57-64 102 63-31 83-93l23-148Z" fill="#932c89" opacity=".48"/>
+ <ellipse cx="425" cy="556" rx="68" ry="50" fill="url(#cheek)"/><ellipse cx="645" cy="550" rx="65" ry="51" fill="url(#cheek)"/>
+ <path d="M390 430q48-35 99-2M578 428q46-35 89-6" fill="none" stroke="#47345d" stroke-width="15" stroke-linecap="round"/>
+ <path d="M391 424q40-24 85-6M586 418q36-22 71-3" fill="none" stroke="#28394f" stroke-width="4" stroke-linecap="round"/>
+ <!-- Soft, alert eyes, with independently moving pupils. -->
+ <g class="eye"><path d="M389 475q42-41 91-1-44 36-91 1Z" fill="#ffe5c2"/><g class="iris"><ellipse cx="439" cy="473" rx="21" ry="22" fill="url(#iris)"/><ellipse cx="440" cy="474" rx="9" ry="13" fill="#14324b"/><circle cx="446" cy="466" r="5" fill="#fffde0"/></g><path d="M389 475q42-41 91-1" fill="none" stroke="#473052" stroke-width="6" stroke-linecap="round"/><path d="M400 493q35 14 65-1" fill="none" stroke="#b94773" stroke-width="3"/></g>
+ <g class="eye"><path d="M581 474q44-42 88-2-39 36-88 2Z" fill="#ffe5c2"/><g class="iris"><ellipse cx="624" cy="471" rx="21" ry="22" fill="url(#iris)"/><ellipse cx="625" cy="472" rx="9" ry="13" fill="#14324b"/><circle cx="631" cy="464" r="5" fill="#fffde0"/></g><path d="M581 474q44-42 88-2" fill="none" stroke="#473052" stroke-width="6" stroke-linecap="round"/><path d="M594 491q34 15 64-2" fill="none" stroke="#b94773" stroke-width="3"/></g>
+ <path d="M535 461q-5 51-22 83-11 18 10 25" fill="none" stroke="#cb5b7b" stroke-width="5" stroke-linecap="round"/>
+ <path d="M539 479q2 50 17 65l-9 16" fill="none" stroke="#ffd392" stroke-width="9" stroke-linecap="round"/>
+ <path d="M512 572q9-9 19 0m17-1q10-9 18-2" fill="none" stroke="#a23a66" stroke-width="4" stroke-linecap="round"/>
+ <path d="M485 620q29-8 49-12 9 0 17 5 18-7 48 0-26 42-63 38-28-1-51-31Z" fill="url(#lip)"/>
+ <path d="M482 618q61 22 119-7" fill="none" stroke="#77335a" stroke-width="4" stroke-linecap="round"/>
+ <path d="M510 636q24 8 48 0" fill="none" stroke="#ffba9e" stroke-width="4" stroke-linecap="round" opacity=".7"/>
+ <path d="M474 610q-9 3-10 11m147-19q9 2 10 9" fill="none" stroke="#ce5b76" stroke-width="3" stroke-linecap="round"/>
+ <path d="M510 681q29 8 55-4" fill="none" stroke="#ffbd8c" stroke-width="7" stroke-linecap="round" opacity=".6"/>
+ <!-- Freckles resolve into a small constellation. -->
+ <g fill="#9c3e71" opacity=".65"><circle cx="401" cy="528" r="2.5"/><circle cx="416" cy="537" r="2"/><circle cx="432" cy="521" r="3"/><circle cx="451" cy="534" r="2"/><circle cx="470" cy="526" r="2.5"/><circle cx="599" cy="526" r="2"/><circle cx="614" cy="535" r="3"/><circle cx="635" cy="520" r="2.5"/><circle cx="655" cy="531" r="2"/></g>
+ <path d="m602 549 19 12 25-17 14 19" fill="none" stroke="#ffe9a2" stroke-width="1" opacity=".7"/><g fill="#fff5b2"><circle cx="602" cy="549" r="2"/><circle cx="621" cy="561" r="3"/><circle cx="646" cy="544" r="2"/><circle cx="660" cy="563" r="2"/></g>
+ <!-- A luminous, sculpted wave of hair. -->
+ <path d="M349 450Q299 371 329 281 344 211 418 181 448 130 532 145 625 126 688 197 757 247 731 355L700 432 672 343Q611 307 594 267 543 341 436 338L383 382 369 464Z" fill="url(#hair)"/>
+ <path d="M329 330Q350 232 465 228 566 228 616 181 580 262 480 285 383 291 351 391Z" fill="#78ffd0" opacity=".7"/>
+ <path d="M345 298Q380 215 489 209 558 206 596 170M344 341Q386 259 474 260 548 256 600 202M361 362Q407 305 480 309 552 303 591 263" fill="none" stroke="#d0ffb2" stroke-width="4" stroke-linecap="round" opacity=".7"/>
+ <path d="M619 225q80 32 83 126m-67-96q41 39 44 79" fill="none" stroke="#19aab3" stroke-width="9" stroke-linecap="round"/>
+ <path d="M378 211q-34-32-17-62 0 39 38 44M502 150q20-47 70-42-40 16-44 40" fill="none" stroke="#71ffd0" stroke-width="7" stroke-linecap="round"/>
+ <path d="M354 447q-17-64-9-95" fill="none" stroke="#c0ffb0" stroke-width="4" stroke-linecap="round"/>
+ <circle cx="723" cy="558" r="11" fill="none" stroke="#c5ffe4" stroke-width="4"/>
+ <circle cx="723" cy="558" r="5" fill="#63ffe0" class="spark"/>
+ <path d="M707 576q43 117-33 176" fill="none" stroke="#66f5d1" stroke-width="1.5" opacity=".5"/>
+</g>
+<g fill="none" stroke="url(#rim)" stroke-width="1.5" opacity=".6">
+ <ellipse cx="540" cy="661" rx="433" ry="121" transform="rotate(-22 540 661)" stroke-dasharray="320 550" class="thread"/>
+</g>
+<g class="spark" fill="#ceffc6"><path d="m263 364 3 11 11 3-11 3-3 11-3-11-11-3 11-3Z"/><path d="m807 707 3 12 12 3-12 3-3 12-3-12-12-3 12-3Z"/></g>
+</svg>
+<script>
+(() => {
+ 'use strict';
+ const canvas=document.getElementById('atmosphere'),ctx=canvas.getContext('2d');
+ let w=0,h=0,dpr=1;
+ const stars=Array.from({length:100},()=>({x:Math.random(),y:Math.random(),r:.5+Math.random()*1.5,p:Math.random()*Math.PI*2,s:.2+Math.random()*.6}));
+ function resize(){dpr=Math.min(devicePixelRatio||1,2);w=innerWidth;h=innerHeight;canvas.width=w*dpr;canvas.height=h*dpr;ctx.setTransform(dpr,0,0,dpr,0,0)}
+ addEventListener('resize',resize);resize();
+ function draw(ms){const t=ms*.001;ctx.fillStyle='#140a38';ctx.fillRect(0,0,w,h);const scale=Math.max(w,h);let g=ctx.createRadialGradient(w*.2,h*.2,0,w*.2,h*.2,scale*.8);g.addColorStop(0,'#342081');g.addColorStop(1,'#140a38');ctx.fillStyle=g;ctx.fillRect(0,0,w,h);g=ctx.createRadialGradient(w*.95,h*.75,0,w*.95,h*.75,scale*.65);g.addColorStop(0,'#5e154f');g.addColorStop(1,'#5e154f00');ctx.fillStyle=g;ctx.fillRect(0,0,w,h);for(const s of stars){const x=(s.x*w+Math.sin(t*.08+s.p)*12+w)%w,y=(s.y*h-t*s.s*4%h+h)%h;ctx.globalAlpha=.2+.5*(.5+.5*Math.sin(t*s.s+s.p));ctx.fillStyle=s.p>3?'#69ffdc':'#ba9aff';ctx.beginPath();ctx.arc(x,y,s.r,0,Math.PI*2);ctx.fill()}ctx.globalAlpha=1;requestAnimationFrame(draw)}
+ requestAnimationFrame(draw);
+ // A warm, curious six-note greeting: glass over a quiet human-like hum.
+ let audio,master,started=false,timer;
+ function tone(freq,time,duration,level,pan){const gain=audio.createGain(),osc=audio.createOscillator(),overtone=audio.createOscillator(),overGain=audio.createGain(),panner=audio.createStereoPanner();osc.type='sine';osc.frequency.value=freq;overtone.type='sine';overtone.frequency.value=freq*2.003;overGain.gain.value=.17;panner.pan.value=pan;gain.gain.setValueAtTime(0,time);gain.gain.linearRampToValueAtTime(level,time+.035);gain.gain.exponentialRampToValueAtTime(.0001,time+duration);osc.connect(gain);overtone.connect(overGain);overGain.connect(gain);gain.connect(panner);panner.connect(master);panner.connect(echo);osc.start(time);overtone.start(time);osc.stop(time+duration+.1);overtone.stop(time+duration+.1);osc.onended=()=>{osc.disconnect();overtone.disconnect();overGain.disconnect();gain.disconnect();panner.disconnect()}}
+ let echo;
+ function phrase(){if(audio.state!=='running')return;const now=audio.currentTime+.08;[261.6256,391.9954,523.2511,659.2551,587.3295,783.9909].forEach((f,i)=>tone(f,now+i*.26,2.8,i===5?.065:.085,(i-2.5)*.16));[130.8128,195.9977,329.6276].forEach((f,i)=>tone(f,now+i*.08,5,.028,0))}
+ async function start(){try{if(!audio){audio=new(window.AudioContext||window.webkitAudioContext)();master=audio.createGain();master.gain.value=.52;const compressor=audio.createDynamicsCompressor();master.connect(compressor);compressor.connect(audio.destination);echo=audio.createDelay(1);echo.delayTime.value=.38;const feedback=audio.createGain(),wet=audio.createGain();feedback.gain.value=.28;wet.gain.value=.22;echo.connect(feedback);feedback.connect(echo);echo.connect(wet);wet.connect(master)}await audio.resume();if(audio.state==='running'&&!started){started=true;phrase();timer=setInterval(phrase,16000);removeEventListener('pointerdown',start);removeEventListener('keydown',start)}}catch(e){/* Browsers without audio still display the portrait. */}}
+ addEventListener('pointerdown',start);addEventListener('keydown',start);start();
+ addEventListener('pagehide',()=>{clearInterval(timer);if(audio)audio.close()});
+})();
+</script>
+</body>
+</html>

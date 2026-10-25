@@ -1,0 +1,1044 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title></title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #140026;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+    touch-action: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function () {
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d", { alpha: false });
+
+  const BPM = 76;
+  const SPB = 60 / BPM;
+  const LOOP_BEATS = 8;
+
+  let lastW = 0;
+  let lastH = 0;
+  let lastDpr = 0;
+  let audioCtx = null;
+  let master = null;
+  let booted = false;
+  let startTime = 0;
+  let nextIndex = 0;
+  let breathBuffer = null;
+
+  const motif = [
+    { beat: 0, kind: "voice", freq: 293.66, dur: 0.64, gain: 0.11 },
+    { beat: 1, kind: "voice", freq: 440.0, dur: 0.5, gain: 0.1 },
+    { beat: 1.75, kind: "voice", freq: 369.99, dur: 0.42, gain: 0.08 },
+    { beat: 2.5, kind: "voice", freq: 440.0, dur: 0.5, gain: 0.1 },
+    { beat: 3.25, kind: "voice", freq: 554.37, dur: 0.8, gain: 0.12, lift: true },
+    { beat: 3.25, kind: "bell", freq: 1108.73, dur: 0.42, gain: 0.028 },
+    { beat: 4.25, kind: "voice", freq: 493.88, dur: 0.64, gain: 0.1 },
+    { beat: 5.25, kind: "voice", freq: 440.0, dur: 0.52, gain: 0.09 },
+    { beat: 6, kind: "voice", freq: 392.0, dur: 0.4, gain: 0.075 },
+    { beat: 6.75, kind: "voice", freq: 369.99, dur: 0.44, gain: 0.08 },
+    { beat: 7.45, kind: "voice", freq: 293.66, dur: 0.58, gain: 0.1 },
+    { beat: 0, kind: "bass", freq: 73.42, dur: 0.7, gain: 0.2 },
+    { beat: 4, kind: "bass", freq: 73.42, dur: 0.48, gain: 0.16 },
+    { beat: 4, kind: "bass", freq: 110.0, dur: 0.36, gain: 0.07 },
+    { beat: 0, kind: "breath", freq: 0, dur: 0.62, gain: 0.045 }
+  ];
+
+  function hash(n) {
+    const x = Math.sin(n * 127.1 + 311.7) * 43758.5453;
+    return x - Math.floor(x);
+  }
+
+  function ensureSize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    if (w !== lastW || h !== lastH || dpr !== lastDpr) {
+      lastW = w;
+      lastH = h;
+      lastDpr = dpr;
+      canvas.width = Math.max(1, Math.round(w * dpr));
+      canvas.height = Math.max(1, Math.round(h * dpr));
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return { w: w, h: h };
+  }
+
+  function eyelid(t) {
+    const gap = 3.7;
+    const index = Math.floor(t / gap);
+    let c = 0;
+    for (let k = index - 1; k <= index + 1; k++) {
+      if (k < 0) continue;
+      const start = k * gap + 1.05 + (hash(k) - 0.5) * 0.7;
+      c = Math.max(c, blinkPulse(t, start, 0.15));
+      if (hash(k + 19) > 0.74) c = Math.max(c, blinkPulse(t, start + 0.28, 0.1));
+    }
+    return c;
+  }
+
+  function blinkPulse(t, start, dur) {
+    const u = (t - start) / dur;
+    if (u < 0 || u > 1) return 0;
+    return Math.sin(u * Math.PI);
+  }
+
+  function orb(x, y, r, color) {
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, color);
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawBackground(w, h, t, S) {
+    const bg = ctx.createLinearGradient(0, 0, w, h);
+    bg.addColorStop(0, "#2a006e");
+    bg.addColorStop(0.42, "#6a0048");
+    bg.addColorStop(1, "#031848");
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const drift = t * 0.22;
+    orb(
+      w * (0.22 + Math.sin(drift) * 0.08),
+      h * (0.28 + Math.cos(drift * 0.8) * 0.06),
+      S * 0.55,
+      "rgba(255, 30, 170, 0.55)"
+    );
+    orb(
+      w * (0.78 + Math.cos(drift * 0.9) * 0.07),
+      h * (0.62 + Math.sin(drift * 0.7) * 0.07),
+      S * 0.5,
+      "rgba(0, 220, 255, 0.42)"
+    );
+    orb(
+      w * (0.55 + Math.sin(drift * 1.3 + 1) * 0.1),
+      h * (0.18 + Math.cos(drift) * 0.05),
+      S * 0.32,
+      "rgba(255, 210, 0, 0.38)"
+    );
+    orb(
+      w * (0.12 + Math.cos(drift * 0.6) * 0.05),
+      h * (0.82 + Math.sin(drift * 0.5) * 0.04),
+      S * 0.36,
+      "rgba(122, 40, 255, 0.5)"
+    );
+    ctx.restore();
+
+    for (let i = 0; i < 56; i++) {
+      const x = hash(i) * w;
+      const y = hash(i + 80) * h;
+      const tw = 0.25 + 0.75 * Math.abs(Math.sin(t * (0.7 + hash(i + 160)) + i));
+      const r = 0.7 + hash(i + 240) * 1.8;
+      if (i % 5 === 0) ctx.fillStyle = "rgba(0, 245, 255, " + (0.25 + tw * 0.6) + ")";
+      else if (i % 5 === 1) ctx.fillStyle = "rgba(255, 220, 60, " + (0.25 + tw * 0.55) + ")";
+      else ctx.fillStyle = "rgba(255, 255, 255, " + (0.2 + tw * 0.65) + ")";
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    const vig = ctx.createRadialGradient(w / 2, h * 0.46, S * 0.2, w / 2, h * 0.5, Math.hypot(w, h) * 0.62);
+    vig.addColorStop(0, "rgba(0,0,0,0)");
+    vig.addColorStop(1, "rgba(8, 0, 20, 0.55)");
+    ctx.fillStyle = vig;
+    ctx.fillRect(0, 0, w, h);
+  }
+
+  function traceFace(ctx2, S) {
+    ctx2.beginPath();
+    ctx2.moveTo(0, -0.3 * S);
+    ctx2.bezierCurveTo(0.12 * S, -0.308 * S, 0.185 * S, -0.24 * S, 0.2 * S, -0.12 * S);
+    ctx2.bezierCurveTo(0.228 * S, 0.0, 0.212 * S, 0.1 * S, 0.15 * S, 0.155 * S);
+    ctx2.bezierCurveTo(0.122 * S, 0.21 * S, 0.055 * S, 0.262 * S, 0, 0.262 * S);
+    ctx2.bezierCurveTo(-0.055 * S, 0.262 * S, -0.122 * S, 0.21 * S, -0.15 * S, 0.155 * S);
+    ctx2.bezierCurveTo(-0.212 * S, 0.1 * S, -0.228 * S, 0.0, -0.2 * S, -0.12 * S);
+    ctx2.bezierCurveTo(-0.185 * S, -0.24 * S, -0.12 * S, -0.308 * S, 0, -0.3 * S);
+    ctx2.closePath();
+  }
+
+  function traceBackHair(ctx2, S, t) {
+    const a = Math.sin(t * 0.85) * 0.018 * S;
+    const b = Math.sin(t * 1.15 + 1.2) * 0.022 * S;
+    ctx2.beginPath();
+    ctx2.moveTo(0, -0.36 * S);
+    ctx2.bezierCurveTo(0.18 * S, -0.44 * S, 0.36 * S, -0.3 * S, 0.33 * S + a, -0.02 * S);
+    ctx2.bezierCurveTo(0.35 * S + b, 0.2 * S, 0.22 * S + a, 0.42 * S, 0.04 * S, 0.26 * S);
+    ctx2.lineTo(-0.04 * S, 0.26 * S);
+    ctx2.bezierCurveTo(-0.24 * S + b, 0.44 * S, -0.36 * S + a, 0.18 * S, -0.32 * S, -0.04 * S);
+    ctx2.bezierCurveTo(-0.34 * S, -0.3 * S, -0.16 * S, -0.44 * S, 0, -0.36 * S);
+    ctx2.closePath();
+  }
+
+  function strand(x0, y0, cx, cy, x1, y1, width, color, blur) {
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.lineCap = "round";
+    if (blur > 0) {
+      ctx.shadowColor = color;
+      ctx.shadowBlur = blur;
+    }
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.quadraticCurveTo(cx, cy, x1, y1);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawEar(x, y, S, flip, skin) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(flip, 1);
+    ctx.fillStyle = skin;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, S * 0.034, S * 0.056, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(120, 30, 60, 0.45)";
+    ctx.lineWidth = S * 0.006;
+    ctx.beginPath();
+    ctx.ellipse(S * 0.004, S * 0.004, S * 0.016, S * 0.032, 0.3, 0.4, Math.PI * 1.7);
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(255, 214, 180, 0.7)";
+    ctx.lineWidth = S * 0.004;
+    ctx.beginPath();
+    ctx.arc(-S * 0.006, -S * 0.01, S * 0.02, Math.PI * 0.9, Math.PI * 1.7);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawEye(x, y, S, open, gazeX, gazeY, palette, t, spin) {
+    const w = 0.056 * S;
+    const h = 0.03 * S;
+    const irisR = h * 0.92;
+
+    ctx.fillStyle = "rgba(90, 15, 50, 0.28)";
+    ctx.beginPath();
+    ctx.ellipse(x, y + h * 0.15, w * 1.25, h * 1.35, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    const glow = ctx.createRadialGradient(x, y, irisR * 0.2, x, y, w * 2.3);
+    glow.addColorStop(0, palette.glow);
+    glow.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(x, y, w * 2.3, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(x - w, y);
+    ctx.quadraticCurveTo(x, y - h, x + w, y);
+    ctx.quadraticCurveTo(x, y + h * 0.82, x - w, y);
+    ctx.clip();
+
+    const sclera = ctx.createRadialGradient(x - w * 0.2, y - h * 0.2, h * 0.1, x, y, w);
+    sclera.addColorStop(0, "#fff8f4");
+    sclera.addColorStop(1, "#f0c2c8");
+    ctx.fillStyle = sclera;
+    ctx.fillRect(x - w, y - h, w * 2, h * 2);
+
+    const ix = x + gazeX;
+    const iy = y + gazeY;
+    const iris = ctx.createRadialGradient(ix - irisR * 0.25, iy - irisR * 0.3, irisR * 0.1, ix, iy, irisR);
+    iris.addColorStop(0, palette.core);
+    iris.addColorStop(0.35, palette.mid);
+    iris.addColorStop(0.78, palette.edge);
+    iris.addColorStop(1, palette.ring);
+    ctx.fillStyle = iris;
+    ctx.beginPath();
+    ctx.arc(ix, iy, irisR, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.save();
+    ctx.translate(ix, iy);
+    ctx.rotate(t * spin);
+    ctx.strokeStyle = "rgba(255,255,255,0.38)";
+    ctx.lineWidth = Math.max(1, S * 0.0016);
+    for (let i = 0; i < 9; i++) {
+      ctx.rotate(Math.PI / 4.5);
+      ctx.beginPath();
+      ctx.moveTo(0, irisR * 0.38);
+      ctx.lineTo(0, irisR * 0.92);
+      ctx.stroke();
+    }
+    ctx.lineWidth = Math.max(1, irisR * 0.07);
+    ctx.strokeStyle = palette.aperture;
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const px = Math.cos(a) * irisR * 0.62;
+      const py = Math.sin(a) * irisR * 0.62;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.beginPath();
+    ctx.arc(ix, iy, irisR, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(20, 0, 30, 0.55)";
+    ctx.lineWidth = irisR * 0.16;
+    ctx.stroke();
+
+    const pupilR = irisR * (0.4 + Math.sin(t * 0.65) * 0.035);
+    ctx.fillStyle = "#140814";
+    ctx.beginPath();
+    ctx.arc(ix, iy, pupilR, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.beginPath();
+    ctx.arc(ix - irisR * 0.32, iy - irisR * 0.34, irisR * 0.18, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.55)";
+    ctx.beginPath();
+    ctx.arc(ix + irisR * 0.28, iy + irisR * 0.22, irisR * 0.08, 0, Math.PI * 2);
+    ctx.fill();
+
+    const inner = x > 0 ? -1 : 1;
+    ctx.fillStyle = "rgba(255, 90, 120, 0.85)";
+    ctx.beginPath();
+    ctx.arc(x + inner * w * 0.78, y + h * 0.22, S * 0.0055, 0, Math.PI * 2);
+    ctx.fill();
+
+    const cover = (1 - open) * h * 2.15;
+    const lid = ctx.createLinearGradient(x, y - h, x, y - h + Math.max(cover, 1));
+    lid.addColorStop(0, "#e88368");
+    lid.addColorStop(0.7, "#f3a07c");
+    lid.addColorStop(1, "#ffc2a4");
+    ctx.fillStyle = lid;
+    ctx.fillRect(x - w * 1.5, y - h - 2, w * 3, cover + 1);
+
+    ctx.restore();
+
+    ctx.strokeStyle = "rgba(70, 18, 40, 0.75)";
+    ctx.lineWidth = Math.max(1.25, S * 0.004);
+    ctx.beginPath();
+    ctx.moveTo(x - w, y);
+    ctx.quadraticCurveTo(x, y - h + (1 - open) * h * 2, x + w, y);
+    ctx.stroke();
+    if (open > 0.25) {
+      ctx.strokeStyle = "rgba(160, 60, 80, 0.45)";
+      ctx.lineWidth = Math.max(1, S * 0.003);
+      ctx.beginPath();
+      ctx.moveTo(x - w * 0.85, y + h * 0.05);
+      ctx.quadraticCurveTo(x, y + h * 0.78 * open, x + w * 0.85, y + h * 0.05);
+      ctx.stroke();
+    }
+
+    ctx.strokeStyle = "#2a1020";
+    ctx.lineCap = "round";
+    const lashBase = y - h + (1 - open) * h * 2.05;
+    for (let i = -3; i <= 3; i++) {
+      const px = x + i * w * 0.26;
+      const lift = (1 - Math.abs(i) / 3.4) * h * 0.85;
+      ctx.lineWidth = Math.max(1, S * 0.0032);
+      ctx.beginPath();
+      ctx.moveTo(px, lashBase + h * 0.15);
+      ctx.quadraticCurveTo(px + i * w * 0.05, lashBase - lift * 0.3, px + i * w * 0.08, lashBase - lift);
+      ctx.stroke();
+    }
+  }
+
+  function drawBrow(x, y, S, lift, flip) {
+    ctx.save();
+    ctx.translate(x, y - lift);
+    ctx.scale(flip, 1);
+    ctx.fillStyle = "#2a1028";
+    ctx.beginPath();
+    ctx.moveTo(-0.05 * S, 0.012 * S);
+    ctx.quadraticCurveTo(-0.01 * S, -0.02 * S, 0.052 * S, -0.004 * S);
+    ctx.quadraticCurveTo(0.02 * S, 0.008 * S, -0.02 * S, 0.02 * S);
+    ctx.quadraticCurveTo(-0.04 * S, 0.02 * S, -0.05 * S, 0.012 * S);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawMouth(S, t) {
+    const my = 0.186 * S;
+    const mw = 0.09 * S;
+    const smile = 0.02 * S + Math.sin(t * 0.45) * 0.004 * S;
+
+    ctx.fillStyle = "rgba(120, 30, 55, 0.18)";
+    ctx.beginPath();
+    ctx.ellipse(0, my + 0.03 * S, mw * 0.85, 0.028 * S, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    const lower = ctx.createLinearGradient(0, my, 0, my + 0.05 * S);
+    lower.addColorStop(0, "#ff5a86");
+    lower.addColorStop(0.55, "#ff2f6a");
+    lower.addColorStop(1, "#d41458");
+    ctx.fillStyle = lower;
+    ctx.beginPath();
+    ctx.moveTo(-mw, my + 0.002 * S);
+    ctx.quadraticCurveTo(0, my + 0.012 * S + smile * 0.25, mw * 0.96, my + 0.008 * S);
+    ctx.quadraticCurveTo(mw * 0.55, my + 0.048 * S + smile, 0, my + 0.052 * S + smile);
+    ctx.quadraticCurveTo(-mw * 0.7, my + 0.046 * S + smile, -mw, my + 0.002 * S);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(255, 230, 230, 0.55)";
+    ctx.beginPath();
+    ctx.ellipse(-0.012 * S, my + 0.028 * S + smile * 0.3, mw * 0.28, 0.01 * S, -0.2, 0, Math.PI * 2);
+    ctx.fill();
+
+    const upper = ctx.createLinearGradient(0, my - 0.02 * S, 0, my + 0.01 * S);
+    upper.addColorStop(0, "#e41860");
+    upper.addColorStop(1, "#ff4d78");
+    ctx.fillStyle = upper;
+    ctx.beginPath();
+    ctx.moveTo(-mw, my);
+    ctx.quadraticCurveTo(-mw * 0.55, my - smile * 0.15, -mw * 0.22, my - 0.012 * S);
+    ctx.quadraticCurveTo(-mw * 0.08, my - 0.004 * S, 0, my + 0.001 * S);
+    ctx.quadraticCurveTo(mw * 0.08, my - 0.003 * S, mw * 0.2, my - 0.01 * S);
+    ctx.quadraticCurveTo(mw * 0.55, my - smile * 0.05, mw * 0.96, my + 0.006 * S);
+    ctx.quadraticCurveTo(mw * 0.4, my + 0.01 * S, 0, my + 0.008 * S);
+    ctx.quadraticCurveTo(-mw * 0.45, my + 0.01 * S, -mw, my);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(90, 8, 36, 0.65)";
+    ctx.lineWidth = Math.max(1, S * 0.0035);
+    ctx.beginPath();
+    ctx.moveTo(-mw * 0.92, my + 0.001 * S);
+    ctx.quadraticCurveTo(0, my + smile * 0.45, mw * 0.9, my + 0.006 * S);
+    ctx.stroke();
+  }
+
+  function drawNose(S) {
+    const noseY = 0.122 * S;
+    ctx.strokeStyle = "rgba(130, 35, 65, 0.4)";
+    ctx.lineWidth = S * 0.011;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(-0.004 * S, 0.02 * S);
+    ctx.quadraticCurveTo(0.016 * S, 0.07 * S, 0.008 * S, noseY - 0.012 * S);
+    ctx.stroke();
+
+    const tip = ctx.createRadialGradient(-0.006 * S, noseY - 0.012 * S, 0, 0, noseY, S * 0.04);
+    tip.addColorStop(0, "rgba(255, 226, 205, 0.95)");
+    tip.addColorStop(1, "rgba(255, 150, 120, 0)");
+    ctx.fillStyle = tip;
+    ctx.beginPath();
+    ctx.ellipse(-0.002 * S, noseY, S * 0.026, S * 0.018, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(110, 24, 50, 0.55)";
+    ctx.lineWidth = S * 0.006;
+    ctx.beginPath();
+    ctx.arc(-0.016 * S, noseY + 0.008 * S, S * 0.011, 0.15, Math.PI - 0.15);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(0.018 * S, noseY + 0.01 * S, S * 0.01, 0.25, Math.PI - 0.05);
+    ctx.stroke();
+
+    ctx.strokeStyle = "rgba(140, 40, 70, 0.28)";
+    ctx.lineWidth = S * 0.005;
+    ctx.beginPath();
+    ctx.moveTo(-0.007 * S, noseY + 0.02 * S);
+    ctx.quadraticCurveTo(-0.01 * S, 0.155 * S, -0.012 * S, 0.172 * S);
+    ctx.moveTo(0.009 * S, noseY + 0.02 * S);
+    ctx.quadraticCurveTo(0.012 * S, 0.155 * S, 0.014 * S, 0.172 * S);
+    ctx.stroke();
+  }
+
+  function drawPortrait(w, h, t, pulse, accent) {
+    const S = Math.min(w, h);
+    const tilt = Math.sin(t * 0.32) * 0.028;
+    const breath = Math.sin(t * 1.15) * S * 0.01;
+
+    ctx.save();
+    ctx.translate(w / 2, h * 0.46);
+    ctx.rotate(tilt);
+
+    const auraR = S * (0.5 + pulse * accent * 0.045);
+    const aura = ctx.createRadialGradient(0, -0.02 * S, S * 0.05, 0, 0.02 * S, auraR);
+    aura.addColorStop(0, "rgba(255, 214, 70, " + (0.5 + pulse * 0.28) + ")");
+    aura.addColorStop(0.32, "rgba(255, 30, 150, 0.38)");
+    aura.addColorStop(0.68, "rgba(0, 220, 255, 0.16)");
+    aura.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = aura;
+    ctx.beginPath();
+    ctx.arc(0, 0, auraR, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    for (let i = 0; i < 3; i++) {
+      const a = t * (0.28 + i * 0.07) + i * 2.2;
+      const rx = S * (0.34 + i * 0.03);
+      const ry = S * (0.36 + i * 0.025);
+      ctx.strokeStyle = i === 0 ? "rgba(0, 245, 255, 0.75)" : i === 1 ? "rgba(255, 220, 40, 0.7)" : "rgba(255, 50, 170, 0.7)";
+      ctx.lineWidth = S * (0.004 + i * 0.001);
+      ctx.beginPath();
+      ctx.ellipse(0, -0.02 * S, rx, ry, 0, a, a + 1.15 + i * 0.25);
+      ctx.stroke();
+      const sx = Math.cos(a) * rx;
+      const sy = Math.sin(a) * ry - 0.02 * S;
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.beginPath();
+      ctx.arc(sx, sy, S * 0.008, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    const hairGrad = ctx.createLinearGradient(0, -0.48 * S, 0, 0.42 * S);
+    hairGrad.addColorStop(0, "#3a0680");
+    hairGrad.addColorStop(0.45, "#6d28d9");
+    hairGrad.addColorStop(1, "#1a0630");
+    ctx.fillStyle = hairGrad;
+    traceBackHair(ctx, S, t);
+    ctx.fill();
+
+    const skin = ctx.createRadialGradient(-0.06 * S, -0.08 * S, S * 0.02, 0.02 * S, 0.04 * S, S * 0.48);
+    skin.addColorStop(0, "#ffe0c6");
+    skin.addColorStop(0.32, "#ff9a6a");
+    skin.addColorStop(0.68, "#f06a58");
+    skin.addColorStop(1, "#c43368");
+
+    drawEar(-0.214 * S, 0.06 * S, S, 1, "#f08a66");
+    drawEar(0.214 * S, 0.055 * S, S, -1, "#e47468");
+
+    ctx.strokeStyle = "#ffe14a";
+    ctx.lineWidth = S * 0.005;
+    ctx.beginPath();
+    ctx.arc(-0.232 * S, 0.085 * S, S * 0.014, 0.2, Math.PI * 1.85);
+    ctx.stroke();
+    ctx.fillStyle = "#fff4c4";
+    ctx.beginPath();
+    ctx.arc(-0.244 * S, 0.078 * S, S * 0.0035, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = skin;
+    ctx.beginPath();
+    ctx.moveTo(-0.075 * S, 0.15 * S);
+    ctx.quadraticCurveTo(-0.12 * S, 0.32 * S + breath, -0.16 * S, 0.54 * S + breath);
+    ctx.lineTo(0.17 * S, 0.54 * S + breath);
+    ctx.quadraticCurveTo(0.12 * S, 0.32 * S + breath, 0.07 * S, 0.15 * S);
+    ctx.closePath();
+    ctx.fill();
+
+    const hem = h * 0.75;
+    const cloth = ctx.createLinearGradient(-0.4 * S, 0.3 * S, 0.6 * S + Math.sin(t * 0.6) * 0.2 * S, hem);
+    cloth.addColorStop(0, "#3b12a8");
+    cloth.addColorStop(0.4, "#6d28f0");
+    cloth.addColorStop(0.62, "#ff2d8a");
+    cloth.addColorStop(1, "#1d1460");
+    ctx.fillStyle = cloth;
+    ctx.beginPath();
+    ctx.moveTo(-S, hem);
+    ctx.lineTo(-S, 0.5 * S + breath);
+    ctx.quadraticCurveTo(-0.42 * S, 0.3 * S + breath, -0.11 * S, 0.33 * S + breath);
+    ctx.quadraticCurveTo(-0.04 * S, 0.44 * S + breath, 0, 0.48 * S + breath);
+    ctx.quadraticCurveTo(0.055 * S, 0.44 * S + breath, 0.12 * S, 0.325 * S + breath);
+    ctx.quadraticCurveTo(0.46 * S, 0.28 * S + breath, S, 0.52 * S + breath);
+    ctx.lineTo(S, hem);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = "#ffe14a";
+    ctx.lineWidth = S * 0.006;
+    ctx.beginPath();
+    ctx.moveTo(-0.11 * S, 0.332 * S + breath);
+    ctx.quadraticCurveTo(-0.04 * S, 0.44 * S + breath, 0, 0.478 * S + breath);
+    ctx.quadraticCurveTo(0.05 * S, 0.44 * S + breath, 0.12 * S, 0.328 * S + breath);
+    ctx.stroke();
+
+    ctx.fillStyle = skin;
+    traceFace(ctx, S);
+    ctx.fill();
+
+    ctx.save();
+    traceFace(ctx, S);
+    ctx.clip();
+
+    const cheekLit = ctx.createRadialGradient(-0.08 * S, 0.02 * S, S * 0.01, -0.06 * S, 0.03 * S, S * 0.16);
+    cheekLit.addColorStop(0, "rgba(255, 236, 210, 0.7)");
+    cheekLit.addColorStop(1, "rgba(255, 236, 210, 0)");
+    ctx.fillStyle = cheekLit;
+    ctx.fillRect(-S, -S, S * 2, S * 2);
+
+    const fore = ctx.createRadialGradient(-0.03 * S, -0.16 * S, 0, -0.02 * S, -0.12 * S, S * 0.16);
+    fore.addColorStop(0, "rgba(255, 244, 220, 0.65)");
+    fore.addColorStop(1, "rgba(255, 244, 220, 0)");
+    ctx.fillStyle = fore;
+    ctx.fillRect(-S, -S, S * 2, S * 2);
+
+    const shade = ctx.createRadialGradient(0.12 * S, 0.08 * S, S * 0.02, 0.1 * S, 0.06 * S, S * 0.22);
+    shade.addColorStop(0, "rgba(120, 16, 60, 0.28)");
+    shade.addColorStop(1, "rgba(120, 16, 60, 0)");
+    ctx.fillStyle = shade;
+    ctx.fillRect(-S, -S, S * 2, S * 2);
+
+    ctx.fillStyle = "rgba(255, 40, 110, 0.28)";
+    ctx.beginPath();
+    ctx.ellipse(-0.09 * S, 0.07 * S, S * 0.055, S * 0.03, -0.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(0.095 * S, 0.075 * S, S * 0.05, S * 0.028, 0.4, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(150, 30, 60, 0.35)";
+    const freckles = [[-0.02, 0.045], [0.012, 0.055], [0.028, 0.04], [-0.04, 0.07], [0.055, 0.085]];
+    for (let i = 0; i < freckles.length; i++) {
+      ctx.beginPath();
+      ctx.arc(freckles[i][0] * S, freckles[i][1] * S, S * 0.0032, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    ctx.fillStyle = "rgba(110, 18, 52, 0.28)";
+    ctx.beginPath();
+    ctx.ellipse(0.012 * S, 0.3 * S, 0.1 * S, 0.028 * S, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    const open = 1 - eyelid(t) * 0.94;
+    const gazeX = (Math.sin(t * 0.17) * 0.55 + Math.sin(t * 0.05) * 0.25) * 0.012 * S;
+    const gazeY = Math.sin(t * 0.13 + 0.6) * 0.005 * S;
+    const curious = Math.max(0, Math.sin(t * 0.37)) * 0.014 * S;
+
+    drawEye(-0.1 * S, 0, S, open, gazeX, gazeY, {
+      core: "#fff4d0",
+      mid: "#ffb000",
+      edge: "#ff5a12",
+      ring: "#6a2208",
+      glow: "rgba(255, 170, 0, 0.28)",
+      aperture: "rgba(255, 248, 220, 0.8)"
+    }, t, 0.45);
+    drawEye(0.1 * S, 0, S, open, gazeX, gazeY, {
+      core: "#eaffff",
+      mid: "#00e4ff",
+      edge: "#0066ff",
+      ring: "#061433",
+      glow: "rgba(0, 220, 255, 0.28)",
+      aperture: "rgba(230, 255, 255, 0.85)"
+    }, t, -0.33);
+
+    drawBrow(-0.1 * S, -0.072 * S, S, Math.sin(t * 0.5) * 0.003 * S, 1);
+    drawBrow(0.1 * S, -0.07 * S, S, curious, -1);
+
+    drawNose(S);
+    drawMouth(S, t);
+
+    ctx.save();
+    ctx.translate(-0.15 * S, 0.078 * S);
+    ctx.strokeStyle = "rgba(255, 226, 80, " + (0.65 + pulse * 0.35) + ")";
+    ctx.lineWidth = Math.max(1.5, S * 0.0035);
+    ctx.beginPath();
+    ctx.arc(0, 0, S * 0.015, 0.45, Math.PI * 1.75);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(0, 245, 255, " + (0.65 + 0.35 * Math.sin(t * 3.1)) + ")";
+    ctx.beginPath();
+    ctx.arc(S * 0.014, S * 0.002, S * 0.0042, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    ctx.fillStyle = hairGrad;
+    ctx.beginPath();
+    ctx.moveTo(-0.2 * S, -0.15 * S);
+    ctx.bezierCurveTo(-0.12 * S, -0.36 * S, 0.16 * S, -0.38 * S, 0.22 * S, -0.14 * S);
+    ctx.bezierCurveTo(0.14 * S, -0.105 * S, 0.04 * S, -0.12 * S, -0.02 * S, -0.1 * S);
+    ctx.bezierCurveTo(-0.1 * S, -0.13 * S, -0.16 * S, -0.1 * S, -0.2 * S, -0.15 * S);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = "#3b0764";
+    ctx.beginPath();
+    ctx.moveTo(0.18 * S, -0.16 * S);
+    ctx.lineTo(0.3 * S, 0.02 * S);
+    ctx.lineTo(0.22 * S, 0.24 * S);
+    ctx.lineTo(0.165 * S, 0.08 * S);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(-0.18 * S, -0.16 * S);
+    ctx.lineTo(-0.26 * S, -0.02 * S);
+    ctx.lineTo(-0.19 * S, 0.05 * S);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.lineCap = "round";
+    const sway = Math.sin(t * 1.2);
+    const hairColors = ["#1a0630", "#4c1d95", "#ff2f9a", "#140818", "#22e7ff", "#ffe14a", "#c026d3", "#1a0630"];
+    const fronts = [
+      [-0.16, -0.22, -0.02, -0.34, 0.1, -0.12],
+      [-0.05, -0.28, 0.08, -0.16, 0.16, -0.1],
+      [0.02, -0.32, 0.16, -0.2, 0.2, -0.08],
+      [-0.2, -0.16, -0.22, 0.02, -0.16, 0.22],
+      [0.2, -0.14, 0.3, 0.05, 0.22, 0.26],
+      [-0.08, -0.34, -0.18, -0.2, -0.22, -0.02],
+      [0.12, -0.36, 0.22, -0.22, 0.26, 0.02],
+      [0.0, -0.4, 0.06, -0.22, 0.02, -0.12]
+    ];
+    for (let i = 0; i < fronts.length; i++) {
+      const f = fronts[i];
+      const wave = Math.sin(t * 1.1 + i) * 0.03 * S;
+      const bright = hairColors[i] === "#22e7ff" || hairColors[i] === "#ffe14a" || hairColors[i] === "#ff2f9a";
+      strand(
+        f[0] * S,
+        f[1] * S,
+        f[2] * S + wave,
+        f[3] * S,
+        f[4] * S + wave * 0.6,
+        f[5] * S + sway * 0.01 * S,
+        S * (bright ? 0.012 : 0.02),
+        hairColors[i],
+        bright ? 14 : 0
+      );
+    }
+
+    for (let i = 0; i < 5; i++) {
+      const ph = t * 1.4 + i;
+      strand(
+        -0.03 * S + i * 0.016 * S,
+        -0.3 * S,
+        (-0.07 + i * 0.028) * S + Math.sin(ph) * 0.025 * S,
+        -0.39 * S,
+        (-0.04 + i * 0.02) * S + Math.cos(ph) * 0.018 * S,
+        -0.43 * S,
+        S * 0.006,
+        i % 2 ? "#67f7ff" : "#ffd84a",
+        8
+      );
+    }
+
+    ctx.strokeStyle = "rgba(90, 245, 255, 0.8)";
+    ctx.lineWidth = S * 0.011;
+    ctx.beginPath();
+    ctx.moveTo(0.16 * S, -0.16 * S);
+    ctx.quadraticCurveTo(0.23 * S, 0.02 * S, 0.11 * S, 0.2 * S);
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(255, 196, 90, 0.55)";
+    ctx.lineWidth = S * 0.008;
+    ctx.beginPath();
+    ctx.moveTo(-0.16 * S, -0.18 * S);
+    ctx.quadraticCurveTo(-0.23 * S, 0.0, -0.12 * S, 0.18 * S);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  function draw(t) {
+    const size = ensureSize();
+    const beatPhase = (t % SPB) / SPB;
+    const pulse = Math.pow(Math.max(0, 1 - beatPhase), 3);
+    const loopBeat = (t % (SPB * LOOP_BEATS)) / SPB;
+    const accent = loopBeat < 0.18 ? 1 : 0.62;
+    drawBackground(size.w, size.h, t, Math.min(size.w, size.h));
+    drawPortrait(size.w, size.h, t, pulse, accent);
+  }
+
+  function envGain(time, dur, peak) {
+    const g = audioCtx.createGain();
+    g.gain.setValueAtTime(0.0001, time);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), time + Math.min(0.03, dur * 0.25));
+    g.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+    return g;
+  }
+
+  function playTone(time, freq, dur, peak, type, cutoff) {
+    const osc = audioCtx.createOscillator();
+    const filter = audioCtx.createBiquadFilter();
+    const g = envGain(time, dur, peak);
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, time);
+    filter.type = "lowpass";
+    filter.frequency.setValueAtTime(cutoff, time);
+    filter.frequency.exponentialRampToValueAtTime(Math.max(280, cutoff * 0.45), time + dur);
+    osc.connect(filter);
+    filter.connect(g);
+    g.connect(master);
+    osc.start(time);
+    osc.stop(time + dur + 0.04);
+  }
+
+  function playBell(time, freq, dur, peak) {
+    const osc = audioCtx.createOscillator();
+    const mod = audioCtx.createOscillator();
+    const modGain = audioCtx.createGain();
+    const filter = audioCtx.createBiquadFilter();
+    const g = envGain(time, dur, peak);
+    osc.type = "sine";
+    mod.type = "sine";
+    osc.frequency.setValueAtTime(freq, time);
+    mod.frequency.setValueAtTime(freq * 2.0, time);
+    modGain.gain.setValueAtTime(freq * 1.15, time);
+    modGain.gain.exponentialRampToValueAtTime(Math.max(1, freq * 0.03), time + dur);
+    filter.type = "lowpass";
+    filter.frequency.setValueAtTime(2800, time);
+    filter.frequency.exponentialRampToValueAtTime(900, time + dur);
+    mod.connect(modGain);
+    modGain.connect(osc.frequency);
+    osc.connect(filter);
+    filter.connect(g);
+    g.connect(master);
+    if (delaySend) g.connect(delaySend);
+    osc.start(time);
+    mod.start(time);
+    osc.stop(time + dur + 0.05);
+    mod.stop(time + dur + 0.05);
+  }
+
+  let delaySend = null;
+
+  function playBass(time, freq, dur, peak) {
+    const osc = audioCtx.createOscillator();
+    const g = envGain(time, dur, peak);
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(freq * 2.1, time);
+    osc.frequency.exponentialRampToValueAtTime(freq, time + 0.09);
+    osc.connect(g);
+    g.connect(master);
+    osc.start(time);
+    osc.stop(time + dur + 0.04);
+  }
+
+  function playBreath(time, dur, peak) {
+    if (!breathBuffer) {
+      const n = Math.floor(audioCtx.sampleRate * 0.7);
+      breathBuffer = audioCtx.createBuffer(1, n, audioCtx.sampleRate);
+      const data = breathBuffer.getChannelData(0);
+      let v = 0;
+      for (let i = 0; i < n; i++) {
+        v = v * 0.965 + (Math.random() * 2 - 1) * 0.035;
+        data[i] = v * 4;
+      }
+    }
+    const src = audioCtx.createBufferSource();
+    src.buffer = breathBuffer;
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = "bandpass";
+    filter.frequency.setValueAtTime(500, time);
+    filter.frequency.linearRampToValueAtTime(1400, time + dur * 0.7);
+    filter.Q.value = 0.6;
+    const g = envGain(time, dur, peak);
+    src.connect(filter);
+    filter.connect(g);
+    g.connect(master);
+    src.start(time);
+    src.stop(time + dur + 0.02);
+  }
+
+  function playVoice(time, freq, dur, peak) {
+    playTone(time, freq, dur, peak * 0.62, "triangle", 1500);
+    playTone(time, freq * 0.5, dur * 0.95, peak * 0.28, "sine", 800);
+    playBell(time, freq, dur * 0.92, peak * 0.5);
+  }
+
+  function eventTime(index) {
+    const loop = Math.floor(index / motif.length);
+    const ev = motif[index % motif.length];
+    return startTime + (loop * LOOP_BEATS + ev.beat) * SPB;
+  }
+
+  function schedule() {
+    if (!audioCtx || audioCtx.state !== "running") return;
+    const now = audioCtx.currentTime;
+    let guard = 0;
+    while (guard++ < 24) {
+      const ev = motif[nextIndex % motif.length];
+      const loop = Math.floor(nextIndex / motif.length);
+      const t = eventTime(nextIndex);
+      if (t >= now + 0.32) break;
+      nextIndex++;
+      if (t < now - 0.04) continue;
+      const when = Math.max(t, now + 0.004);
+      if (ev.kind === "voice") {
+        if (ev.lift && loop % 4 === 3) {
+          playVoice(when, 659.25, 0.16, ev.gain * 0.85);
+          playVoice(when + 0.15, ev.freq, ev.dur, ev.gain);
+        } else {
+          playVoice(when, ev.freq, ev.dur, ev.gain);
+        }
+      } else if (ev.kind === "bell") {
+        playBell(when, ev.freq, ev.dur, ev.gain);
+      } else if (ev.kind === "bass") {
+        playBass(when, ev.freq, ev.dur, ev.gain);
+      } else if (ev.kind === "breath") {
+        playBreath(when, ev.dur, ev.gain);
+      }
+    }
+  }
+
+  function startBed() {
+    const now = audioCtx.currentTime;
+    const drone = audioCtx.createOscillator();
+    const droneGain = audioCtx.createGain();
+    const lfo = audioCtx.createOscillator();
+    const lfoGain = audioCtx.createGain();
+    drone.type = "sine";
+    drone.frequency.value = 73.42;
+    droneGain.gain.value = 0.07;
+    lfo.frequency.value = 0.08;
+    lfoGain.gain.value = 0.02;
+    lfo.connect(lfoGain);
+    lfoGain.connect(droneGain.gain);
+    drone.connect(droneGain);
+    droneGain.connect(master);
+    drone.start(now);
+    lfo.start(now);
+
+    const fifth = audioCtx.createOscillator();
+    const fifthGain = audioCtx.createGain();
+    fifth.type = "sine";
+    fifth.frequency.value = 110;
+    fifthGain.gain.value = 0.02;
+    fifth.connect(fifthGain);
+    fifthGain.connect(master);
+    fifth.start(now);
+
+    const padFreqs = [146.83, 220.0, 369.99];
+    const padGain = audioCtx.createGain();
+    const padFilter = audioCtx.createBiquadFilter();
+    padGain.gain.value = 0.04;
+    padFilter.type = "lowpass";
+    padFilter.frequency.value = 720;
+    padGain.connect(padFilter);
+    padFilter.connect(master);
+    const swell = audioCtx.createOscillator();
+    const swellGain = audioCtx.createGain();
+    swell.frequency.value = 0.06;
+    swellGain.gain.value = 0.012;
+    swell.connect(swellGain);
+    swellGain.connect(padGain.gain);
+    swell.start(now);
+    for (let i = 0; i < padFreqs.length; i++) {
+      const osc = audioCtx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.value = padFreqs[i];
+      osc.detune.value = (i - 1) * 7;
+      osc.connect(padGain);
+      osc.start(now);
+    }
+  }
+
+  function buildAudio() {
+    master = audioCtx.createGain();
+    const compressor = audioCtx.createDynamicsCompressor();
+    compressor.threshold.value = -16;
+    compressor.knee.value = 16;
+    compressor.ratio.value = 3.2;
+    compressor.attack.value = 0.008;
+    compressor.release.value = 0.22;
+    master.connect(compressor);
+    compressor.connect(audioCtx.destination);
+    const now = audioCtx.currentTime;
+    master.gain.setValueAtTime(0.0001, now);
+    master.gain.exponentialRampToValueAtTime(0.5, now + 1.3);
+
+    const delay = audioCtx.createDelay();
+    delay.delayTime.value = 0.31;
+    const feedback = audioCtx.createGain();
+    feedback.gain.value = 0.26;
+    const wet = audioCtx.createGain();
+    wet.gain.value = 0.22;
+    const delayFilter = audioCtx.createBiquadFilter();
+    delayFilter.type = "lowpass";
+    delayFilter.frequency.value = 1700;
+    delay.connect(delayFilter);
+    delayFilter.connect(feedback);
+    feedback.connect(delay);
+    delayFilter.connect(wet);
+    if (audioCtx.createStereoPanner) {
+      const echoPan = audioCtx.createStereoPanner();
+      echoPan.pan.value = 0.4;
+      wet.connect(echoPan);
+      echoPan.connect(master);
+    } else {
+      wet.connect(master);
+    }
+    delaySend = delay;
+
+    startBed();
+
+    const vis = performance.now() / 1000;
+    const loopSec = LOOP_BEATS * SPB;
+    startTime = now - (vis % loopSec);
+    nextIndex = 0;
+    let catchup = 0;
+    while (eventTime(nextIndex) < now - 0.02 && catchup++ < 10000) nextIndex++;
+    schedule();
+  }
+
+  function boot() {
+    if (booted) return;
+    booted = true;
+    try {
+      buildAudio();
+      setInterval(schedule, 40);
+      const buf = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
+      const src = audioCtx.createBufferSource();
+      src.buffer = buf;
+      src.connect(audioCtx.destination);
+      src.start(0);
+    } catch (err) {
+      booted = false;
+    }
+  }
+
+  function ensureCtx() {
+    if (audioCtx) return audioCtx;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    try {
+      audioCtx = new AC();
+    } catch (err) {
+      audioCtx = null;
+    }
+    return audioCtx;
+  }
+
+  function tryStart() {
+    const ac = ensureCtx();
+    if (!ac) return;
+    if (ac.state === "running") boot();
+    else {
+      const pending = ac.resume();
+      if (pending && pending.then) {
+        pending.then(function () {
+          if (ac.state === "running") boot();
+        }, function () {});
+      }
+    }
+  }
+
+  function frame(now) {
+    draw(now / 1000);
+    requestAnimationFrame(frame);
+  }
+
+  window.addEventListener("pointerdown", tryStart, { passive: true });
+  window.addEventListener("keydown", tryStart);
+  window.addEventListener("touchstart", tryStart, { passive: true });
+  requestAnimationFrame(frame);
+  tryStart();
+  setTimeout(tryStart, 120);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Marble Music Machine</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #140a3a; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: default; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+'use strict';
+
+/* ---------------------------------------------------------------- canvas */
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W = 1, H = 1, S = 1, OX = 0, OY = 0, dpr = 1;
+function resize() {
+  W = innerWidth; H = innerHeight;
+  dpr = Math.min(2, devicePixelRatio || 1);
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  S = Math.min(W, H) / 1000;           // scene is designed in a 1000 x 1000 box
+  OX = (W - 1000 * S) / 2;
+  OY = (H - 1000 * S) / 2;
+}
+addEventListener('resize', resize);
+resize();
+
+/* ------------------------------------------------------------- constants */
+const TAU = Math.PI * 2;
+const R = 13;              // marble radius
+const G = 2200;            // gravity px/s^2
+const BEAT = 0.5;          // seconds per quarter note (120 bpm)
+const RAIL_V = 800;        // speed along the gate rail
+const TRK = R + 4;         // track line offset below marble centre
+
+const HUES = [0, 28, 52, 120, 178, 215, 265, 312];
+const FREQ = [392, 440, 493.88, 523.25, 587.33, 659.25, 698.46, 783.99]; // G4..G5
+const BAR_X = i => 150 + i * 100;
+const BAR_W = 66;
+const BASE_Y = 935;
+const barTop = i => 665 + i * 27;
+
+// Ode to Joy, bar indices: 0=G(low) 3=C 4=D 5=E 6=F 7=G ; [bar, beats]
+const A = [[5,1],[5,1],[6,1],[7,1],[7,1],[6,1],[5,1],[4,1],[3,1],[3,1],[4,1],[5,1]];
+const MELODY = [
+  ...A, [5,1.5],[4,.5],[4,2],
+  ...A, [4,1.5],[3,.5],[3,2],
+  [4,1],[4,1],[5,1],[3,1],[4,1],[5,.5],[6,.5],[5,1],[3,1],[4,1],[5,.5],[6,.5],[5,1],[4,1],[3,1],[0,2],
+  ...A, [4,1.5],[3,.5],[3,2]
+];
+
+/* -------------------------------------------------------------- geometry */
+const HOP   = { x: 500, y0: 100, vy0: 150 };
+const RAMP1 = { x0: 500, y0: 157, x1: 860, y1: 242, v0: 260, a: 480 };
+const ARC1  = { cx: 860, cy: 277, r: 35, a0: -Math.PI / 2, a1: 0 };
+const RAMP2 = { x0: 895, y0: 322, x1: 105, y1: 427, v0: 380, a: 420 };
+const ARC2  = { cx: 105, cy: 462, r: 35, a0: -Math.PI / 2, a1: -Math.PI };
+const RAIL  = { x0: 70, y0: 507, x1: 930, y1: 537 };
+const railY = x => RAIL.y0 + (x - RAIL.x0) * (RAIL.y1 - RAIL.y0) / (RAIL.x1 - RAIL.x0);
+const railAng = Math.atan2(RAIL.y1 - RAIL.y0, RAIL.x1 - RAIL.x0);
+const GATE_HALF = 22;
+
+/* ----------------------------------------------------------------- paths */
+function buildPath(i) {
+  const segs = [], ev = [];
+  let T = 0;
+  const add = (dur, kind, fn, spd) => { segs.push({ t0: T, dur, kind, fn, spd }); T += dur; };
+  const fall = (x, y0, y1, vy0) => {
+    const h = y1 - y0;
+    const d = (-vy0 + Math.sqrt(vy0 * vy0 + 2 * G * h)) / G;
+    add(d, 'fall', u => { const tt = u * d; return [x, y0 + vy0 * tt + 0.5 * G * tt * tt]; }, u => vy0 + G * u * d);
+  };
+  const roll = r => {
+    const dx = r.x1 - r.x0, dy = r.y1 - r.y0, L = Math.hypot(dx, dy);
+    const d = (-r.v0 + Math.sqrt(r.v0 * r.v0 + 2 * r.a * L)) / r.a;
+    add(d, 'roll', u => { const tt = u * d; const s = (r.v0 * tt + 0.5 * r.a * tt * tt) / L; return [r.x0 + dx * s, r.y0 + dy * s]; },
+        u => r.v0 + r.a * u * d);
+    return r.v0 + r.a * d;
+  };
+  const arc = (c, v) => {
+    const d = Math.abs(c.a1 - c.a0) * c.r / v;
+    add(d, 'arc', u => { const a = c.a0 + (c.a1 - c.a0) * u; return [c.cx + Math.cos(a) * c.r, c.cy + Math.sin(a) * c.r]; }, () => v);
+  };
+
+  fall(HOP.x, HOP.y0, RAMP1.y0, HOP.vy0);                 ev.push({ t: T, type: 'tok' });
+  let v = roll(RAMP1);
+  arc(ARC1, v);
+  fall(ARC1.cx + ARC1.r, ARC1.cy, RAMP2.y0, v * 0.45);    ev.push({ t: T, type: 'tok' });
+  v = roll(RAMP2);
+  arc(ARC2, v);
+  fall(ARC2.cx - ARC2.r, ARC2.cy, RAIL.y0, v * 0.35);     ev.push({ t: T, type: 'tok' });
+
+  const gx = BAR_X(i), gy = railY(gx);
+  { const d = (gx - RAIL.x0) / RAIL_V;
+    add(d, 'rail', u => [RAIL.x0 + (gx - RAIL.x0) * u, RAIL.y0 + (gy - RAIL.y0) * u], () => RAIL_V); }
+  const tDrop = T;                                        ev.push({ t: T - 0.1, type: 'click' });
+  fall(gx, gy, barTop(i) - R, 0);
+  const tHit = T;                                         ev.push({ t: T, type: 'hit' });
+  { const y0 = barTop(i) - R, vx = 70, vy = -520;
+    const d = (-vy + Math.sqrt(vy * vy + 2 * G * (1030 - y0))) / G;
+    add(d, 'bounce', u => { const tt = u * d; return [gx + vx * tt, y0 + vy * tt + 0.5 * G * tt * tt]; }, () => 0); }
+
+  ev.sort((a, b) => a.t - b.t);
+  return { segs, ev, T: tHit, tDrop, total: T, bar: i };
+}
+const PATHS = HUES.map((_, i) => buildPath(i));
+
+/* ----------------------------------------------------------------- audio */
+let actx = null, master, noiseBuf, rollGain, rollFilt;
+const ready = () => actx && actx.state === 'running';
+
+function initAudio() {
+  try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return; }
+  const comp = actx.createDynamicsCompressor();
+  comp.threshold.value = -14; comp.ratio.value = 4; comp.knee.value = 10;
+  comp.connect(actx.destination);
+  master = actx.createGain(); master.gain.value = 0.75; master.connect(comp);
+
+  const len = actx.sampleRate * 2;
+  noiseBuf = actx.createBuffer(1, len, actx.sampleRate);
+  const d = noiseBuf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+
+  const src = actx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+  rollFilt = actx.createBiquadFilter(); rollFilt.type = 'bandpass'; rollFilt.frequency.value = 500; rollFilt.Q.value = 0.9;
+  rollGain = actx.createGain(); rollGain.gain.value = 0;
+  src.connect(rollFilt); rollFilt.connect(rollGain); rollGain.connect(master);
+  src.start();
+
+  const events = ['pointerdown', 'keydown', 'touchstart', 'mousedown'];
+  const tryResume = () => { if (actx.state !== 'running') actx.resume().catch(() => {}); };
+  const stopListening = () => events.forEach(e => removeEventListener(e, tryResume));
+  events.forEach(e => addEventListener(e, tryResume, { passive: true }));
+  actx.onstatechange = () => { if (actx.state === 'running') stopListening(); };
+  tryResume();
+}
+initAudio();
+
+function burst(freq, type, dur, gain, Q = 1) {
+  const t0 = actx.currentTime;
+  const s = actx.createBufferSource(); s.buffer = noiseBuf;
+  const f = actx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = Q;
+  const g = actx.createGain();
+  g.gain.setValueAtTime(gain, t0);
+  g.gain.exponentialRampToValueAtTime(0.0005, t0 + dur);
+  s.connect(f); f.connect(g); g.connect(master);
+  s.start(t0, Math.random() * 1.5, dur + 0.05);
+}
+function blip(f0, f1, dur, gain) {
+  const t0 = actx.currentTime;
+  const o = actx.createOscillator(); o.type = 'sine';
+  o.frequency.setValueAtTime(f0, t0);
+  o.frequency.exponentialRampToValueAtTime(f1, t0 + dur);
+  const g = actx.createGain();
+  g.gain.setValueAtTime(gain, t0);
+  g.gain.exponentialRampToValueAtTime(0.0005, t0 + dur);
+  o.connect(g); g.connect(master);
+  o.start(t0); o.stop(t0 + dur + 0.02);
+}
+function sfxTok()   { if (!ready()) return; burst(700, 'lowpass', 0.05, 0.28); blip(210, 90, 0.07, 0.22); }
+function sfxClick() { if (!ready()) return; burst(2500, 'highpass', 0.025, 0.12); blip(1600, 800, 0.03, 0.06); }
+function playNote(i) {
+  if (!ready()) return;
+  const t0 = actx.currentTime, f = FREQ[i];
+  const out = actx.createGain(); out.gain.value = 1; out.connect(master);
+  const parts = [[1, 0.9, 1.5 - i * 0.08], [3.0, 0.28, 0.35], [6.3, 0.09, 0.12], [9.8, 0.04, 0.06]];
+  for (const [m, a, dec] of parts) {
+    const o = actx.createOscillator(); o.type = 'sine'; o.frequency.value = f * m;
+    const g = actx.createGain();
+    g.gain.setValueAtTime(0, t0);
+    g.gain.linearRampToValueAtTime(a, t0 + 0.003);
+    g.gain.setTargetAtTime(0, t0 + 0.003, dec / 4);
+    o.connect(g); g.connect(out);
+    o.start(t0); o.stop(t0 + dec * 1.6 + 0.1);
+  }
+  burst(f * 1.5, 'bandpass', 0.03, 0.25, 6);
+}
+
+/* ----------------------------------------------------------------- state */
+const marbles = [];
+const bars = HUES.map(() => ({ hit: -9 }));
+const particles = [];
+const ripples = [];
+let noteIdx = 0, nextNoteTime = 4.8;
+let lastSpawn = -10;
+const LOOK = 6;
+
+function schedule(t) {
+  while (nextNoteTime < t + LOOK) {
+    const [bar, beats] = MELODY[noteIdx];
+    const p = PATHS[bar];
+    marbles.push({ bar, path: p, spawn: nextNoteTime - p.T, ev: 0, active: false, rot: 0, x: 0, y: 0, kind: '', spd: 0 });
+    nextNoteTime += beats * BEAT;
+    noteIdx++;
+    if (noteIdx >= MELODY.length) { noteIdx = 0; nextNoteTime += BEAT * 2; }
+  }
+}
+
+function hitBar(i, x, y, t) {
+  bars[i].hit = t;
+  playNote(i);
+  const h = HUES[i];
+  for (let k = 0; k < 18; k++) {
+    const a = -Math.PI / 2 + (Math.random() - 0.5) * 2.4;
+    const sp = 150 + Math.random() * 330;
+    particles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 1, decay: 1.2 + Math.random() * 1.2, h, r: 2 + Math.random() * 2.5 });
+  }
+  ripples.push({ x, y, h, t0: t });
+  ripples.push({ x, y, h, t0: t + 0.08 });
+}
+
+function update(t, dt) {
+  let rollSum = 0, rollN = 0, rollSpd = 0;
+  for (let k = marbles.length - 1; k >= 0; k--) {
+    const m = marbles[k], p = m.path;
+    const tau = t - m.spawn;
+    if (tau < 0) continue;
+    if (!m.active) { m.active = true; lastSpawn = Math.max(lastSpawn, m.spawn); }
+    while (m.ev < p.ev.length && p.ev[m.ev].t <= tau) {
+      const e = p.ev[m.ev++];
+      if (e.type === 'tok') sfxTok();
+      else if (e.type === 'click') sfxClick();
+      else if (e.type === 'hit') hitBar(m.bar, BAR_X(m.bar), barTop(m.bar), t);
+    }
+    if (tau >= p.total) { marbles.splice(k, 1); continue; }
+    let seg = p.segs[p.segs.length - 1];
+    for (const s of p.segs) { if (tau < s.t0 + s.dur) { seg = s; break; } }
+    const u = Math.min(1, Math.max(0, (tau - seg.t0) / seg.dur));
+    const pos = seg.fn(u);
+    m.x = pos[0]; m.y = pos[1]; m.kind = seg.kind; m.spd = seg.spd(u);
+    const dir = (seg.kind === 'roll' && seg === p.segs[3]) || seg.kind === 'arc' && seg === p.segs[4] ? -1 : 1;
+    m.rot += dir * m.spd * dt / R;
+    if (seg.kind === 'roll' || seg.kind === 'rail' || seg.kind === 'arc') { rollSum += m.spd / 700; rollN++; rollSpd += m.spd; }
+  }
+  if (ready()) {
+    const now = actx.currentTime;
+    rollGain.gain.setTargetAtTime(Math.min(0.1, rollSum * 0.035), now, 0.06);
+    const avg = rollN ? rollSpd / rollN : 400;
+    rollFilt.frequency.setTargetAtTime(250 + avg * 0.5, now, 0.1);
+  }
+  for (let k = particles.length - 1; k >= 0; k--) {
+    const q = particles[k];
+    q.life -= q.decay * dt;
+    if (q.life <= 0) { particles.splice(k, 1); continue; }
+    q.vy += 1500 * dt; q.x += q.vx * dt; q.y += q.vy * dt;
+  }
+  for (let k = ripples.length - 1; k >= 0; k--) if (t - ripples[k].t0 > 0.55) ripples.splice(k, 1);
+}
+
+/* --------------------------------------------------------------- drawing */
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function strokeTrack(pathFn, hue = 44) {
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.strokeStyle = `hsla(${hue},100%,60%,.22)`; ctx.lineWidth = 24; pathFn(0); ctx.stroke();
+  ctx.strokeStyle = `hsl(${hue},100%,52%)`; ctx.lineWidth = 10; pathFn(0); ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,225,.8)'; ctx.lineWidth = 3; pathFn(-3); ctx.stroke();
+}
+function linePath(x0, y0, x1, y1) {
+  return off => { ctx.beginPath(); ctx.moveTo(x0, y0 + TRK + off); ctx.lineTo(x1, y1 + TRK + off); };
+}
+function arcPath(c) {
+  return off => { ctx.beginPath(); ctx.arc(c.cx, c.cy, c.r + TRK + off, c.a0, c.a1, c.a1 < c.a0); };
+}
+
+function drawMarble(x, y, h, rot) {
+  const g = ctx.createRadialGradient(x - R * 0.4, y - R * 0.4, R * 0.1, x, y, R);
+  g.addColorStop(0, 'rgba(255,255,255,.95)');
+  g.addColorStop(0.3, `hsl(${h},100%,72%)`);
+  g.addColorStop(0.85, `hsl(${h},100%,50%)`);
+  g.addColorStop(1, `hsl(${h},100%,28%)`);
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(x, y, R, 0, TAU); ctx.fill();
+  // inner swirl that spins with the marble
+  ctx.save();
+  ctx.beginPath(); ctx.arc(x, y, R - 1, 0, TAU); ctx.clip();
+  ctx.translate(x, y); ctx.rotate(rot);
+  ctx.strokeStyle = 'rgba(255,255,255,.45)'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(R * 0.25, 0, R * 0.55, 0.3, Math.PI - 0.3); ctx.stroke();
+  ctx.restore();
+  ctx.strokeStyle = 'rgba(255,255,255,.4)'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(x, y, R - 0.75, 0, TAU); ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,.9)';
+  ctx.beginPath(); ctx.arc(x + R * 0.35, y + R * 0.45, R * 0.17, 0, TAU); ctx.fill();
+}
+
+function gateEnv(d) {
+  if (d < -0.1 || d > 0.5) return 0;
+  if (d < 0) { const p = (d + 0.1) / 0.1; return p * p; }
+  if (d < 0.25) return 1;
+  const p = 1 - (d - 0.25) / 0.25; return p * p;
+}
+
+const SLOTS = [[500,94],[488,74],[514,70],[478,52],[502,48],[526,50],[466,32],[490,28],[514,28],[538,30],[562,34]];
+
+function draw(t) {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // background
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#1a0b4a'); bg.addColorStop(0.55, '#2b0c5e'); bg.addColorStop(1, '#3d0a52');
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+
+  ctx.translate(OX, OY); ctx.scale(S, S);
+
+  // ambient glows
+  const glow = (x, y, r, col) => {
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, col); g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g; ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  };
+  glow(120, 920, 560, 'rgba(255,40,180,.32)');
+  glow(900, 120, 520, 'rgba(0,220,255,.28)');
+  glow(500, 620, 420, 'rgba(255,170,0,.14)');
+
+  // posts
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = 'rgba(255,255,255,.16)'; ctx.lineWidth = 6;
+  const post = (x, y0, y1) => { ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke(); };
+  const r1y = x => RAMP1.y0 + (x - RAMP1.x0) * (RAMP1.y1 - RAMP1.y0) / (RAMP1.x1 - RAMP1.x0) + TRK;
+  const r2y = x => RAMP2.y0 + (x - RAMP2.x0) * (RAMP2.y1 - RAMP2.y0) / (RAMP2.x1 - RAMP2.x0) + TRK;
+  post(620, r1y(620), r2y(620)); post(790, r1y(790), r2y(790));
+  post(250, r2y(250), railY(250) + TRK); post(480, r2y(480), railY(480) + TRK); post(720, r2y(720), railY(720) + TRK);
+  post(95, railY(95) + TRK, BASE_Y); post(905, railY(905) + TRK, BASE_Y);
+  post(ARC1.cx + ARC1.r + 10, ARC1.cy, RAMP2.y0 + TRK - 6);
+
+  // tracks
+  strokeTrack(linePath(RAMP1.x0 - 14, RAMP1.y0 - 3.3, RAMP1.x1, RAMP1.y1));
+  strokeTrack(arcPath(ARC1));
+  strokeTrack(linePath(RAMP2.x0, RAMP2.y0, RAMP2.x1, RAMP2.y1));
+  strokeTrack(arcPath(ARC2));
+  // rail pieces between gates
+  let px = RAIL.x0;
+  for (let i = 0; i < 8; i++) {
+    const gx = BAR_X(i) - GATE_HALF;
+    strokeTrack(linePath(px, railY(px), gx, railY(gx)));
+    px = BAR_X(i) + GATE_HALF;
+  }
+  strokeTrack(linePath(px, railY(px), RAIL.x1, RAIL.y1));
+
+  // gates
+  const gates = new Array(8).fill(0);
+  for (const m of marbles) {
+    if (m.spawn > t + 0.2) continue;
+    const d = t - (m.spawn + m.path.tDrop);
+    const e = gateEnv(d);
+    if (e > gates[m.bar]) gates[m.bar] = e;
+  }
+  for (let i = 0; i < 8; i++) {
+    const hx = BAR_X(i) - GATE_HALF, hy = railY(hx) + TRK;
+    const ang = railAng + 1.3 * gates[i];
+    const ex = hx + Math.cos(ang) * GATE_HALF * 2, ey = hy + Math.sin(ang) * GATE_HALF * 2;
+    strokeTrack(off => { ctx.beginPath(); ctx.moveTo(hx, hy + off); ctx.lineTo(ex, ey + off); }, 12);
+    ctx.fillStyle = 'rgba(255,255,255,.85)';
+    ctx.beginPath(); ctx.arc(hx, hy, 4, 0, TAU); ctx.fill();
+  }
+
+  // xylophone base
+  const baseG = ctx.createLinearGradient(0, BASE_Y, 0, BASE_Y + 44);
+  baseG.addColorStop(0, 'hsl(330,95%,58%)'); baseG.addColorStop(1, 'hsl(330,95%,36%)');
+  ctx.fillStyle = baseG; rr(80, BASE_Y, 840, 44, 12); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,.3)'; rr(90, BASE_Y + 4, 820, 6, 3); ctx.fill();
+
+  // marbles behind the bars (after the hit)
+  for (const m of marbles) if (m.active && m.kind === 'bounce') drawMarble(m.x, m.y, HUES[m.bar], m.rot);
+
+  // bars
+  for (let i = 0; i < 8; i++) {
+    const h = HUES[i], x = BAR_X(i), age = t - bars[i].hit;
+    const g = age < 1.4 ? Math.exp(-age * 4) : 0;
+    const xo = age < 1 ? Math.sin(age * 70) * 5 * Math.exp(-age * 5) : 0;
+    const top = barTop(i), hgt = BASE_Y - top + 8;
+    ctx.save();
+    if (g > 0.02) { ctx.shadowBlur = 55 * g; ctx.shadowColor = `hsl(${h},100%,70%)`; }
+    const bg2 = ctx.createLinearGradient(x - BAR_W / 2, 0, x + BAR_W / 2, 0);
+    bg2.addColorStop(0, `hsl(${h},100%,66%)`); bg2.addColorStop(0.5, `hsl(${h},100%,55%)`); bg2.addColorStop(1, `hsl(${h},100%,40%)`);
+    ctx.fillStyle = bg2;
+    rr(x - BAR_W / 2 + xo, top, BAR_W, hgt, 12); ctx.fill();
+    ctx.restore();
+    ctx.fillStyle = 'rgba(255,255,255,.32)';
+    rr(x - BAR_W / 2 + 7 + xo, top + 8, 10, hgt - 16, 5); ctx.fill();
+    ctx.fillStyle = `hsl(${h},80%,22%)`;
+    ctx.beginPath(); ctx.arc(x + xo, top + 20, 5, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.arc(x + xo, BASE_Y - 14, 5, 0, TAU); ctx.fill();
+    if (g > 0.01) {
+      ctx.fillStyle = `rgba(255,255,255,${0.65 * g})`;
+      rr(x - BAR_W / 2 + xo, top, BAR_W, hgt, 12); ctx.fill();
+    }
+  }
+
+  // ripples
+  for (const rp of ripples) {
+    const age = t - rp.t0;
+    if (age < 0) continue;
+    const p = age / 0.5;
+    ctx.strokeStyle = `hsla(${rp.h},100%,78%,${(1 - p) * 0.9})`;
+    ctx.lineWidth = 4 * (1 - p) + 1;
+    ctx.beginPath(); ctx.arc(rp.x, rp.y, 12 + p * 95, 0, TAU); ctx.stroke();
+  }
+
+  // hopper queue
+  const pending = marbles.filter(m => !m.active && m.spawn > t).sort((a, b) => a.spawn - b.spawn);
+  const slide = Math.min(1, Math.max(0, (t - lastSpawn) / 0.14));
+  const ease = 1 - (1 - slide) * (1 - slide);
+  for (let k = Math.min(pending.length, SLOTS.length - 1) - 1; k >= 0; k--) {
+    const a = SLOTS[k], b = SLOTS[k + 1];
+    const x = b[0] + (a[0] - b[0]) * ease, y = b[1] + (a[1] - b[1]) * ease;
+    drawMarble(x, y, HUES[pending[k].bar], k * 1.7);
+  }
+  // funnel glass
+  ctx.beginPath();
+  ctx.moveTo(405, 14); ctx.lineTo(595, 14); ctx.lineTo(519, 96); ctx.lineTo(519, 114); ctx.lineTo(481, 114); ctx.lineTo(481, 96); ctx.closePath();
+  ctx.fillStyle = 'rgba(255,255,255,.1)'; ctx.fill();
+  ctx.lineJoin = 'round'; ctx.lineWidth = 7; ctx.strokeStyle = 'hsl(190,100%,60%)'; ctx.stroke();
+  ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(255,255,255,.7)';
+  ctx.beginPath(); ctx.moveTo(418, 22); ctx.lineTo(488, 96); ctx.stroke();
+  ctx.strokeStyle = 'hsl(44,100%,55%)'; ctx.lineWidth = 5;
+  ctx.beginPath(); ctx.ellipse(500, 116, 24, 7, 0, 0, TAU); ctx.stroke();
+
+  // flying marbles
+  for (const m of marbles) {
+    if (!m.active || m.kind === 'bounce') continue;
+    if (m.kind === 'roll' || m.kind === 'rail') {
+      ctx.fillStyle = 'rgba(0,0,0,.35)';
+      ctx.beginPath(); ctx.ellipse(m.x, m.y + R + 2, R * 0.85, 3.5, 0, 0, TAU); ctx.fill();
+    }
+    drawMarble(m.x, m.y, HUES[m.bar], m.rot);
+  }
+
+  // particles
+  for (const q of particles) {
+    ctx.fillStyle = `hsla(${q.h},100%,72%,${Math.min(1, q.life * 1.5)})`;
+    ctx.beginPath(); ctx.arc(q.x, q.y, q.r * q.life + 0.5, 0, TAU); ctx.fill();
+  }
+}
+
+/* ------------------------------------------------------------------ loop */
+let last = performance.now(), startMs = last;
+function frame(now) {
+  let dt = (now - last) / 1000;
+  last = now;
+  if (dt > 0.25) { startMs += (dt - 1 / 60) * 1000; dt = 1 / 60; } // freeze the clock while the tab was hidden
+  const t = (now - startMs) / 1000;
+  schedule(t);
+  update(t, dt);
+  draw(t);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

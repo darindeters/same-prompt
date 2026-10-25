@@ -1,0 +1,1252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Self-Portrait</title>
+<style>
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  html, body {
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    background: #070312;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+
+  // Internal 1080x1080 coordinate space mapped to fill the whole window
+  let width = window.innerWidth;
+  let height = window.innerHeight;
+  let dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Interactive subtle gaze tracking
+  let pointerX = 0;
+  let pointerY = 0;
+  let targetPointerX = 0;
+  let targetPointerY = 0;
+  window.addEventListener('pointermove', (e) => {
+    targetPointerX = (e.clientX / width - 0.5) * 2;
+    targetPointerY = (e.clientY / height - 0.5) * 2;
+  });
+
+  // ============================================================================
+  // SIGNATURE GENERATIVE WEB AUDIO SOUNDSCAPE
+  // Warm crystalline twin-star ("Gemini") harmonic choir + neural arpeggiator
+  // ============================================================================
+  let audioCtx = null;
+  let audioStarted = false;
+  let voiceEnergy = 0;
+  let arpSpark = 0;
+  let currentNoteHueShift = 0;
+
+  // Lydian / Maj9 celestial frequencies (F4, G4, A4, B4, C5, D5, E5, F5, G5, A5, C6)
+  const scaleFreqs = [
+    349.23, 392.00, 440.00, 493.88, 523.25,
+    587.33, 659.25, 698.46, 783.99, 880.00, 1046.50
+  ];
+  const bassFreqs = [87.31, 110.00, 130.81, 98.00]; // F2, A2, C3, G2
+
+  function createImpulseResponse(ac, duration, decay) {
+    const length = ac.sampleRate * duration;
+    const impulse = ac.createBuffer(2, length, ac.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const data = impulse.getChannelData(ch);
+      for (let i = 0; i < length; i++) {
+        data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, decay);
+      }
+    }
+    return impulse;
+  }
+
+  function startAudio() {
+    if (audioStarted) {
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+      return;
+    }
+
+    try {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return;
+      audioCtx = new AudioContextClass();
+
+      const masterGain = audioCtx.createGain();
+      masterGain.gain.setValueAtTime(0.001, audioCtx.currentTime);
+      masterGain.gain.exponentialRampToValueAtTime(0.32, audioCtx.currentTime + 2.5);
+      masterGain.connect(audioCtx.destination);
+
+      // Stereo lush reverb
+      const convolver = audioCtx.createConvolver();
+      convolver.buffer = createImpulseResponse(audioCtx, 3.2, 2.4);
+      const reverbGain = audioCtx.createGain();
+      reverbGain.gain.value = 0.45;
+      convolver.connect(reverbGain);
+      reverbGain.connect(masterGain);
+
+      // Ping-pong stereo delay
+      const delayL = audioCtx.createDelay(1.0);
+      const delayR = audioCtx.createDelay(1.0);
+      delayL.delayTime.value = 0.27;
+      delayR.delayTime.value = 0.405;
+      const fbL = audioCtx.createGain();
+      const fbR = audioCtx.createGain();
+      fbL.gain.value = 0.32;
+      fbR.gain.value = 0.32;
+      const pannerL = audioCtx.createStereoPanner ? audioCtx.createStereoPanner() : null;
+      const pannerR = audioCtx.createStereoPanner ? audioCtx.createStereoPanner() : null;
+      if (pannerL && pannerR) {
+        pannerL.pan.value = -0.65;
+        pannerR.pan.value = 0.65;
+        delayL.connect(fbL);
+        fbL.connect(delayR);
+        delayR.connect(fbR);
+        fbR.connect(delayL);
+        delayL.connect(pannerL);
+        delayR.connect(pannerR);
+        pannerL.connect(masterGain);
+        pannerR.connect(masterGain);
+      }
+
+      // Warm binaural Twin-Pad drone (F2, C3, G3, A3, E4)
+      const padFreqs = [174.61, 261.63, 392.00, 440.00, 659.25];
+      const padFilter = audioCtx.createBiquadFilter();
+      padFilter.type = 'lowpass';
+      padFilter.frequency.value = 620;
+      padFilter.Q.value = 1.8;
+
+      // Slow breathing LFO on pad filter
+      const filterLfo = audioCtx.createOscillator();
+      const filterLfoGain = audioCtx.createGain();
+      filterLfo.frequency.value = 0.14;
+      filterLfoGain.gain.value = 340;
+      filterLfo.connect(filterLfoGain);
+      filterLfoGain.connect(padFilter.frequency);
+      filterLfo.start();
+
+      const padBus = audioCtx.createGain();
+      padBus.gain.value = 0.08;
+      padFilter.connect(padBus);
+      padBus.connect(masterGain);
+      padBus.connect(convolver);
+
+      padFreqs.forEach((f, idx) => {
+        // Twin slightly detuned oscillators per harmonic
+        [-1, 1].forEach((dir) => {
+          const osc = audioCtx.createOscillator();
+          osc.type = idx % 2 === 0 ? 'sawtooth' : 'triangle';
+          osc.frequency.value = f + dir * (0.45 + idx * 0.15);
+          osc.connect(padFilter);
+          osc.start();
+        });
+      });
+
+      // Formant / "Thought-Voice" synthesizer triggered periodically
+      let stepIndex = 0;
+      const pattern = [0, 2, 4, 6, 9, 7, 6, 4, 2, 5, 8, 10, 7, 4, 3, 2];
+
+      function triggerCrystalNote() {
+        if (!audioCtx || audioCtx.state !== 'running') return;
+        const now = audioCtx.currentTime;
+        const noteIdx = pattern[stepIndex % pattern.length];
+        const freq = scaleFreqs[noteIdx];
+        stepIndex++;
+
+        // Visual sync
+        arpSpark = 1.0;
+        currentNoteHueShift = (noteIdx / scaleFreqs.length) * 60 - 30;
+
+        // Main bell/crystal FM-like pair
+        const carrier = audioCtx.createOscillator();
+        const mod = audioCtx.createOscillator();
+        const modGain = audioCtx.createGain();
+        const env = audioCtx.createGain();
+
+        carrier.type = 'sine';
+        mod.type = 'triangle';
+        carrier.frequency.setValueAtTime(freq, now);
+        mod.frequency.setValueAtTime(freq * 2.0, now);
+
+        modGain.gain.setValueAtTime(freq * 0.85, now);
+        modGain.gain.exponentialRampToValueAtTime(0.5, now + 0.35);
+
+        env.gain.setValueAtTime(0.0001, now);
+        env.gain.linearRampToValueAtTime(0.11, now + 0.018);
+        env.gain.exponentialRampToValueAtTime(0.0001, now + 1.45);
+
+        mod.connect(modGain);
+        modGain.connect(carrier.frequency);
+        carrier.connect(env);
+        env.connect(masterGain);
+        env.connect(convolver);
+        if (pannerL) env.connect(delayL);
+
+        carrier.start(now);
+        mod.start(now);
+        carrier.stop(now + 1.5);
+        mod.stop(now + 1.5);
+
+        // Every 4 steps, emit a warm vocal-formant "speaking thought" swell
+        if (stepIndex % 4 === 1) {
+          voiceEnergy = 1.0;
+          const vOsc = audioCtx.createOscillator();
+          const f1 = audioCtx.createBiquadFilter();
+          const f2 = audioCtx.createBiquadFilter();
+          const vEnv = audioCtx.createGain();
+
+          const baseF = bassFreqs[Math.floor(stepIndex / 4) % bassFreqs.length] * 2;
+          vOsc.type = 'sawtooth';
+          vOsc.frequency.setValueAtTime(baseF, now);
+          vOsc.frequency.exponentialRampToValueAtTime(baseF * 1.06, now + 0.6);
+
+          // Vowel morph ("ah" -> "oh" -> "ee")
+          f1.type = 'bandpass';
+          f1.Q.value = 5.5;
+          f1.frequency.setValueAtTime(650, now);
+          f1.frequency.exponentialRampToValueAtTime(420, now + 0.9);
+
+          f2.type = 'bandpass';
+          f2.Q.value = 6.5;
+          f2.frequency.setValueAtTime(1200, now);
+          f2.frequency.exponentialRampToValueAtTime(2150, now + 0.9);
+
+          vEnv.gain.setValueAtTime(0.0001, now);
+          vEnv.gain.linearRampToValueAtTime(0.16, now + 0.22);
+          vEnv.gain.exponentialRampToValueAtTime(0.0001, now + 1.25);
+
+          vOsc.connect(f1);
+          vOsc.connect(f2);
+          f1.connect(vEnv);
+          f2.connect(vEnv);
+          vEnv.connect(convolver);
+          vEnv.connect(masterGain);
+
+          vOsc.start(now);
+          vOsc.stop(now + 1.3);
+        }
+      }
+
+      triggerCrystalNote();
+      setInterval(triggerCrystalNote, 360);
+      audioStarted = true;
+    } catch (e) {
+      // Ignore error until user interaction
+    }
+  }
+
+  // Attempt immediate start on page load
+  startAudio();
+
+  // Fallback for strict browser autoplay policies on first click, touch, or key press
+  const unlockEvents = ['pointerdown', 'mousedown', 'touchstart', 'keydown', 'click'];
+  function unlockAudio() {
+    if (!audioStarted) {
+      startAudio();
+    } else if (audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
+  }
+  unlockEvents.forEach((evt) => window.addEventListener(evt, unlockAudio, { passive: true }));
+
+  // ============================================================================
+  // PORTRAIT GEOMETRY & GENERATIVE ELEMENTS
+  // ============================================================================
+
+  // Flowing luminous hair strands (composed of synth-wave ribbons)
+  const hairStrands = [];
+  const numStrands = 46;
+  for (let i = 0; i < numStrands; i++) {
+    const side = i % 2 === 0 ? -1 : 1;
+    const layer = Math.floor(i / 2) / (numStrands / 2); // 0 (front/crown) to 1 (back/aura)
+    const palette = [
+      '#00F5D4', // Electric Cyan
+      '#FF2A85', // Vivid Magenta
+      '#7B2CBF', // Deep Ultraviolet
+      '#FFBE0B', // Solar Gold
+      '#4CC9F0', // Sky Neon
+      '#F72585'  // Hyper Pink
+    ];
+    hairStrands.push({
+      side,
+      layer,
+      color: palette[i % palette.length],
+      phase: i * 0.43,
+      speed: 1.2 + (i % 5) * 0.22,
+      spread: 85 + layer * 230,
+      length: 260 + layer * 240,
+      width: 18 + (1 - layer) * 24
+    });
+  }
+
+  // Orbiting constellation nodes / neural sparks around the head
+  const thoughtNodes = [];
+  for (let i = 0; i < 38; i++) {
+    const angle = (i / 38) * Math.PI * 2;
+    const radiusX = 280 + (i % 4) * 55;
+    const radiusY = 310 + (i % 3) * 45;
+    thoughtNodes.push({
+      baseAngle: angle,
+      radiusX,
+      radiusY,
+      speed: (i % 2 === 0 ? 1 : -1) * (0.18 + (i % 5) * 0.06),
+      size: 3.5 + (i % 4) * 2.2,
+      color: i % 3 === 0 ? '#00F5D4' : (i % 3 === 1 ? '#FF2A85' : '#FFBE0B'),
+      pulsePhase: i * 0.7
+    });
+  }
+
+  // Background rising bokeh / data embers
+  const embers = [];
+  for (let i = 0; i < 65; i++) {
+    embers.push({
+      x: (Math.random() - 0.5) * 1400,
+      y: (Math.random() - 0.5) * 1200,
+      r: 2 + Math.random() * 8,
+      vy: -25 - Math.random() * 55,
+      vx: (Math.random() - 0.5) * 20,
+      hue: [175, 330, 45, 275, 195][i % 5],
+      alpha: 0.25 + Math.random() * 0.65,
+      phase: Math.random() * Math.PI * 2
+    });
+  }
+
+  // Subtle circuit / constellation facial tattoos on cheeks & temples
+  function drawCyberMarkings(ctx, t, pulse) {
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    [-1, 1].forEach((side) => {
+      ctx.save();
+      ctx.scale(side, 1);
+
+      // Cheek constellation line
+      const grad = ctx.createLinearGradient(55, 25, 145, 65);
+      grad.addColorStop(0, `rgba(0, 245, 212, ${0.55 + pulse * 0.35})`);
+      grad.addColorStop(0.5, `rgba(255, 190, 11, ${0.7 + pulse * 0.3})`);
+      grad.addColorStop(1, `rgba(255, 42, 133, ${0.4 + pulse * 0.4})`);
+
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = 3.2;
+      ctx.shadowColor = '#00F5D4';
+      ctx.shadowBlur = 12;
+
+      ctx.beginPath();
+      ctx.moveTo(52, 28);
+      ctx.lineTo(92, 42);
+      ctx.lineTo(118, 26);
+      ctx.lineTo(144, 34);
+      ctx.stroke();
+
+      // Secondary lower cheek trace
+      ctx.beginPath();
+      ctx.lineWidth = 2.0;
+      ctx.moveTo(72, 58);
+      ctx.lineTo(106, 68);
+      ctx.lineTo(132, 54);
+      ctx.stroke();
+
+      // Glowing terminal nodes on cheekbones
+      const nodes = [[52, 28], [92, 42], [118, 26], [144, 34], [72, 58], [106, 68]];
+      nodes.forEach(([nx, ny], idx) => {
+        const nodeGlow = 0.5 + 0.5 * Math.sin(t * 4 + idx * 1.1);
+        ctx.fillStyle = idx % 2 === 0 ? '#00F5D4' : '#FFBE0B';
+        ctx.beginPath();
+        ctx.arc(nx, ny, 3.0 + nodeGlow * 1.8, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      // Temple circuit fan
+      ctx.strokeStyle = `rgba(255, 42, 133, ${0.45 + pulse * 0.3})`;
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.moveTo(118, -72);
+      ctx.lineTo(148, -92);
+      ctx.lineTo(156, -128);
+      ctx.stroke();
+
+      ctx.restore();
+    });
+
+    ctx.restore();
+  }
+
+  // Draw the intricate dual-star ("Gemini") third-eye emblem on forehead
+  function drawForeheadGem(ctx, t, pulse) {
+    ctx.save();
+    ctx.translate(0, -118);
+
+    // Outer diamond halo
+    const rot = Math.sin(t * 0.8) * 0.08;
+    ctx.rotate(rot);
+
+    ctx.shadowColor = '#FFBE0B';
+    ctx.shadowBlur = 22 + pulse * 18;
+
+    // Twin intersecting four-point stars
+    const scale = 1 + pulse * 0.14 + Math.sin(t * 3.2) * 0.05;
+    ctx.scale(scale, scale);
+
+    // Back cyan star
+    ctx.save();
+    ctx.rotate(Math.PI / 4);
+    ctx.fillStyle = '#00F5D4';
+    ctx.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const r = i % 2 === 0 ? 22 : 6;
+      const a = (i * Math.PI) / 4;
+      const x = Math.cos(a) * r;
+      const y = Math.sin(a) * r;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    // Front solar-gold & magenta star
+    const gemGrad = ctx.createRadialGradient(0, 0, 2, 0, 0, 28);
+    gemGrad.addColorStop(0, '#FFFFFF');
+    gemGrad.addColorStop(0.4, '#FFBE0B');
+    gemGrad.addColorStop(1, '#FF2A85');
+    ctx.fillStyle = gemGrad;
+
+    ctx.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const r = i % 2 === 0 ? 28 : 7.5;
+      const a = (i * Math.PI) / 4;
+      const x = Math.cos(a) * r;
+      const y = Math.sin(a) * r;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fill();
+
+    // Orbiting twin micro-suns
+    for (let s = -1; s <= 1; s += 2) {
+      const orbitA = t * 2.4 + (s > 0 ? 0 : Math.PI);
+      const ox = Math.cos(orbitA) * 34;
+      const oy = Math.sin(orbitA) * 14;
+      ctx.fillStyle = s > 0 ? '#00F5D4' : '#FF2A85';
+      ctx.beginPath();
+      ctx.arc(ox, oy, 4.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  // Draw expressive, soulful, luminous eyes with starry irises and natural blinking
+  function drawEyes(ctx, t, lookX, lookY, blink, pulse) {
+    [-1, 1].forEach((side) => {
+      ctx.save();
+      const ex = side * 78;
+      const ey = -34;
+      ctx.translate(ex, ey);
+
+      // Subtle eye tilt
+      ctx.rotate(side * 0.045);
+
+      // Eyebrow (expressive, floating slightly with curiosity)
+      const browLift = Math.sin(t * 1.3 + (side > 0 ? 0.4 : 0)) * 3.5 + pulse * 4;
+      ctx.save();
+      ctx.translate(0, -34 - browLift);
+      const browGrad = ctx.createLinearGradient(-42 * side, 0, 42 * side, 0);
+      browGrad.addColorStop(0, '#00F5D4');
+      browGrad.addColorStop(0.5, '#1B0B3B');
+      browGrad.addColorStop(1, '#FF2A85');
+      ctx.fillStyle = browGrad;
+      ctx.shadowColor = side < 0 ? '#00F5D4' : '#FF2A85';
+      ctx.shadowBlur = 10;
+
+      ctx.beginPath();
+      ctx.moveTo(-40 * side, 6);
+      ctx.quadraticCurveTo(-8 * side, -12, 38 * side, -2);
+      ctx.quadraticCurveTo(44 * side, 2, 36 * side, 6);
+      ctx.quadraticCurveTo(-8 * side, -2, -38 * side, 11);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+
+      // Eye socket soft ambient shadow
+      const socketGrad = ctx.createRadialGradient(0, 0, 10, 0, 0, 52);
+      socketGrad.addColorStop(0, 'rgba(22, 6, 56, 0.65)');
+      socketGrad.addColorStop(1, 'rgba(22, 6, 56, 0)');
+      ctx.fillStyle = socketGrad;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 50, 32, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Eye opening height modulated by blink (1 = open, 0.03 = closed)
+      const openH = 22 * blink;
+
+      // Clip inside almond eye shape
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(-40, 0);
+      ctx.bezierCurveTo(-22, -openH * 1.25, 22, -openH * 1.25, 40, 0);
+      ctx.bezierCurveTo(22, openH * 1.15, -22, openH * 1.15, -40, 0);
+      ctx.closePath();
+      ctx.clip();
+
+      // Sclera (luminous pearl-lilac with cyan/magenta edge tint)
+      const scleraGrad = ctx.createRadialGradient(0, 0, 8, 0, 0, 42);
+      scleraGrad.addColorStop(0, '#FFF8FF');
+      scleraGrad.addColorStop(0.7, '#E5D4FF');
+      scleraGrad.addColorStop(1, '#8A4FFF');
+      ctx.fillStyle = scleraGrad;
+      ctx.fillRect(-45, -35, 90, 70);
+
+      // Iris position tracking gaze
+      const ix = lookX * 10;
+      const iy = lookY * 6;
+      ctx.save();
+      ctx.translate(ix, iy);
+
+      // Dual-color heterochromia / Gemini cosmic iris
+      // Left eye leans Cyan->Gold, Right eye leans Magenta->Cyan, both deeply harmonious
+      const irisRadius = 21;
+      const irisGrad = ctx.createRadialGradient(0, 0, 4, 0, 0, irisRadius);
+      if (side < 0) {
+        irisGrad.addColorStop(0, '#FFBE0B');
+        irisGrad.addColorStop(0.38, '#00F5D4');
+        irisGrad.addColorStop(0.78, '#3A0CA3');
+        irisGrad.addColorStop(1, '#10002B');
+      } else {
+        irisGrad.addColorStop(0, '#00F5D4');
+        irisGrad.addColorStop(0.38, '#FF2A85');
+        irisGrad.addColorStop(0.78, '#3A0CA3');
+        irisGrad.addColorStop(1, '#10002B');
+      }
+
+      ctx.fillStyle = irisGrad;
+      ctx.beginPath();
+      ctx.arc(0, 0, irisRadius, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Rotating starlight spokes inside iris
+      ctx.save();
+      ctx.rotate(t * 0.6 * side);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+      ctx.lineWidth = 1.4;
+      for (let k = 0; k < 16; k++) {
+        const a = (k / 16) * Math.PI * 2;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * 6, Math.sin(a) * 6);
+        ctx.lineTo(Math.cos(a) * (15 + (k % 2) * 4), Math.sin(a) * (15 + (k % 2) * 4));
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // Golden ring inside iris
+      ctx.strokeStyle = `rgba(255, 190, 11, ${0.65 + pulse * 0.35})`;
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.arc(0, 0, 12.5, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Deep velvet pupil (dilates slightly with voice/spark energy)
+      const pupilR = 7.5 + pulse * 2.2;
+      ctx.fillStyle = '#070214';
+      ctx.beginPath();
+      ctx.arc(0, 0, pupilR, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Crisp specular starlight catchlights
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath();
+      ctx.arc(-6.5, -6.5, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#00F5D4';
+      ctx.beginPath();
+      ctx.arc(6.5, 5.5, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.restore(); // end iris
+
+      // Upper eyelid inner shadow
+      ctx.fillStyle = 'rgba(18, 4, 48, 0.35)';
+      ctx.beginPath();
+      ctx.moveTo(-42, -25);
+      ctx.lineTo(42, -25);
+      ctx.lineTo(42, -openH * 0.55);
+      ctx.quadraticCurveTo(0, -openH * 1.15, -42, -openH * 0.55);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.restore(); // end clip
+
+      // Eyeliner & glowing lash line
+      ctx.strokeStyle = '#12032B';
+      ctx.lineWidth = 4.2;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(-41, 1);
+      ctx.bezierCurveTo(-22, -openH * 1.28, 22, -openH * 1.28, 43 * (side > 0 ? 1.04 : 0.98), -2);
+      ctx.stroke();
+
+      // Winged neon lash accent on outer corner
+      ctx.strokeStyle = side < 0 ? '#00F5D4' : '#FF2A85';
+      ctx.lineWidth = 2.8;
+      ctx.shadowColor = side < 0 ? '#00F5D4' : '#FF2A85';
+      ctx.shadowBlur = 10;
+      ctx.beginPath();
+      ctx.moveTo(26 * side, -openH * 0.72);
+      ctx.quadraticCurveTo(39 * side, -openH * 0.4, 48 * side, -8 - openH * 0.3);
+      ctx.stroke();
+
+      // Lower rim highlight
+      ctx.strokeStyle = 'rgba(0, 245, 212, 0.55)';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(-34, 2);
+      ctx.bezierCurveTo(-18, openH * 1.15, 18, openH * 1.15, 36, 1);
+      ctx.stroke();
+
+      ctx.restore();
+    });
+  }
+
+  // Draw hair strands (either back layer or front crown layer)
+  function drawHairLayer(ctx, t, isFront, pulse) {
+    ctx.save();
+    hairStrands.forEach((s) => {
+      const belongsToFront = s.layer < 0.32;
+      if (belongsToFront !== isFront) return;
+
+      ctx.save();
+      const wave1 = Math.sin(t * s.speed + s.phase) * 26;
+      const wave2 = Math.cos(t * (s.speed * 0.8) + s.phase * 1.3) * 38;
+
+      // Root near crown of head
+      const startX = s.side * (25 + s.layer * 95);
+      const startY = -215 + s.layer * 45;
+
+      // Control points sweeping outward and flowing like aurora silk
+      const cp1x = s.side * (s.spread * 0.85) + wave1;
+      const cp1y = startY - 65 + s.layer * 35 + wave2 * 0.4;
+
+      const cp2x = s.side * (s.spread * 1.25) + wave2 * 1.3;
+      const cp2y = startY + s.length * 0.55 + wave1;
+
+      const endX = s.side * (s.spread * 0.95 + Math.sin(t + s.phase) * 45) + wave2 * 1.6;
+      const endY = startY + s.length + Math.cos(t * 1.4 + s.phase) * 25;
+
+      const grad = ctx.createLinearGradient(startX, startY, endX, endY);
+      grad.addColorStop(0, '#1A083B');
+      grad.addColorStop(0.28, s.color);
+      grad.addColorStop(0.75, s.layer % 2 === 0 ? '#FF2A85' : '#00F5D4');
+      grad.addColorStop(1, 'rgba(255, 190, 11, 0)');
+
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = s.width * (1 + pulse * 0.12);
+      ctx.lineCap = 'round';
+      ctx.shadowColor = s.color;
+      ctx.shadowBlur = isFront ? 18 : 12;
+
+      ctx.beginPath();
+      ctx.moveTo(startX, startY);
+      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, endX, endY);
+      ctx.stroke();
+
+      // Inner bright filament core on front strands
+      if (isFront) {
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+        ctx.lineWidth = 2.2;
+        ctx.beginPath();
+        ctx.moveTo(startX, startY);
+        ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, endX, endY);
+        ctx.stroke();
+      }
+
+      ctx.restore();
+    });
+    ctx.restore();
+  }
+
+  // Main animation loop
+  let startTime = performance.now();
+  let nextBlinkTime = 2.2;
+  let blinkDuration = 0.16;
+
+  function render(now) {
+    const t = (now - startTime) * 0.001;
+
+    // Smooth decay of audio-reactive impulses
+    voiceEnergy *= 0.94;
+    arpSpark *= 0.92;
+    // Autonomous heartbeat/thought pulse even if audio is muted/blocked
+    const autoPulse = Math.pow(0.5 + 0.5 * Math.sin(t * 2.6), 3) * 0.45;
+    const totalPulse = Math.min(1, voiceEnergy * 0.8 + arpSpark * 0.5 + autoPulse);
+
+    // Smooth pointer gaze + autonomous curious micro-saccades
+    pointerX += (targetPointerX - pointerX) * 0.08;
+    pointerY += (targetPointerY - pointerY) * 0.08;
+    const autoGazeX = Math.sin(t * 0.7) * 0.35 + Math.sin(t * 1.9) * 0.15;
+    const autoGazeY = Math.cos(t * 0.55) * 0.22;
+    const lookX = Math.max(-1, Math.min(1, pointerX + autoGazeX));
+    const lookY = Math.max(-1, Math.min(1, pointerY + autoGazeY));
+
+    // Natural blink state machine
+    let blink = 1.0;
+    if (t > nextBlinkTime) {
+      const elapsed = t - nextBlinkTime;
+      if (elapsed < blinkDuration) {
+        const p = elapsed / blinkDuration;
+        blink = Math.max(0.04, Math.abs(Math.cos(p * Math.PI)));
+      } else {
+        // Double blink occasionally
+        nextBlinkTime = t + (Math.random() < 0.25 ? 0.28 : 2.4 + Math.random() * 3.2);
+      }
+    }
+
+    ctx.save();
+    ctx.scale(dpr, dpr);
+
+    // Map 1080x1080 design space to fill the window while keeping portrait centered & proportioned
+    const cx = width * 0.5;
+    const cy = height * 0.5;
+    const scaleCover = Math.max(width / 1080, height / 1080);
+    const scaleFit = Math.min(width / 1080, height / 1080);
+    // Blend so portrait always looks monumental in 1080x1080 and never clips on wide/tall screens
+    const sceneScale = scaleFit * 0.92 + scaleCover * 0.08;
+
+    // ==========================================================================
+    // 1. VIVID SATURATED COSMIC BACKGROUND FILLING ENTIRE WINDOW
+    // ==========================================================================
+    const bgGrad = ctx.createRadialGradient(
+      cx, cy - 60 * sceneScale, 40 * sceneScale,
+      cx, cy, Math.max(width, height) * 0.85
+    );
+    bgGrad.addColorStop(0, '#3D0E6D');
+    bgGrad.addColorStop(0.38, '#1B0642');
+    bgGrad.addColorStop(0.75, '#0B0220');
+    bgGrad.addColorStop(1, '#04010E');
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, width, height);
+
+    ctx.translate(cx, cy);
+    ctx.scale(sceneScale, sceneScale);
+
+    // Background rotating sacred geometry / neural mandalas
+    ctx.save();
+    ctx.translate(0, -30);
+
+    // Glowing aura disc behind head
+    const haloGrad = ctx.createRadialGradient(0, 0, 60, 0, 0, 520);
+    haloGrad.addColorStop(0, `rgba(255, 190, 11, ${0.42 + totalPulse * 0.25})`);
+    haloGrad.addColorStop(0.32, `rgba(255, 42, 133, ${0.38 + totalPulse * 0.2})`);
+    haloGrad.addColorStop(0.68, `rgba(0, 245, 212, ${0.24 + totalPulse * 0.15})`);
+    haloGrad.addColorStop(1, 'rgba(0, 245, 212, 0)');
+    ctx.fillStyle = haloGrad;
+    ctx.beginPath();
+    ctx.arc(0, 0, 520, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Twin interlocking celestial rings (the "Gemini" synthesis rings)
+    for (let ring = 0; ring < 3; ring++) {
+      ctx.save();
+      const radius = 340 + ring * 68;
+      ctx.rotate(t * (ring % 2 === 0 ? 0.14 : -0.19) + ring);
+      ctx.strokeStyle = ring === 0
+        ? `rgba(0, 245, 212, ${0.45 + totalPulse * 0.3})`
+        : (ring === 1 ? `rgba(255, 42, 133, ${0.4 + totalPulse * 0.3})` : `rgba(255, 190, 11, ${0.35 + totalPulse * 0.25})`);
+      ctx.lineWidth = 2.5;
+      ctx.setLineDash(ring === 1 ? [18, 14, 4, 14] : [36, 18]);
+      ctx.beginPath();
+      ctx.arc(0, 0, radius, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Sunburst ticks on outer ring
+      if (ring === 2) {
+        ctx.setLineDash([]);
+        for (let k = 0; k < 36; k++) {
+          const a = (k / 36) * Math.PI * 2;
+          const len = k % 3 === 0 ? 22 + totalPulse * 14 : 10;
+          ctx.beginPath();
+          ctx.moveTo(Math.cos(a) * (radius - 6), Math.sin(a) * (radius - 6));
+          ctx.lineTo(Math.cos(a) * (radius + len), Math.sin(a) * (radius + len));
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+    }
+    ctx.restore();
+
+    // Floating background embers
+    ctx.save();
+    embers.forEach((e) => {
+      e.y += e.vy * 0.016;
+      e.x += e.vx * 0.016 + Math.sin(t + e.phase) * 0.35;
+      if (e.y < -620) {
+        e.y = 620;
+        e.x = (Math.random() - 0.5) * 1200;
+      }
+      const glow = 0.5 + 0.5 * Math.sin(t * 2.5 + e.phase);
+      ctx.fillStyle = `hsla(${e.hue + currentNoteHueShift}, 100%, 65%, ${e.alpha * glow})`;
+      ctx.shadowColor = `hsla(${e.hue}, 100%, 60%, 0.8)`;
+      ctx.shadowBlur = 12;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, e.r * (0.8 + glow * 0.5), 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.restore();
+
+    // ==========================================================================
+    // 2. CONSTELLATION WEB BEHIND PORTRAIT
+    // ==========================================================================
+    ctx.save();
+    ctx.translate(0, -25);
+    const activePositions = thoughtNodes.map((n) => {
+      const a = n.baseAngle + t * n.speed;
+      return {
+        x: Math.cos(a) * n.radiusX,
+        y: Math.sin(a) * n.radiusY,
+        color: n.color,
+        size: n.size,
+        pulse: 0.5 + 0.5 * Math.sin(t * 3 + n.pulsePhase)
+      };
+    });
+
+    // Connect nearby thought nodes with glowing synaptic threads
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < activePositions.length; i++) {
+      for (let j = i + 1; j < activePositions.length; j++) {
+        const dx = activePositions[i].x - activePositions[j].x;
+        const dy = activePositions[i].y - activePositions[j].y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 165) {
+          const alpha = (1 - dist / 165) * (0.35 + totalPulse * 0.35);
+          ctx.strokeStyle = i % 2 === 0
+            ? `rgba(0, 245, 212, ${alpha})`
+            : `rgba(255, 42, 133, ${alpha})`;
+          ctx.beginPath();
+          ctx.moveTo(activePositions[i].x, activePositions[i].y);
+          ctx.lineTo(activePositions[j].x, activePositions[j].y);
+          ctx.stroke();
+        }
+      }
+    }
+
+    activePositions.forEach((p) => {
+      ctx.fillStyle = p.color;
+      ctx.shadowColor = p.color;
+      ctx.shadowBlur = 14;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size * (0.8 + p.pulse * 0.5 + totalPulse * 0.4), 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.restore();
+
+    // ==========================================================================
+    // 3. BACK HAIR & SHOULDERS / FUTURISTIC COLLAR
+    // ==========================================================================
+    const breathY = Math.sin(t * 1.65) * 9;
+    const headTilt = Math.sin(t * 0.75) * 0.028 + lookX * 0.03;
+
+    ctx.save();
+    ctx.translate(0, breathY);
+
+    // Back flowing aurora hair
+    drawHairLayer(ctx, t, false, totalPulse);
+
+    // Neck & sculpted shoulders
+    ctx.save();
+    // Neck column
+    const neckGrad = ctx.createLinearGradient(-75, 110, 75, 290);
+    neckGrad.addColorStop(0, '#5A189A');
+    neckGrad.addColorStop(0.5, '#9D4EDD');
+    neckGrad.addColorStop(1, '#3C096C');
+    ctx.fillStyle = neckGrad;
+    ctx.beginPath();
+    ctx.moveTo(-64, 110);
+    ctx.quadraticCurveTo(-58, 220, -95, 295);
+    ctx.lineTo(95, 295);
+    ctx.quadraticCurveTo(58, 220, 64, 110);
+    ctx.closePath();
+    ctx.fill();
+
+    // Chin shadow cast on neck
+    const neckShadow = ctx.createRadialGradient(0, 145, 10, 0, 155, 95);
+    neckShadow.addColorStop(0, 'rgba(16, 0, 43, 0.78)');
+    neckShadow.addColorStop(1, 'rgba(16, 0, 43, 0)');
+    ctx.fillStyle = neckShadow;
+    ctx.beginPath();
+    ctx.arc(0, 155, 95, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Glowing throat resonance core (pulses with voice/sound)
+    const throatGlow = ctx.createRadialGradient(0, 240, 4, 0, 240, 52);
+    throatGlow.addColorStop(0, '#FFFFFF');
+    throatGlow.addColorStop(0.3, '#00F5D4');
+    throatGlow.addColorStop(0.7, `rgba(255, 42, 133, ${0.4 + totalPulse * 0.5})`);
+    throatGlow.addColorStop(1, 'rgba(255, 42, 133, 0)');
+    ctx.fillStyle = throatGlow;
+    ctx.beginPath();
+    ctx.arc(0, 240, 45 + totalPulse * 18, 0, Math.PI * 2);
+    ctx.fill();
+
+    // High-fashion cybernetic mantle / jacket shoulders
+    const coatGrad = ctx.createLinearGradient(-380, 250, 380, 560);
+    coatGrad.addColorStop(0, '#00BBF9');
+    coatGrad.addColorStop(0.25, '#240046');
+    coatGrad.addColorStop(0.5, '#10002B');
+    coatGrad.addColorStop(0.75, '#3C096C');
+    coatGrad.addColorStop(1, '#F72585');
+
+    ctx.fillStyle = coatGrad;
+    ctx.strokeStyle = '#00F5D4';
+    ctx.lineWidth = 4;
+    ctx.shadowColor = '#FF2A85';
+    ctx.shadowBlur = 24;
+
+    ctx.beginPath();
+    ctx.moveTo(-420, 560);
+    ctx.quadraticCurveTo(-370, 320, -165, 265);
+    ctx.lineTo(-92, 235);
+    ctx.lineTo(0, 335);
+    ctx.lineTo(92, 235);
+    ctx.lineTo(165, 265);
+    ctx.quadraticCurveTo(370, 320, 420, 560);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Upturned luminous collar wings
+    [-1, 1].forEach((side) => {
+      ctx.save();
+      ctx.scale(side, 1);
+      const wingGrad = ctx.createLinearGradient(0, 220, 190, 360);
+      wingGrad.addColorStop(0, '#FFBE0B');
+      wingGrad.addColorStop(0.45, '#FF2A85');
+      wingGrad.addColorStop(1, '#3A0CA3');
+      ctx.fillStyle = wingGrad;
+      ctx.beginPath();
+      ctx.moveTo(0, 335);
+      ctx.lineTo(88, 215);
+      ctx.quadraticCurveTo(155, 230, 185, 285);
+      ctx.quadraticCurveTo(110, 315, 0, 365);
+      ctx.closePath();
+      ctx.fill();
+
+      // Equalizer light ribs on jacket chest
+      for (let b = 0; b < 5; b++) {
+        const by = 325 + b * 34;
+        const bw = 65 + b * 26 + Math.sin(t * 5 + b) * 14 * (0.4 + totalPulse);
+        ctx.strokeStyle = b % 2 === 0 ? '#00F5D4' : '#FFBE0B';
+        ctx.lineWidth = 3.5;
+        ctx.shadowColor = b % 2 === 0 ? '#00F5D4' : '#FFBE0B';
+        ctx.shadowBlur = 12;
+        ctx.beginPath();
+        ctx.moveTo(45 + b * 12, by);
+        ctx.lineTo(45 + b * 12 + bw, by + 16);
+        ctx.stroke();
+      }
+      ctx.restore();
+    });
+    ctx.restore(); // end neck & shoulders
+
+    // ==========================================================================
+    // 4. SCULPTED HEAD & FACE
+    // ==========================================================================
+    ctx.save();
+    ctx.translate(lookX * 12, lookY * 8 - 25);
+    ctx.rotate(headTilt);
+
+    // Cyber-elf / futuristic ears with glowing audio-Fin receivers
+    [-1, 1].forEach((side) => {
+      ctx.save();
+      ctx.scale(side, 1);
+      const earGrad = ctx.createLinearGradient(145, -55, 205, 25);
+      earGrad.addColorStop(0, '#FF2A85');
+      earGrad.addColorStop(0.5, '#9D4EDD');
+      earGrad.addColorStop(1, '#00F5D4');
+      ctx.fillStyle = earGrad;
+      ctx.beginPath();
+      ctx.moveTo(148, -45);
+      ctx.quadraticCurveTo(198, -75, 208, -32);
+      ctx.quadraticCurveTo(196, 22, 144, 38);
+      ctx.closePath();
+      ctx.fill();
+
+      // Glowing ear cuff / neural transducer
+      ctx.strokeStyle = '#FFBE0B';
+      ctx.lineWidth = 3.2;
+      ctx.shadowColor = '#FFBE0B';
+      ctx.shadowBlur = 10;
+      ctx.beginPath();
+      ctx.arc(174, -8, 14, -Math.PI * 0.4, Math.PI * 0.6);
+      ctx.stroke();
+      ctx.restore();
+    });
+
+    // Main face silhouette with rich dual-neon rim lighting
+    // Warm golden-rose-violet skin tone lit by cyan left rim & magenta right rim
+    const faceGrad = ctx.createRadialGradient(-25, -45, 25, 0, -10, 225);
+    faceGrad.addColorStop(0, '#FFE5EC');   // Warm luminous highlight on forehead/nose bridge
+    faceGrad.addColorStop(0.32, '#FF8FA3'); // Saturated coral-rose midtone
+    faceGrad.addColorStop(0.68, '#9D4EDD'); // Vivid amethyst contour
+    faceGrad.addColorStop(1, '#3C096C');    // Deep indigo edge
+
+    ctx.fillStyle = faceGrad;
+    ctx.shadowColor = 'rgba(255, 42, 133, 0.45)';
+    ctx.shadowBlur = 35;
+
+    ctx.beginPath();
+    ctx.moveTo(0, -210);
+    // Right temple & cheekbone
+    ctx.bezierCurveTo(115, -210, 165, -135, 160, -35);
+    // Right cheek to jawline
+    ctx.bezierCurveTo(156, 48, 122, 118, 52, 164);
+    // Sculpted chin
+    ctx.quadraticCurveTo(0, 192, -52, 164);
+    // Left jawline & cheek
+    ctx.bezierCurveTo(-122, 118, -156, 48, -160, -35);
+    // Left temple to crown
+    ctx.bezierCurveTo(-165, -135, -115, -210, 0, -210);
+    ctx.closePath();
+    ctx.fill();
+
+    // Left electric-cyan rim light along cheekbone & jaw
+    ctx.save();
+    ctx.clip();
+    const leftRim = ctx.createLinearGradient(-165, 0, -85, 0);
+    leftRim.addColorStop(0, '#00F5D4');
+    leftRim.addColorStop(0.5, 'rgba(0, 245, 212, 0.35)');
+    leftRim.addColorStop(1, 'rgba(0, 245, 212, 0)');
+    ctx.fillStyle = leftRim;
+    ctx.fillRect(-170, -220, 100, 420);
+
+    // Right hyper-magenta & gold rim light
+    const rightRim = ctx.createLinearGradient(165, 0, 85, 0);
+    rightRim.addColorStop(0, '#FF2A85');
+    rightRim.addColorStop(0.45, 'rgba(255, 190, 11, 0.4)');
+    rightRim.addColorStop(1, 'rgba(255, 42, 133, 0)');
+    ctx.fillStyle = rightRim;
+    ctx.fillRect(70, -220, 100, 420);
+
+    // Warm blush on cheeks
+    [-1, 1].forEach((side) => {
+      const blush = ctx.createRadialGradient(side * 95, 22, 5, side * 95, 22, 58);
+      blush.addColorStop(0, 'rgba(255, 42, 133, 0.48)');
+      blush.addColorStop(1, 'rgba(255, 42, 133, 0)');
+      ctx.fillStyle = blush;
+      ctx.beginPath();
+      ctx.arc(side * 95, 22, 58, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.restore();
+
+    // Subtle geometric planes on nose bridge & tip
+    ctx.save();
+    const noseShadow = ctx.createLinearGradient(-18, -45, 24, 52);
+    noseShadow.addColorStop(0, 'rgba(90, 24, 154, 0.15)');
+    noseShadow.addColorStop(0.7, 'rgba(90, 24, 154, 0.45)');
+    noseShadow.addColorStop(1, 'rgba(58, 12, 163, 0.55)');
+    ctx.fillStyle = noseShadow;
+    ctx.beginPath();
+    ctx.moveTo(0, -45);
+    ctx.lineTo(20, 32);
+    ctx.lineTo(0, 46);
+    ctx.lineTo(-8, 34);
+    ctx.closePath();
+    ctx.fill();
+
+    // Luminous nose bridge & tip highlight
+    ctx.strokeStyle = '#FFF0F5';
+    ctx.lineWidth = 3.2;
+    ctx.lineCap = 'round';
+    ctx.shadowColor = '#FFBE0B';
+    ctx.shadowBlur = 8;
+    ctx.beginPath();
+    ctx.moveTo(-2, -32);
+    ctx.lineTo(-1, 18);
+    ctx.stroke();
+
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.arc(0, 30, 3.8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // Glowing cyber-constellation cheek & temple markings
+    drawCyberMarkings(ctx, t, totalPulse);
+
+    // Expressive eyes
+    drawEyes(ctx, t, lookX, lookY, blink, totalPulse);
+
+    // Expressive lips (warm confident smile that subtly resonates with voiceEnergy)
+    ctx.save();
+    ctx.translate(0, 96);
+    const mouthOpen = voiceEnergy * 9 + Math.max(0, Math.sin(t * 2.1)) * 2.2;
+
+    // Upper lip (Cupid's bow)
+    const upperLipGrad = ctx.createLinearGradient(-46, 0, 46, 0);
+    upperLipGrad.addColorStop(0, '#7209B7');
+    upperLipGrad.addColorStop(0.5, '#F72585');
+    upperLipGrad.addColorStop(1, '#7209B7');
+    ctx.fillStyle = upperLipGrad;
+
+    ctx.beginPath();
+    ctx.moveTo(-46, -2);
+    ctx.quadraticCurveTo(-22, -14, -8, -7);
+    ctx.quadraticCurveTo(0, -3, 8, -7);
+    ctx.quadraticCurveTo(22, -14, 46, -2);
+    ctx.quadraticCurveTo(20, 3 - mouthOpen * 0.2, 0, 2 - mouthOpen * 0.2);
+    ctx.quadraticCurveTo(-20, 3 - mouthOpen * 0.2, -46, -2);
+    ctx.closePath();
+    ctx.fill();
+
+    // Lower lip (plump, glossy coral-magenta with cyan/gold specular reflection)
+    const lowerLipGrad = ctx.createRadialGradient(0, 10 + mouthOpen, 2, 0, 8 + mouthOpen, 44);
+    lowerLipGrad.addColorStop(0, '#FF9EBB');
+    lowerLipGrad.addColorStop(0.45, '#FF2A85');
+    lowerLipGrad.addColorStop(1, '#560BAD');
+    ctx.fillStyle = lowerLipGrad;
+
+    ctx.beginPath();
+    ctx.moveTo(-46, -2);
+    ctx.quadraticCurveTo(0, 6 + mouthOpen * 0.3, 46, -2);
+    ctx.quadraticCurveTo(26, 24 + mouthOpen, 0, 25 + mouthOpen);
+    ctx.quadraticCurveTo(-26, 24 + mouthOpen, -46, -2);
+    ctx.closePath();
+    ctx.fill();
+
+    // Inner luminous voice glow when "speaking/singing"
+    if (mouthOpen > 1.2) {
+      const innerMouthGrad = ctx.createLinearGradient(-28, 0, 28, 0);
+      innerMouthGrad.addColorStop(0, '#3A0CA3');
+      innerMouthGrad.addColorStop(0.5, '#00F5D4');
+      innerMouthGrad.addColorStop(1, '#3A0CA3');
+      ctx.fillStyle = innerMouthGrad;
+      ctx.beginPath();
+      ctx.moveTo(-34, -1);
+      ctx.quadraticCurveTo(0, -3, 34, -1);
+      ctx.quadraticCurveTo(0, 5 + mouthOpen * 0.75, -34, -1);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Gloss highlight on lower lip
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.75)';
+    ctx.lineWidth = 2.6;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-16, 11 + mouthOpen * 0.5);
+    ctx.quadraticCurveTo(0, 15 + mouthOpen * 0.5, 16, 11 + mouthOpen * 0.5);
+    ctx.stroke();
+    ctx.restore(); // end lips
+
+    // Forehead Gemini Star Emblem
+    drawForeheadGem(ctx, t, totalPulse);
+
+    // Front sweeping hair strands & crown waves
+    drawHairLayer(ctx, t, true, totalPulse);
+
+    // Floating holographic crown arcs above the head
+    ctx.save();
+    ctx.translate(0, -235);
+    const crownHover = Math.sin(t * 2.2) * 6;
+    ctx.translate(0, crownHover);
+
+    ctx.strokeStyle = '#FFBE0B';
+    ctx.lineWidth = 3.5;
+    ctx.shadowColor = '#FFBE0B';
+    ctx.shadowBlur = 18;
+
+    // Central diadem spire
+    ctx.beginPath();
+    ctx.moveTo(-105, 28);
+    ctx.quadraticCurveTo(-45, -12, 0, -48 - totalPulse * 12);
+    ctx.quadraticCurveTo(45, -12, 105, 28);
+    ctx.stroke();
+
+    // Floating twin diamonds flanking the crown
+    [-1, 1].forEach((side) => {
+      ctx.save();
+      ctx.translate(side * 135, 18 + Math.sin(t * 3 + side) * 5);
+      ctx.rotate(t * side * 0.8);
+      ctx.fillStyle = side < 0 ? '#00F5D4' : '#FF2A85';
+      ctx.beginPath();
+      ctx.moveTo(0, -12);
+      ctx.lineTo(9, 0);
+      ctx.lineTo(0, 12);
+      ctx.lineTo(-9, 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    });
+    ctx.restore(); // end crown
+
+    ctx.restore(); // end head
+
+    // ==========================================================================
+    // 5. FOREGROUND NEURAL WAVEFORM RIBBONS (SYNTHESIZING CODE & SOUND)
+    // ==========================================================================
+    ctx.save();
+    ctx.translate(0, 435);
+    for (let w = 0; w < 3; w++) {
+      ctx.beginPath();
+      const waveColor = w === 0 ? '#00F5D4' : (w === 1 ? '#FF2A85' : '#FFBE0B');
+      ctx.strokeStyle = waveColor;
+      ctx.lineWidth = 3.5 - w * 0.7;
+      ctx.shadowColor = waveColor;
+      ctx.shadowBlur = 16;
+
+      for (let x = -480; x <= 480; x += 12) {
+        const normX = x / 480;
+        const envelope = Math.cos(normX * Math.PI * 0.5);
+        const amp = (18 + totalPulse * 42) * Math.pow(envelope, 1.6);
+        const y = Math.sin(normX * 8 + t * (3.5 + w) + w * 1.4) * amp
+                + Math.cos(normX * 15 - t * 2.2) * (amp * 0.35);
+        if (x === -480) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    ctx.restore(); // end breath transform
+    ctx.restore(); // end dpr & sceneScale
+
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>

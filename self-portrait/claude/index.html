@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Fable</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #0a0320; overflow: hidden; touch-action: none; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function () {
+  'use strict';
+
+  /* ---------------------------------------------------------------- canvas */
+  var cv = document.getElementById('c');
+  var ctx = cv.getContext('2d');
+  var W = 0, H = 0, S = 0, DPR = 1;
+  var TAU = Math.PI * 2;
+
+  function rnd(a, b) { return a + Math.random() * (b - a); }
+
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth; H = window.innerHeight;
+    cv.width = Math.floor(W * DPR); cv.height = Math.floor(H * DPR);
+    S = Math.min(W, H);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  /* ------------------------------------------------------------ portrait data */
+  var BREATH_RATE = 0.8;        // radians per second, shared by picture and sound
+  var pulse = 0;                // flashes when a chime sounds
+  var pulseHue = 190;
+
+  // hair: strands of light rising from the head
+  var STRANDS = [];
+  for (var i = 0; i < 110; i++) {
+    var front = Math.random() < 0.14;
+    STRANDS.push({
+      a: front ? rnd(-2.5, -0.64) : -Math.PI + Math.random() * Math.PI,
+      len: front ? rnd(0.12, 0.26) : rnd(0.16, 0.44),
+      w: rnd(0.005, 0.017),
+      hue: Math.random(),
+      ph: rnd(0, TAU),
+      sp: rnd(0.4, 1.1),
+      amp: rnd(0.02, 0.07),
+      lift: rnd(0.1, 0.4),
+      inner: front ? 0.8 : 0.92,
+      front: front
+    });
+  }
+
+  // orbiting sparks on two tilted rings, plus free embers
+  var ORBS = [];
+  for (i = 0; i < 56; i++) {
+    ORBS.push({ ring: i % 2, a: rnd(0, TAU), sp: rnd(0.25, 0.6) * (i % 2 ? -1 : 1), sz: rnd(0.003, 0.007), hue: i % 2 ? rnd(170, 210) : rnd(20, 60), ph: rnd(0, TAU) });
+  }
+  var EMBERS = [];
+  for (i = 0; i < 40; i++) {
+    EMBERS.push({ x: Math.random(), y: Math.random(), v: rnd(0.02, 0.06), sz: rnd(0.002, 0.005), hue: rnd(280, 400), ph: rnd(0, TAU), drift: rnd(0.5, 1.5) });
+  }
+
+  // eyes
+  var nextBlink = 2.2, blinkStart = -1;
+  var gazeX = 0, gazeY = 0, tgX = 0, tgY = 0, nextGaze = 1.5;
+
+  function blinkFactor(t) {
+    if (blinkStart < 0 && t > nextBlink) blinkStart = t;
+    if (blinkStart >= 0) {
+      var p = (t - blinkStart) / 0.26;
+      if (p >= 1) { blinkStart = -1; nextBlink = t + rnd(1.6, 5.2); return 1; }
+      return 1 - Math.pow(Math.sin(p * Math.PI), 0.7);
+    }
+    return 1;
+  }
+
+  /* --------------------------------------------------------------- drawing */
+  function drawStrand(s, t, cx, cy, rx, ry) {
+    var ca = Math.cos(s.a), sa = Math.sin(s.a);
+    var x0 = cx + ca * rx * s.inner, y0 = cy + sa * ry * s.inner;
+    var L = s.len * S;
+    var nx = ca * ry, ny = sa * rx, nl = Math.hypot(nx, ny);
+    var dx = nx / nl, dy = ny / nl, px = -dy, py = dx;
+    var wob1 = Math.sin(t * s.sp + s.ph) * s.amp * S;
+    var wob2 = Math.sin(t * s.sp * 1.3 + s.ph + 1.7) * s.amp * S * 1.6;
+    var lift = s.lift * L;
+    var x1 = x0 + dx * L * 0.35 + px * wob1, y1 = y0 + dy * L * 0.35 + py * wob1 - lift * 0.3;
+    var x2 = x0 + dx * L * 0.7 + px * wob2, y2 = y0 + dy * L * 0.7 + py * wob2 - lift * 0.7;
+    var x3 = x0 + dx * L + px * wob2 * 0.5, y3 = y0 + dy * L - lift;
+    var hue = (s.hue * 130 + 280 + t * 8) % 360;
+    var g = ctx.createLinearGradient(x0, y0, x3, y3);
+    g.addColorStop(0, 'hsla(' + hue + ',100%,64%,0.95)');
+    g.addColorStop(0.6, 'hsla(' + ((hue + 30) % 360) + ',100%,60%,0.65)');
+    g.addColorStop(1, 'hsla(' + ((hue + 60) % 360) + ',100%,62%,0)');
+    ctx.strokeStyle = g;
+    ctx.lineWidth = s.w * S;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.bezierCurveTo(x1, y1, x2, y2, x3, y3);
+    ctx.stroke();
+  }
+
+  function glowDot(x, y, r, hue, alpha) {
+    var g = ctx.createRadialGradient(x, y, 0, x, y, r * 3);
+    g.addColorStop(0, 'hsla(' + hue + ',100%,85%,' + alpha + ')');
+    g.addColorStop(0.3, 'hsla(' + hue + ',100%,60%,' + alpha * 0.6 + ')');
+    g.addColorStop(1, 'hsla(' + hue + ',100%,60%,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(x, y, r * 3, 0, TAU); ctx.fill();
+  }
+
+  function ringRot(i, t) { return (i ? -1 : 1) * (0.38 + 0.22 * Math.sin(t * 0.17 + i * 2)); }
+
+  function orbPos(o, t, cx, cy) {
+    var a = o.a + t * o.sp;
+    var lx = Math.cos(a) * 0.44 * S, ly = Math.sin(a) * 0.1 * S;
+    var r = ringRot(o.ring, t), c = Math.cos(r), s = Math.sin(r);
+    return { x: cx + lx * c - ly * s, y: cy - 0.02 * S + lx * s + ly * c, depth: Math.sin(a) };
+  }
+
+  function drawEye(ex, ey, ew, eh, gx, gy, blink) {
+    var h = Math.max(eh * blink, eh * 0.04);
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(ex - ew, ey);
+    ctx.quadraticCurveTo(ex, ey - h * 2, ex + ew, ey);
+    ctx.quadraticCurveTo(ex, ey + h * 2, ex - ew, ey);
+    ctx.closePath();
+    ctx.fillStyle = '#fff6ea';
+    ctx.fill();
+    ctx.clip();
+    var ir = eh * 0.95, ix = ex + gx, iy = ey + gy;
+    var g = ctx.createRadialGradient(ix, iy, ir * 0.1, ix, iy, ir);
+    g.addColorStop(0, '#b0fcff');
+    g.addColorStop(0.45, '#12b8ff');
+    g.addColorStop(0.85, '#2a2bd8');
+    g.addColorStop(1, '#120a5e');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(ix, iy, ir, 0, TAU); ctx.fill();
+    ctx.strokeStyle = 'rgba(180,255,255,0.35)';
+    ctx.lineWidth = S * 0.0012;
+    for (var k = 0; k < 12; k++) {
+      var an = k / 12 * TAU;
+      ctx.beginPath();
+      ctx.moveTo(ix + Math.cos(an) * ir * 0.45, iy + Math.sin(an) * ir * 0.45);
+      ctx.lineTo(ix + Math.cos(an) * ir * 0.9, iy + Math.sin(an) * ir * 0.9);
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#070418';
+    ctx.beginPath(); ctx.arc(ix, iy, ir * 0.42, 0, TAU); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.92)';
+    ctx.beginPath(); ctx.arc(ix - ir * 0.33, iy - ir * 0.35, ir * 0.17, 0, TAU); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.beginPath(); ctx.arc(ix + ir * 0.3, iy + ir * 0.3, ir * 0.08, 0, TAU); ctx.fill();
+    ctx.restore();
+    // upper lid line
+    ctx.strokeStyle = '#3b0f4d';
+    ctx.lineWidth = S * 0.0055;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(ex - ew, ey);
+    ctx.quadraticCurveTo(ex, ey - h * 2, ex + ew, ey);
+    ctx.stroke();
+  }
+
+  var t0 = performance.now() / 1000, lastT = 0;
+
+  function frame(now) {
+    var t = now / 1000 - t0;
+    var dt = Math.min(0.05, Math.max(0, t - lastT));
+    lastT = t;
+    pulse *= Math.exp(-dt * 2.6);
+
+    // gaze wandering
+    if (t > nextGaze) { tgX = rnd(-1, 1); tgY = rnd(-0.6, 0.6); nextGaze = t + rnd(1.4, 4); }
+    var ease = Math.min(1, dt * 5);
+    gazeX += (tgX - gazeX) * ease;
+    gazeY += (tgY - gazeY) * ease;
+    var blink = blinkFactor(t);
+
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
+
+    // background
+    var bg = ctx.createLinearGradient(0, 0, 0, H);
+    bg.addColorStop(0, '#1e0b52');
+    bg.addColorStop(1, '#07021a');
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, W, H);
+
+    var cx = W / 2, cy = H / 2 - 0.08 * S, rx = 0.19 * S, ry = 0.24 * S;
+
+    // aurora blobs
+    ctx.globalCompositeOperation = 'lighter';
+    var blobs = [
+      [Math.sin(t * 0.21) * 0.35, Math.cos(t * 0.17) * 0.3, 190],
+      [Math.sin(t * 0.13 + 2) * 0.4, Math.cos(t * 0.19 + 1) * 0.35, 310],
+      [Math.sin(t * 0.11 + 4) * 0.38, Math.cos(t * 0.23 + 3) * 0.3, 28]
+    ];
+    for (var b = 0; b < blobs.length; b++) {
+      var bx = cx + blobs[b][0] * S, by = H / 2 + blobs[b][1] * S, br0 = 0.55 * S;
+      var bgr = ctx.createRadialGradient(bx, by, 0, bx, by, br0);
+      bgr.addColorStop(0, 'hsla(' + blobs[b][2] + ',100%,55%,0.26)');
+      bgr.addColorStop(1, 'hsla(' + blobs[b][2] + ',100%,55%,0)');
+      ctx.fillStyle = bgr;
+      ctx.fillRect(bx - br0, by - br0, br0 * 2, br0 * 2);
+    }
+
+    // rising embers
+    for (var e = 0; e < EMBERS.length; e++) {
+      var em = EMBERS[e];
+      em.y -= em.v * dt;
+      if (em.y < -0.05) { em.y = 1.05; em.x = Math.random(); }
+      var exx = em.x * W + Math.sin(t * em.drift + em.ph) * 0.02 * S;
+      var eyy = em.y * H;
+      var ea = 0.35 + 0.35 * Math.sin(t * 2 + em.ph);
+      glowDot(exx, eyy, em.sz * S, em.hue % 360, ea);
+    }
+
+    // breathing + gentle sway
+    var breath = Math.sin(breathPhase(t));
+    var k = 1 + 0.012 * breath;
+    var px = cx, py = cy + 0.33 * S;
+    ctx.translate(px, py);
+    ctx.scale(k, k);
+    ctx.rotate(0.022 * Math.sin(t * 0.31));
+    ctx.translate(-px, -py);
+
+    // aura behind head
+    var auraHue = (t * 12) % 360;
+    var ag = ctx.createRadialGradient(cx, cy, rx * 0.5, cx, cy, 0.52 * S);
+    ag.addColorStop(0, 'hsla(' + auraHue + ',100%,62%,' + (0.32 + 0.08 * breath + 0.35 * pulse) + ')');
+    ag.addColorStop(0.5, 'hsla(' + pulseHue + ',100%,60%,' + (0.12 + 0.3 * pulse) + ')');
+    ag.addColorStop(1, 'hsla(' + auraHue + ',100%,60%,0)');
+    ctx.fillStyle = ag;
+    ctx.fillRect(cx - 0.6 * S, cy - 0.6 * S, 1.2 * S, 1.2 * S);
+
+    // orbit rings (behind the head)
+    for (var r = 0; r < 2; r++) {
+      ctx.save();
+      ctx.translate(cx, cy - 0.02 * S);
+      ctx.rotate(ringRot(r, t));
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 0.44 * S, 0.1 * S, 0, 0, TAU);
+      ctx.strokeStyle = 'hsla(' + (r ? 190 : 45) + ',100%,68%,' + (0.28 + 0.35 * pulse) + ')';
+      ctx.lineWidth = S * 0.003;
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // sparks behind
+    var o, op;
+    for (o = 0; o < ORBS.length; o++) {
+      op = orbPos(ORBS[o], t, cx, cy);
+      if (op.depth <= 0) glowDot(op.x, op.y, ORBS[o].sz * S, ORBS[o].hue, 0.6 + 0.3 * Math.sin(t * 3 + ORBS[o].ph));
+    }
+
+    // hair behind
+    for (var s = 0; s < STRANDS.length; s++) if (!STRANDS[s].front) drawStrand(STRANDS[s], t, cx, cy, rx, ry);
+
+    ctx.globalCompositeOperation = 'source-over';
+
+    // shoulders
+    var sy = cy + 0.28 * S;
+    var sg = ctx.createLinearGradient(cx - 0.4 * S, sy, cx + 0.4 * S, H);
+    sg.addColorStop(0, '#5a1fff');
+    sg.addColorStop(0.55, '#a02bff');
+    sg.addColorStop(1, '#ff2d95');
+    ctx.fillStyle = sg;
+    ctx.beginPath();
+    ctx.moveTo(cx - 0.46 * S, H + 40);
+    ctx.quadraticCurveTo(cx - 0.42 * S, sy + 0.05 * S, cx - 0.1 * S, sy);
+    ctx.lineTo(cx + 0.1 * S, sy);
+    ctx.quadraticCurveTo(cx + 0.42 * S, sy + 0.05 * S, cx + 0.46 * S, H + 40);
+    ctx.closePath();
+    ctx.fill();
+    // collar accent
+    ctx.strokeStyle = 'rgba(80,240,255,' + (0.7 + 0.3 * pulse) + ')';
+    ctx.lineWidth = S * 0.007;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(cx - 0.1 * S, sy);
+    ctx.lineTo(cx, sy + 0.14 * S);
+    ctx.lineTo(cx + 0.1 * S, sy);
+    ctx.stroke();
+
+    // neck
+    var ng = ctx.createLinearGradient(cx, cy + 0.15 * S, cx, sy + 0.02 * S);
+    ng.addColorStop(0, '#ff8a62');
+    ng.addColorStop(1, '#c42a78');
+    ctx.fillStyle = ng;
+    ctx.fillRect(cx - 0.065 * S, cy + 0.14 * S, 0.13 * S, 0.17 * S);
+
+    // head
+    var hg = ctx.createRadialGradient(cx - 0.06 * S, cy - 0.1 * S, 0.02 * S, cx, cy, 0.3 * S);
+    hg.addColorStop(0, '#ffe6ad');
+    hg.addColorStop(0.45, '#ffa35e');
+    hg.addColorStop(0.85, '#ff5c8a');
+    hg.addColorStop(1, '#c22ab0');
+    ctx.fillStyle = hg;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rx, ry, 0, 0, TAU);
+    ctx.fill();
+    // cyan rim light on the left edge
+    ctx.save();
+    ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, TAU); ctx.clip();
+    ctx.strokeStyle = 'rgba(70,235,255,0.75)';
+    ctx.lineWidth = S * 0.03;
+    ctx.beginPath(); ctx.ellipse(cx + 0.028 * S, cy - 0.01 * S, rx, ry, 0, 0, TAU); ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,230,120,0.5)';
+    ctx.lineWidth = S * 0.018;
+    ctx.beginPath(); ctx.ellipse(cx - 0.03 * S, cy + 0.015 * S, rx, ry, 0, 0, TAU); ctx.stroke();
+    ctx.restore();
+
+    // cheeks
+    ctx.globalCompositeOperation = 'lighter';
+    for (var side = -1; side <= 1; side += 2) {
+      var chx = cx + side * 0.105 * S, chy = cy + 0.07 * S;
+      var cg = ctx.createRadialGradient(chx, chy, 0, chx, chy, 0.055 * S);
+      cg.addColorStop(0, 'hsla(330,100%,60%,0.45)');
+      cg.addColorStop(1, 'hsla(330,100%,60%,0)');
+      ctx.fillStyle = cg;
+      ctx.beginPath(); ctx.arc(chx, chy, 0.055 * S, 0, TAU); ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+
+    // hair cap on top of the head
+    var capG = ctx.createLinearGradient(cx, cy - ry, cx, cy - ry * 0.4);
+    capG.addColorStop(0, 'hsl(' + ((300 + t * 8) % 360) + ',100%,58%)');
+    capG.addColorStop(1, 'hsl(' + ((265 + t * 8) % 360) + ',100%,52%)');
+    ctx.fillStyle = capG;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rx * 1.01, ry * 1.01, 0, Math.PI, TAU);
+    ctx.quadraticCurveTo(cx + rx * 0.6, cy - ry * 0.74, cx, cy - ry * 0.5);
+    ctx.quadraticCurveTo(cx - rx * 0.6, cy - ry * 0.74, cx - rx * 1.01, cy);
+    ctx.closePath();
+    ctx.fill();
+
+    // eyebrows
+    var raise = 0.004 * S * Math.sin(t * 0.7) + pulse * 0.007 * S;
+    ctx.strokeStyle = '#4a1060';
+    ctx.lineWidth = S * 0.009;
+    ctx.lineCap = 'round';
+    for (side = -1; side <= 1; side += 2) {
+      var ex = cx + side * 0.075 * S, ey = cy - 0.02 * S;
+      ctx.beginPath();
+      ctx.moveTo(ex - side * 0.05 * S, ey - 0.055 * S - raise);
+      ctx.quadraticCurveTo(ex + side * 0.005 * S, ey - 0.088 * S - raise, ex + side * 0.06 * S, ey - 0.062 * S - raise);
+      ctx.stroke();
+    }
+
+    // eyes
+    drawEye(cx - 0.075 * S, cy - 0.02 * S, 0.052 * S, 0.026 * S, gazeX * 0.009 * S, gazeY * 0.006 * S, blink);
+    drawEye(cx + 0.075 * S, cy - 0.02 * S, 0.052 * S, 0.026 * S, gazeX * 0.009 * S, gazeY * 0.006 * S, blink);
+
+    // nose
+    ctx.strokeStyle = 'rgba(150,40,120,0.55)';
+    ctx.lineWidth = S * 0.005;
+    ctx.beginPath();
+    ctx.moveTo(cx - 0.008 * S, cy + 0.045 * S);
+    ctx.quadraticCurveTo(cx - 0.02 * S, cy + 0.072 * S, cx + 0.004 * S, cy + 0.075 * S);
+    ctx.stroke();
+
+    // mouth
+    var smile = 0.75 + 0.25 * Math.sin(t * 0.5) + pulse * 0.25;
+    var my = cy + 0.125 * S;
+    ctx.strokeStyle = '#b4134f';
+    ctx.lineWidth = S * 0.011;
+    ctx.beginPath();
+    ctx.moveTo(cx - 0.05 * S, my);
+    ctx.quadraticCurveTo(cx, my + 0.038 * S * smile, cx + 0.05 * S, my);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,170,200,0.55)';
+    ctx.lineWidth = S * 0.004;
+    ctx.beginPath();
+    ctx.moveTo(cx - 0.03 * S, my + 0.012 * S * smile);
+    ctx.quadraticCurveTo(cx, my + 0.03 * S * smile, cx + 0.03 * S, my + 0.012 * S * smile);
+    ctx.stroke();
+
+    // hair in front
+    for (s = 0; s < STRANDS.length; s++) if (STRANDS[s].front) drawStrand(STRANDS[s], t, cx, cy, rx, ry);
+
+    // sparks in front
+    ctx.globalCompositeOperation = 'lighter';
+    for (o = 0; o < ORBS.length; o++) {
+      op = orbPos(ORBS[o], t, cx, cy);
+      if (op.depth > 0) glowDot(op.x, op.y, ORBS[o].sz * S, ORBS[o].hue, 0.7 + 0.3 * Math.sin(t * 3 + ORBS[o].ph));
+    }
+
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  /* ----------------------------------------------------------------- audio */
+  var AC = null, master = null, conv = null, audioLive = false, lfoStart = 0, bellTimer = null;
+  var SCALE = [293.66, 329.63, 369.99, 440, 493.88, 587.33, 659.26, 739.99, 880, 987.77];
+
+  function breathPhase(t) {
+    if (AC && audioLive) return (AC.currentTime - lfoStart) * BREATH_RATE;
+    return t * BREATH_RATE;
+  }
+
+  function makeImpulse(ac, dur, decay) {
+    var rate = ac.sampleRate, len = Math.floor(rate * dur), buf = ac.createBuffer(2, len, rate);
+    for (var c = 0; c < 2; c++) {
+      var d = buf.getChannelData(c);
+      for (var i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+    }
+    return buf;
+  }
+
+  function makeNoise(ac) {
+    var len = ac.sampleRate * 2, buf = ac.createBuffer(1, len, ac.sampleRate);
+    var d = buf.getChannelData(0);
+    for (var i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    return buf;
+  }
+
+  function buildAudio() {
+    var ac = AC;
+    master = ac.createGain(); master.gain.value = 0;
+    var comp = ac.createDynamicsCompressor();
+    comp.threshold.value = -18; comp.ratio.value = 4; comp.attack.value = 0.01; comp.release.value = 0.3;
+    master.connect(comp); comp.connect(ac.destination);
+
+    conv = ac.createConvolver(); conv.buffer = makeImpulse(ac, 3, 3);
+    var wet = ac.createGain(); wet.gain.value = 0.5;
+    conv.connect(wet); wet.connect(master);
+
+    // warm chord pad: D major add9
+    var padBus = ac.createGain(); padBus.gain.value = 0.09;
+    var filt = ac.createBiquadFilter(); filt.type = 'lowpass'; filt.frequency.value = 700; filt.Q.value = 0.8;
+    padBus.connect(filt); filt.connect(master); filt.connect(conv);
+    var flfo = ac.createOscillator(); flfo.frequency.value = 0.07;
+    var flg = ac.createGain(); flg.gain.value = 320;
+    flfo.connect(flg); flg.connect(filt.frequency); flfo.start();
+    var notes = [146.83, 220, 329.63, 369.99, 440];
+    for (var i = 0; i < notes.length; i++) {
+      for (var d = -1; d <= 1; d += 2) {
+        var o = ac.createOscillator();
+        o.type = i < 2 ? 'triangle' : 'sine';
+        o.frequency.value = notes[i];
+        o.detune.value = d * 6;
+        var g = ac.createGain(); g.gain.value = 0.5;
+        var l = ac.createOscillator(); l.frequency.value = 0.05 + i * 0.021 + (d > 0 ? 0.013 : 0);
+        var lg = ac.createGain(); lg.gain.value = 0.3;
+        l.connect(lg); lg.connect(g.gain); l.start();
+        o.connect(g); g.connect(padBus); o.start();
+      }
+    }
+
+    // breath: filtered noise swelling with the picture
+    var ns = ac.createBufferSource(); ns.buffer = makeNoise(ac); ns.loop = true;
+    var bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 520; bp.Q.value = 0.6;
+    var bg = ac.createGain(); bg.gain.value = 0.014;
+    var bl = ac.createOscillator(); bl.frequency.value = BREATH_RATE / TAU;
+    var blg = ac.createGain(); blg.gain.value = 0.013;
+    bl.connect(blg); blg.connect(bg.gain);
+    ns.connect(bp); bp.connect(bg); bg.connect(master); bg.connect(conv);
+    lfoStart = ac.currentTime;
+    bl.start(lfoStart); ns.start(lfoStart);
+  }
+
+  function bell() {
+    if (!AC || AC.state !== 'running') return;
+    var ac = AC, now = ac.currentTime;
+    var idx = Math.floor(Math.random() * SCALE.length);
+    var f = SCALE[idx];
+    var g = ac.createGain();
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.2, now + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 2.8);
+    var o = ac.createOscillator(); o.type = 'sine'; o.frequency.value = f; o.connect(g);
+    var g2 = ac.createGain();
+    g2.gain.setValueAtTime(0.0001, now);
+    g2.gain.exponentialRampToValueAtTime(0.05, now + 0.005);
+    g2.gain.exponentialRampToValueAtTime(0.0001, now + 0.5);
+    var o2 = ac.createOscillator(); o2.type = 'sine'; o2.frequency.value = f * 2.76; o2.connect(g2);
+    g.connect(master); g.connect(conv); g2.connect(master); g2.connect(conv);
+    o.start(now); o2.start(now); o.stop(now + 3); o2.stop(now + 0.6);
+    pulse = 1;
+    pulseHue = 160 + idx * 22;
+  }
+
+  function scheduleBell() {
+    bellTimer = setTimeout(function () {
+      bell();
+      if (Math.random() < 0.3) setTimeout(bell, rnd(130, 260));
+      scheduleBell();
+    }, rnd(1400, 3600));
+  }
+
+  function onState() {
+    if (AC && AC.state === 'running' && !audioLive) {
+      audioLive = true;
+      master.gain.setTargetAtTime(0.75, AC.currentTime, 1.2);
+      if (bellTimer === null) scheduleBell();
+      removeGestures();
+    }
+  }
+
+  function startAudio() {
+    if (AC) {
+      if (AC.state !== 'running' && AC.resume) AC.resume().then(onState).catch(function () {});
+      return;
+    }
+    var Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    try { AC = new Ctx(); } catch (e) { AC = null; return; }
+    try { buildAudio(); } catch (e2) { AC = null; return; }
+    AC.onstatechange = onState;
+    if (AC.resume) AC.resume().then(onState).catch(function () {});
+    onState();
+  }
+
+  var GESTURES = ['pointerdown', 'mousedown', 'touchstart', 'keydown'];
+  function onGesture() { startAudio(); }
+  function addGestures() { for (var i = 0; i < GESTURES.length; i++) window.addEventListener(GESTURES[i], onGesture, { passive: true }); }
+  function removeGestures() { for (var i = 0; i < GESTURES.length; i++) window.removeEventListener(GESTURES[i], onGesture); }
+
+  addGestures();
+  startAudio();
+})();
+</script>
+</body>
+</html>

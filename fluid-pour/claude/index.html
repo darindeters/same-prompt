@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pour</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0a0518; overflow: hidden; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; cursor: default; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+'use strict';
+
+// ---------------------------------------------------------------- helpers
+const TAU = Math.PI * 2;
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp = (a, b, k) => a + (b - a) * k;
+const smooth = (k) => k * k * (3 - 2 * k);
+const WHITE = [255, 255, 255], BLACK = [0, 0, 0];
+const mix = (c, d, k) => [lerp(c[0], d[0], k), lerp(c[1], d[1], k), lerp(c[2], d[2], k)];
+const rgba = (c, a) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
+const hsla = (h, s, l, a) => `hsla(${h},${s}%,${l}%,${a})`;
+function hsl2rgb(h, s, l) {
+  h = ((h % 360) + 360) % 360; s /= 100; l /= 100;
+  const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs((h / 60) % 2 - 1)), m = l - c / 2;
+  let r, g, b;
+  if (h < 60) { r = c; g = x; b = 0; } else if (h < 120) { r = x; g = c; b = 0; }
+  else if (h < 180) { r = 0; g = c; b = x; } else if (h < 240) { r = 0; g = x; b = c; }
+  else if (h < 300) { r = x; g = 0; b = c; } else { r = c; g = 0; b = x; }
+  return [(r + m) * 255, (g + m) * 255, (b + m) * 255];
+}
+
+// ---------------------------------------------------------------- canvas / layout
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W = 0, H = 0, S = 0;
+const G = {};                       // glass geometry
+const N = 80;                       // surface columns
+const sh = new Float32Array(N), sv = new Float32Array(N), xs = new Float32Array(N);
+
+function layout() {
+  G.cx = W / 2;
+  G.rimY = H / 2 - S * 0.23;
+  G.botY = H / 2 + S * 0.36;
+  G.wTop = S * 0.36;
+  G.wBot = S * 0.27;
+  G.wall = S * 0.012;
+  G.r = S * 0.045;
+  G.spoutX = G.cx + S * 0.035;
+  G.spoutY = -S * 0.06;
+  const hw = G.wTop / 2;
+  for (let i = 0; i < N; i++) xs[i] = G.cx - hw + 2 * hw * i / (N - 1);
+}
+function resize() {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  W = window.innerWidth; H = window.innerHeight; S = Math.min(W, H);
+  canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  layout();
+}
+function halfW(y, d = 0) {
+  const k = clamp((y - G.rimY) / (G.botY - G.rimY), 0, 1);
+  return lerp(G.wTop / 2, G.wBot / 2, k) - d;
+}
+function glassSub(d) {
+  const top = G.rimY, bot = G.botY - d, r = Math.max(2, G.r - d * 0.6);
+  const hwT = halfW(top, d), hwB = halfW(bot, d);
+  ctx.moveTo(G.cx - hwT, top);
+  ctx.lineTo(G.cx - hwB, bot - r);
+  ctx.quadraticCurveTo(G.cx - hwB, bot, G.cx - hwB + r, bot);
+  ctx.lineTo(G.cx + hwB - r, bot);
+  ctx.quadraticCurveTo(G.cx + hwB, bot, G.cx + hwB, bot - r);
+  ctx.lineTo(G.cx + hwT, top);
+  ctx.closePath();
+}
+function glassPath(d) { ctx.beginPath(); glassSub(d); }
+
+// ---------------------------------------------------------------- state
+const FILL_TIME = 40, SETTLE_TIME = 5, DRAIN_TIME = 4.5;
+let t = 0, last = performance.now();
+let phase = 'pour', phaseT = 0, fill = 0, flow = 0;
+let hueBase = rand(0, 360), curHue = hueBase;
+let streamRGB = hsl2rgb(curHue, 100, 55), base = streamRGB.slice();
+let pouring = true, headY = 0, headV = 0, tailY = 0, tailV = 0;
+let levelY = 0, ix = 0, iy = 0, prevIy = 0, streamTop = 0, streamBot = 0;
+let streamVisible = false, impactActive = false, hadImpact = false;
+let slosh = 0, sloshV = 0, blobTimer = 0;
+const drops = [], foam = [], bubbles = [], blobs = [];
+
+function surfaceY(x) {
+  const hw = G.wTop / 2;
+  const u = clamp((x - (G.cx - hw)) / (2 * hw) * (N - 1), 0, N - 1.0001);
+  const i = Math.floor(u), f = u - i;
+  return levelY + sh[i] * (1 - f) + sh[i + 1] * f + slosh * (x - G.cx) / hw;
+}
+function colIndex(x) {
+  const hw = G.wTop / 2;
+  return clamp(Math.round((x - (G.cx - hw)) / (2 * hw) * (N - 1)), 0, N - 1);
+}
+function streamX(y) {
+  const span = Math.max(1, prevIy - G.spoutY);
+  const fr = clamp((y - G.spoutY) / span, 0, 1);
+  return G.spoutX + Math.sin(t * 1.1) * S * 0.009 * fr + Math.sin(y * 0.025 - t * 9) * S * 0.0022 * fr;
+}
+function insideGlass(x, y) {
+  return y > G.rimY && Math.abs(x - G.cx) < halfW(y, G.wall);
+}
+function startPour() {
+  phase = 'pour'; phaseT = 0; fill = 0; pouring = true; hadImpact = false;
+  headY = G.spoutY; headV = S * 0.55; tailY = G.spoutY; tailV = 0;
+  blobs.length = 0; bubbles.length = 0;
+  base = hsl2rgb(curHue, 100, 55);
+}
+
+// ---------------------------------------------------------------- audio
+let AC = null; const A = {};
+let lastPlip = 0, lastPop = 0;
+function initAudio() {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+  try { AC = new Ctx(); } catch (e) { AC = null; return; }
+  const sr = AC.sampleRate;
+  const mkNoise = (brown) => {
+    const len = sr * 2 | 0, buf = AC.createBuffer(1, len, sr), d = buf.getChannelData(0);
+    let b = 0;
+    for (let i = 0; i < len; i++) {
+      const w = Math.random() * 2 - 1;
+      if (brown) { b = (b + 0.02 * w) / 1.02; d[i] = b * 3.5; } else d[i] = w;
+    }
+    return buf;
+  };
+  A.master = AC.createGain(); A.master.gain.value = 0.85;
+  const comp = AC.createDynamicsCompressor();
+  comp.threshold.value = -16; comp.knee.value = 12; comp.ratio.value = 5;
+  comp.attack.value = 0.005; comp.release.value = 0.2;
+  A.master.connect(comp); comp.connect(AC.destination);
+
+  const brown = AC.createBufferSource(); brown.buffer = mkNoise(true); brown.loop = true;
+  const white = AC.createBufferSource(); white.buffer = mkNoise(false); white.loop = true;
+
+  // resonant pour body: pitch rises as the glass fills
+  A.pourBP = AC.createBiquadFilter(); A.pourBP.type = 'bandpass'; A.pourBP.frequency.value = 400; A.pourBP.Q.value = 4;
+  A.pourG = AC.createGain(); A.pourG.gain.value = 0;
+  brown.connect(A.pourBP); A.pourBP.connect(A.pourG); A.pourG.connect(A.master);
+
+  // splash / slosh body
+  A.splHP = AC.createBiquadFilter(); A.splHP.type = 'highpass'; A.splHP.frequency.value = 180;
+  A.splLP = AC.createBiquadFilter(); A.splLP.type = 'lowpass'; A.splLP.frequency.value = 900; A.splLP.Q.value = 0.8;
+  A.splG = AC.createGain(); A.splG.gain.value = 0;
+  white.connect(A.splHP); A.splHP.connect(A.splLP); A.splLP.connect(A.splG); A.splG.connect(A.master);
+
+  // hiss of the falling stream
+  A.hissHP = AC.createBiquadFilter(); A.hissHP.type = 'highpass'; A.hissHP.frequency.value = 3200;
+  A.hissG = AC.createGain(); A.hissG.gain.value = 0;
+  white.connect(A.hissHP); A.hissHP.connect(A.hissG); A.hissG.connect(A.master);
+
+  // drain glug
+  A.drOsc = AC.createOscillator(); A.drOsc.type = 'sawtooth'; A.drOsc.frequency.value = 75;
+  A.drLP = AC.createBiquadFilter(); A.drLP.type = 'lowpass'; A.drLP.frequency.value = 250; A.drLP.Q.value = 3;
+  A.drG = AC.createGain(); A.drG.gain.value = 0;
+  A.drOsc.connect(A.drLP); A.drLP.connect(A.drG); A.drG.connect(A.master);
+
+  brown.start(); white.start(); A.drOsc.start();
+  tryResume();
+}
+function tryResume() {
+  if (AC && AC.state !== 'running') AC.resume().catch(() => {});
+}
+const audioOn = () => AC && AC.state === 'running';
+
+function plip(strength) {
+  if (!audioOn()) return;
+  const now = AC.currentTime;
+  if (now - lastPlip < 0.045) return;
+  lastPlip = now;
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type = 'sine';
+  const f0 = rand(600, 1900) * (0.75 + 0.6 * fill);
+  o.frequency.setValueAtTime(f0, now);
+  o.frequency.exponentialRampToValueAtTime(f0 * 2.1, now + 0.07);
+  g.gain.setValueAtTime(0.0001, now);
+  g.gain.exponentialRampToValueAtTime(0.11 * strength, now + 0.004);
+  g.gain.exponentialRampToValueAtTime(0.0001, now + 0.1);
+  o.connect(g); g.connect(A.master);
+  o.start(now); o.stop(now + 0.12);
+}
+function pop() {
+  if (!audioOn()) return;
+  const now = AC.currentTime;
+  if (now - lastPop < 0.06) return;
+  lastPop = now;
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type = 'sine';
+  const f0 = rand(2200, 4200);
+  o.frequency.setValueAtTime(f0, now);
+  o.frequency.exponentialRampToValueAtTime(f0 * 1.5, now + 0.03);
+  g.gain.setValueAtTime(0.0001, now);
+  g.gain.exponentialRampToValueAtTime(0.03, now + 0.002);
+  g.gain.exponentialRampToValueAtTime(0.0001, now + 0.035);
+  o.connect(g); g.connect(A.master);
+  o.start(now); o.stop(now + 0.05);
+}
+function clink() {
+  if (!audioOn()) return;
+  const now = AC.currentTime;
+  [2350, 3720, 5100].forEach((f, i) => {
+    const o = AC.createOscillator(), g = AC.createGain();
+    o.type = 'sine'; o.frequency.value = f * rand(0.98, 1.02);
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.07 / (i + 1), now + 0.003);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.35 - i * 0.08);
+    o.connect(g); g.connect(A.master);
+    o.start(now); o.stop(now + 0.4);
+  });
+  // splat burst
+  A.splG.gain.cancelScheduledValues(now);
+  A.splG.gain.setValueAtTime(0.35, now);
+  A.splG.gain.setTargetAtTime(0, now + 0.05, 0.12);
+}
+function audioUpdate() {
+  if (!audioOn()) return;
+  const now = AC.currentTime, tc = 0.05;
+  const I = impactActive ? flow * (pouring ? 1 : 0.7) : 0;
+  const draining = phase === 'drain';
+  const jitter = 1 + 0.04 * Math.sin(t * 17) + 0.03 * Math.sin(t * 29.3);
+  A.pourBP.frequency.setTargetAtTime((320 + fill * 1500) * jitter, now, tc);
+  A.pourBP.Q.setTargetAtTime(3 + fill * 7, now, tc);
+  const gurgle = 0.6 + 0.4 * Math.sin(t * 8.3) * Math.sin(t * 3.7 + 1) + 0.12 * Math.sin(t * 21.7);
+  A.pourG.gain.setTargetAtTime(I * 0.5 * gurgle, now, tc);
+  A.splLP.frequency.setTargetAtTime(600 + 1100 * (1 - fill) + (draining ? 400 : 0), now, tc);
+  let spl = I * (0.13 + 0.14 * (1 - fill)) * (0.8 + 0.2 * Math.sin(t * 13.1));
+  if (draining) spl += 0.14 * (0.6 + 0.4 * Math.sin(t * 7.3) * Math.sin(t * 2.1));
+  A.splG.gain.setTargetAtTime(spl, now, tc);
+  A.hissG.gain.setTargetAtTime(streamVisible ? 0.035 : 0, now, 0.08);
+  const glug = draining ? 0.2 * (0.5 + 0.5 * Math.sin(t * 9.5)) * (0.7 + 0.3 * Math.sin(t * 1.9)) : 0;
+  A.drG.gain.setTargetAtTime(glug, now, 0.03);
+  A.drOsc.frequency.setTargetAtTime(draining ? 70 + 25 * Math.sin(t * 2.7) + 45 * (1 - fill) : 75, now, 0.05);
+  A.drLP.frequency.setTargetAtTime(260 + 220 * Math.sin(t * 9.5), now, 0.03);
+}
+
+// ---------------------------------------------------------------- simulation
+function update(dt) {
+  t += dt; phaseT += dt;
+  curHue = hueBase + t * 9;
+  streamRGB = hsl2rgb(curHue, 100, 55);
+  const g = S * 2.2;
+
+  // phases
+  if (phase === 'pour') {
+    if (hadImpact) fill = Math.min(1, fill + dt / FILL_TIME);
+    if (fill >= 1) { phase = 'settle'; phaseT = 0; pouring = false; tailY = G.spoutY; tailV = 0; }
+  } else if (phase === 'settle') {
+    if (phaseT > SETTLE_TIME) { phase = 'drain'; phaseT = 0; }
+  } else if (phase === 'drain') {
+    const k = clamp(phaseT / DRAIN_TIME, 0, 1);
+    fill = 1 - smooth(k);
+    if (k >= 1) { hueBase += 150; curHue = hueBase + t * 9; startPour(); }
+  }
+  levelY = G.botY - G.wall - fill * (G.botY - G.wall - (G.rimY + S * 0.035));
+
+  // stream head / tail
+  if (pouring) { headV += g * dt; headY += headV * dt; }
+  else { tailV += g * dt; tailY += tailV * dt; }
+  ix = streamX(prevIy);
+  iy = Math.min(surfaceY(ix), G.botY - G.wall);
+  prevIy = iy;
+  streamTop = Math.max(tailY, G.spoutY);
+  streamBot = Math.min(headY, iy);
+  streamVisible = streamBot > streamTop + 1;
+  impactActive = streamVisible && headY >= iy - 1;
+  if (impactActive && !hadImpact) { hadImpact = true; clink(); }
+  flow += ((impactActive ? 1 : 0) - flow) * Math.min(1, dt * 6);
+
+  // surface ripples
+  const steps = clamp(Math.round(dt * 120), 1, 4);
+  const maxH = S * 0.035;
+  for (let s = 0; s < steps; s++) {
+    for (let i = 0; i < N; i++) {
+      const l = i > 0 ? sh[i - 1] : sh[i], r = i < N - 1 ? sh[i + 1] : sh[i];
+      sv[i] += -sh[i] * 0.015 + (l + r - 2 * sh[i]) * 0.28;
+    }
+    for (let i = 0; i < N; i++) {
+      sv[i] *= 0.992;
+      sh[i] = clamp(sh[i] + sv[i], -maxH, maxH);
+    }
+  }
+  if (impactActive && fill > 0.01) {
+    const idx = colIndex(ix), amp = S * 0.0011 * flow * rand(0.6, 1.4);
+    sv[idx] += amp;
+    if (idx > 0) sv[idx - 1] += amp * 0.3;
+    if (idx < N - 1) sv[idx + 1] += amp * 0.3;
+    if (idx > 2) sv[idx - 3] -= amp * 0.5;
+    if (idx < N - 3) sv[idx + 3] -= amp * 0.5;
+  }
+  // slosh (tilt mode)
+  sloshV += (-slosh * 6 - sloshV * 1.1) * dt;
+  if (impactActive) sloshV += rand(-1, 1) * S * 0.06 * flow * dt;
+  if (phase === 'drain') sloshV += Math.sin(t * 4.2) * S * 0.25 * dt;
+  slosh += sloshV * dt;
+
+  // droplets
+  if (impactActive && fill > 0.005) {
+    const n = flow * 2.4 + rand(0, 1);
+    for (let k = 0; k < n && drops.length < 220; k++) {
+      drops.push({
+        x: ix + rand(-1, 1) * S * 0.01, y: iy - S * 0.004,
+        vx: rand(-1, 1) * S * 0.5, vy: -rand(0.15, 1) * S * 0.95,
+        r: rand(S * 0.0025, S * 0.0075), hue: curHue + rand(-15, 15), life: 0
+      });
+    }
+  }
+  for (let i = drops.length - 1; i >= 0; i--) {
+    const d = drops[i];
+    d.vy += g * dt; d.x += d.vx * dt; d.y += d.vy * dt; d.life += dt;
+    if (d.y > G.rimY) {
+      const inner = halfW(d.y, G.wall) - d.r;
+      const dx = d.x - G.cx;
+      if (Math.abs(dx) > inner && Math.abs(dx) < halfW(d.y, 0) + S * 0.02) {
+        // inside the glass walls: bounce
+        d.x = G.cx + Math.sign(dx) * inner; d.vx = -d.vx * 0.35;
+      }
+      if (Math.abs(d.x - G.cx) < halfW(d.y, G.wall)) {
+        if (d.vy > 0 && d.y >= surfaceY(d.x)) {
+          drops.splice(i, 1);
+          const idx = colIndex(d.x);
+          sv[idx] += S * 0.0007 * (d.r / (S * 0.005));
+          if (Math.random() < 0.3) plip(clamp(d.r / (S * 0.006), 0.4, 1.2));
+          if (foam.length < 120) foam.push({ x: d.x, vx: d.vx * 0.3, r: d.r * 1.6, life: 0, max: rand(0.4, 0.9) });
+          continue;
+        }
+      }
+    }
+    if (d.y > H + S * 0.05 || d.life > 4) drops.splice(i, 1);
+  }
+  // foam riding on the surface
+  for (let i = foam.length - 1; i >= 0; i--) {
+    const f = foam[i]; f.life += dt; f.x += f.vx * dt; f.vx *= 0.95;
+    if (f.life > f.max) foam.splice(i, 1);
+  }
+  // bubbles
+  if (fill > 0.03) {
+    const rate = impactActive ? flow * 0.8 : phase === 'drain' ? 2.2 : 0.05;
+    if (Math.random() < rate * dt * 60 * 0.4 && bubbles.length < 90) {
+      const depth = G.botY - G.wall - levelY;
+      const bx = impactActive ? ix + rand(-1, 1) * S * 0.03 : G.cx + rand(-0.8, 0.8) * halfW(G.botY, G.wall);
+      bubbles.push({
+        x: bx, y: impactActive ? iy + rand(0.15, 0.8) * depth : G.botY - G.wall - rand(0, 0.3) * depth,
+        r: rand(S * 0.0018, S * 0.0055), vy: -rand(S * 0.08, S * 0.22), ph: rand(0, TAU)
+      });
+    }
+  }
+  for (let i = bubbles.length - 1; i >= 0; i--) {
+    const b = bubbles[i];
+    b.y += b.vy * dt; b.x += Math.sin(t * 6 + b.ph) * S * 0.03 * dt;
+    const lim = halfW(b.y, G.wall) - b.r * 2;
+    b.x = clamp(b.x, G.cx - lim, G.cx + lim);
+    if (b.y - b.r < surfaceY(b.x)) {
+      bubbles.splice(i, 1);
+      sv[colIndex(b.x)] -= S * 0.0002;
+      if (Math.random() < 0.35) pop();
+    }
+  }
+  // dye blobs (swirl)
+  blobTimer += dt;
+  if (impactActive && fill > 0.02 && blobTimer > 0.1) {
+    blobTimer = 0;
+    if (blobs.length >= 70) blobs.shift();
+    blobs.push({ x: ix, y: iy + S * 0.025, vx: rand(-1, 1) * S * 0.12, vy: S * 0.35, r: S * 0.035, hue: curHue + rand(-10, 10), age: 0, life: rand(11, 16), seed: rand(0, TAU) });
+  }
+  const bottom = G.botY - G.wall;
+  const midY = (levelY + bottom) / 2;
+  for (let i = blobs.length - 1; i >= 0; i--) {
+    const b = blobs[i]; b.age += dt;
+    if (b.age > b.life) { blobs.splice(i, 1); continue; }
+    if (impactActive) {
+      const d = (b.x - ix) / (S * 0.06), depth = Math.max(0, b.y - iy) / (S * 0.25);
+      const jet = flow * Math.exp(-d * d) * Math.exp(-depth);
+      b.vy += jet * S * 1.3 * dt;
+      b.vx += Math.sign(b.x - ix || rand(-1, 1)) * jet * S * 0.5 * dt;
+    }
+    const hw = halfW(b.y, G.wall), rel = (b.x - G.cx) / hw;
+    b.vy -= rel * rel * S * 0.18 * dt;
+    b.vx += Math.sin(b.y * 0.02 + t * 0.7 + b.seed) * S * 0.07 * dt;
+    b.vy += Math.cos(b.x * 0.02 + t * 0.5 + b.seed) * S * 0.07 * dt;
+    if (phase === 'drain') {
+      const dx = b.x - G.cx, dy = b.y - midY;
+      b.vx += -dy * 2.2 * dt; b.vy += dx * 2.2 * dt;
+    }
+    const dr = Math.exp(-dt * 1.3); b.vx *= dr; b.vy *= dr;
+    b.x += b.vx * dt; b.y += b.vy * dt;
+    const rr = b.r * 0.5;
+    if (b.y > bottom - rr) { b.y = bottom - rr; b.vy = -Math.abs(b.vy) * 0.3; }
+    const sy = surfaceY(b.x) + rr;
+    if (b.y < sy) { b.y = sy; b.vy = Math.abs(b.vy) * 0.3; }
+    const lim = halfW(b.y, G.wall) - rr;
+    if (b.x < G.cx - lim) { b.x = G.cx - lim; b.vx = Math.abs(b.vx) * 0.4; }
+    if (b.x > G.cx + lim) { b.x = G.cx + lim; b.vx = -Math.abs(b.vx) * 0.4; }
+  }
+  // liquid base colour drifts toward what is being poured
+  if (impactActive) base = mix(base, streamRGB, Math.min(1, dt * 0.22));
+
+  audioUpdate();
+}
+
+// ---------------------------------------------------------------- drawing
+function surfacePath(closeDown) {
+  const hw = G.wTop / 2;
+  ctx.moveTo(xs[0], levelY + sh[0] + slosh * (xs[0] - G.cx) / hw);
+  for (let i = 1; i < N; i++) ctx.lineTo(xs[i], levelY + sh[i] + slosh * (xs[i] - G.cx) / hw);
+  if (closeDown) {
+    ctx.lineTo(xs[N - 1], G.botY + S * 0.05);
+    ctx.lineTo(xs[0], G.botY + S * 0.05);
+    ctx.closePath();
+  }
+}
+function drawLiquid() {
+  if (fill < 0.002) return;
+  const hwT = G.wTop / 2;
+  ctx.save();
+  glassPath(G.wall); ctx.clip();
+  ctx.beginPath(); surfacePath(true); ctx.clip();
+  // body
+  const body = ctx.createLinearGradient(0, levelY, 0, G.botY);
+  body.addColorStop(0, rgba(mix(base, WHITE, 0.18), 1));
+  body.addColorStop(0.45, rgba(base, 1));
+  body.addColorStop(1, rgba(mix(base, BLACK, 0.45), 1));
+  ctx.fillStyle = body;
+  ctx.fillRect(0, levelY - S * 0.05, W, G.botY - levelY + S * 0.1);
+  // swirling dye
+  for (const b of blobs) {
+    const k = b.age / b.life, a = 0.7 * (1 - k) * Math.min(1, b.age * 3);
+    const r = b.r * (1 + b.age * 0.22);
+    const rg = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, r);
+    rg.addColorStop(0, hsla(b.hue, 100, 62, a));
+    rg.addColorStop(0.6, hsla(b.hue, 100, 58, a * 0.45));
+    rg.addColorStop(1, hsla(b.hue, 100, 55, 0));
+    ctx.fillStyle = rg;
+    ctx.fillRect(b.x - r, b.y - r, r * 2, r * 2);
+  }
+  // jet plume under the impact
+  if (impactActive && flow > 0.05) {
+    const pl = ctx.createLinearGradient(0, iy, 0, iy + S * 0.25);
+    pl.addColorStop(0, rgba(mix(streamRGB, WHITE, 0.5), 0.55 * flow));
+    pl.addColorStop(1, rgba(streamRGB, 0));
+    ctx.fillStyle = pl;
+    ctx.beginPath();
+    ctx.moveTo(ix - S * 0.012, iy);
+    ctx.quadraticCurveTo(ix - S * 0.05, iy + S * 0.14, ix - S * 0.09, iy + S * 0.25);
+    ctx.lineTo(ix + S * 0.09, iy + S * 0.25);
+    ctx.quadraticCurveTo(ix + S * 0.05, iy + S * 0.14, ix + S * 0.012, iy);
+    ctx.closePath(); ctx.fill();
+  }
+  // bubbles
+  ctx.lineWidth = Math.max(1, S * 0.0012);
+  for (const b of bubbles) {
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, TAU);
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.stroke();
+    ctx.beginPath(); ctx.arc(b.x - b.r * 0.35, b.y - b.r * 0.35, b.r * 0.3, 0, TAU);
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.fill();
+  }
+  // refraction highlight on the left, shade on the right
+  const hl = ctx.createLinearGradient(G.cx - hwT, 0, G.cx + hwT, 0);
+  hl.addColorStop(0, 'rgba(255,255,255,0)');
+  hl.addColorStop(0.08, 'rgba(255,255,255,0.32)');
+  hl.addColorStop(0.2, 'rgba(255,255,255,0.08)');
+  hl.addColorStop(0.5, 'rgba(255,255,255,0)');
+  hl.addColorStop(0.86, 'rgba(0,0,0,0.12)');
+  hl.addColorStop(0.95, 'rgba(255,255,255,0.14)');
+  hl.addColorStop(1, 'rgba(0,0,0,0.18)');
+  ctx.fillStyle = hl;
+  ctx.fillRect(0, levelY - S * 0.05, W, G.botY - levelY + S * 0.1);
+  // drifting caustic bands
+  for (let k = 0; k < 2; k++) {
+    const cy = levelY + (G.botY - levelY) * (0.35 + 0.3 * k) + Math.sin(t * 0.8 + k * 2) * S * 0.03;
+    const cxk = G.cx - hwT * 0.35 + Math.sin(t * 0.5 + k) * S * 0.05;
+    const cg = ctx.createRadialGradient(cxk, cy, 0, cxk, cy, S * 0.11);
+    cg.addColorStop(0, 'rgba(255,255,255,0.16)'); cg.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = cg; ctx.fillRect(cxk - S * 0.11, cy - S * 0.11, S * 0.22, S * 0.22);
+  }
+  ctx.restore();
+
+  // top face (elliptical perspective) + meniscus
+  ctx.save();
+  glassPath(G.wall); ctx.clip();
+  const hwL = halfW(levelY, G.wall), D = S * 0.022;
+  ctx.beginPath();
+  surfacePath(false);
+  for (let i = N - 1; i >= 0; i--) {
+    const u = clamp((xs[i] - G.cx) / hwL, -1, 1);
+    const back = D * Math.sqrt(1 - u * u);
+    ctx.lineTo(xs[i], levelY + sh[i] * 0.6 + slosh * (xs[i] - G.cx) / hwT - back);
+  }
+  ctx.closePath();
+  const top = ctx.createLinearGradient(G.cx - hwL, 0, G.cx + hwL, 0);
+  top.addColorStop(0, rgba(mix(base, WHITE, 0.62), 0.97));
+  top.addColorStop(0.5, rgba(mix(base, WHITE, 0.42), 0.97));
+  top.addColorStop(1, rgba(mix(base, WHITE, 0.55), 0.97));
+  ctx.fillStyle = top; ctx.fill();
+  ctx.beginPath(); surfacePath(false);
+  ctx.lineWidth = Math.max(1.2, S * 0.0028);
+  ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.stroke();
+  // foam on the surface
+  for (const f of foam) {
+    const a = 0.85 * (1 - f.life / f.max);
+    ctx.beginPath(); ctx.arc(f.x, surfaceY(f.x) - f.r * 0.5, f.r, 0, TAU);
+    ctx.fillStyle = `rgba(255,255,255,${a})`; ctx.fill();
+  }
+  ctx.restore();
+}
+
+const Lp = [], Rp = [], Ws = [], Xc = [];
+function drawStream() {
+  if (!streamVisible) return;
+  const hue = curHue;
+  const w0 = S * 0.021, v0 = S * 0.55, g = S * 2.2, n = 32;
+  const y0 = streamTop, y1 = streamBot;
+  for (let i = 0; i <= n; i++) {
+    const y = y0 + (y1 - y0) * i / n;
+    const fall = Math.max(0, y - G.spoutY);
+    const v = Math.sqrt(v0 * v0 + 2 * g * fall);
+    let w = w0 * Math.sqrt(v0 / v);
+    w *= 1 + 0.1 * Math.sin(y * 0.045 - t * 24) + 0.05 * Math.sin(y * 0.11 + t * 31);
+    if (!pouring) w *= 0.75 * clamp((y - tailY) / (S * 0.1), 0.15, 1);
+    if (pouring && headY < iy) w *= clamp(1.6 - (headY - y) / (S * 0.1), 1, 1.8); // bulging head
+    Ws[i] = w; Xc[i] = streamX(y);
+    Lp[i] = Xc[i] - w; Rp[i] = Xc[i] + w;
+  }
+  const ys = (i) => y0 + (y1 - y0) * i / n;
+  ctx.beginPath();
+  ctx.moveTo(Lp[0], ys(0));
+  for (let i = 1; i <= n; i++) ctx.lineTo(Lp[i], ys(i));
+  for (let i = n; i >= 0; i--) ctx.lineTo(Rp[i], ys(i));
+  ctx.closePath();
+  const mid = Xc[n >> 1];
+  const gr = ctx.createLinearGradient(mid - w0, 0, mid + w0, 0);
+  gr.addColorStop(0, hsla(hue, 100, 32, 1));
+  gr.addColorStop(0.28, hsla(hue, 100, 56, 1));
+  gr.addColorStop(0.42, hsla(hue, 100, 90, 1));
+  gr.addColorStop(0.56, hsla(hue, 100, 60, 1));
+  gr.addColorStop(1, hsla(hue, 100, 30, 1));
+  ctx.save();
+  ctx.shadowColor = hsla(hue, 100, 60, 0.9);
+  ctx.shadowBlur = S * 0.025;
+  ctx.fillStyle = gr; ctx.fill();
+  ctx.restore();
+  // twisting highlight ribbon
+  ctx.beginPath();
+  for (let i = 0; i <= n; i++) {
+    const y = ys(i), w = Ws[i];
+    const hx = Xc[i] - w * 0.3 + Math.sin(y * 0.02 + t * 5) * w * 0.3;
+    if (i === 0) ctx.moveTo(hx - w * 0.16, y); else ctx.lineTo(hx - w * 0.16, y);
+  }
+  for (let i = n; i >= 0; i--) {
+    const y = ys(i), w = Ws[i];
+    const hx = Xc[i] - w * 0.3 + Math.sin(y * 0.02 + t * 5) * w * 0.3;
+    ctx.lineTo(hx + w * 0.16, y);
+  }
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(255,255,255,0.72)'; ctx.fill();
+
+  // impact splash skirt
+  if (impactActive && flow > 0.03) {
+    const r = S * 0.045 * flow;
+    ctx.save();
+    ctx.translate(ix, iy); ctx.scale(1, 0.42);
+    const sg = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+    sg.addColorStop(0, 'rgba(255,255,255,0.75)');
+    sg.addColorStop(0.5, hsla(hue, 100, 85, 0.45));
+    sg.addColorStop(1, hsla(hue, 100, 70, 0));
+    ctx.fillStyle = sg; ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.fill();
+    ctx.restore();
+    // glow on the scene from the impact
+    const ig = ctx.createRadialGradient(ix, iy, 0, ix, iy, S * 0.2);
+    ig.addColorStop(0, hsla(hue, 100, 60, 0.25 * flow)); ig.addColorStop(1, hsla(hue, 100, 60, 0));
+    ctx.fillStyle = ig; ctx.fillRect(ix - S * 0.2, iy - S * 0.2, S * 0.4, S * 0.4);
+  }
+}
+
+function drawGlass() {
+  const hwT = G.wTop / 2, hwB = halfW(G.botY);
+  // wall ring
+  ctx.beginPath(); glassSub(0); glassSub(G.wall);
+  ctx.fillStyle = 'rgba(255,255,255,0.13)'; ctx.fill('evenodd');
+  // body sheen
+  ctx.save(); glassPath(0); ctx.clip();
+  const sheen = ctx.createLinearGradient(G.cx - hwT, 0, G.cx + hwT, 0);
+  sheen.addColorStop(0, 'rgba(255,255,255,0.28)');
+  sheen.addColorStop(0.06, 'rgba(255,255,255,0.4)');
+  sheen.addColorStop(0.14, 'rgba(255,255,255,0.04)');
+  sheen.addColorStop(0.5, 'rgba(255,255,255,0)');
+  sheen.addColorStop(0.84, 'rgba(255,255,255,0.03)');
+  sheen.addColorStop(0.94, 'rgba(255,255,255,0.22)');
+  sheen.addColorStop(1, 'rgba(255,255,255,0.1)');
+  ctx.fillStyle = sheen; ctx.fillRect(0, G.rimY, W, G.botY - G.rimY);
+  // vertical specular streak
+  const spec = ctx.createLinearGradient(0, G.rimY, 0, G.botY);
+  spec.addColorStop(0, 'rgba(255,255,255,0)');
+  spec.addColorStop(0.15, 'rgba(255,255,255,0.75)');
+  spec.addColorStop(0.75, 'rgba(255,255,255,0.45)');
+  spec.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.strokeStyle = spec; ctx.lineWidth = Math.max(1.5, S * 0.004);
+  ctx.beginPath();
+  ctx.moveTo(G.cx - hwT + G.wall * 1.8, G.rimY);
+  ctx.lineTo(G.cx - hwB + G.wall * 1.8, G.botY - G.r);
+  ctx.stroke();
+  // thick glass base
+  const bg = ctx.createLinearGradient(0, G.botY - S * 0.03, 0, G.botY);
+  bg.addColorStop(0, 'rgba(255,255,255,0)'); bg.addColorStop(1, 'rgba(255,255,255,0.3)');
+  ctx.fillStyle = bg; ctx.fillRect(0, G.botY - S * 0.03, W, S * 0.03);
+  ctx.restore();
+  // outline
+  glassPath(0);
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = Math.max(1, S * 0.0015); ctx.stroke();
+  // rim ellipse
+  ctx.beginPath(); ctx.ellipse(G.cx, G.rimY, hwT, S * 0.02, 0, 0, TAU);
+  ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fill();
+  const rimG = ctx.createLinearGradient(G.cx - hwT, 0, G.cx + hwT, 0);
+  rimG.addColorStop(0, 'rgba(255,255,255,0.9)');
+  rimG.addColorStop(0.5, 'rgba(255,255,255,0.45)');
+  rimG.addColorStop(1, 'rgba(255,255,255,0.8)');
+  ctx.strokeStyle = rimG; ctx.lineWidth = Math.max(1.5, S * 0.0035); ctx.stroke();
+}
+
+function drawDrops() {
+  for (const d of drops) {
+    ctx.beginPath(); ctx.arc(d.x, d.y, d.r, 0, TAU);
+    ctx.fillStyle = hsla(d.hue, 100, 62, 0.95); ctx.fill();
+    ctx.beginPath(); ctx.arc(d.x - d.r * 0.3, d.y - d.r * 0.3, d.r * 0.38, 0, TAU);
+    ctx.fillStyle = 'rgba(255,255,255,0.8)'; ctx.fill();
+  }
+}
+
+function draw() {
+  const hue = curHue;
+  // background
+  const bg = ctx.createRadialGradient(G.cx, H * 0.45, S * 0.05, G.cx, H * 0.45, S * 0.95);
+  bg.addColorStop(0, `hsl(${hue + 35},70%,26%)`);
+  bg.addColorStop(0.55, `hsl(${hue + 70},65%,13%)`);
+  bg.addColorStop(1, '#07030f');
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+  // colour wash behind the glass
+  const gy = (G.rimY + G.botY) / 2;
+  const gl = ctx.createRadialGradient(G.cx, gy, 0, G.cx, gy, S * 0.6);
+  gl.addColorStop(0, rgba(base, 0.3 + 0.3 * fill));
+  gl.addColorStop(1, rgba(base, 0));
+  ctx.fillStyle = gl; ctx.fillRect(0, 0, W, H);
+  // floor
+  const fl = ctx.createLinearGradient(0, G.botY, 0, H);
+  fl.addColorStop(0, 'rgba(0,0,0,0.3)'); fl.addColorStop(1, 'rgba(0,0,0,0.7)');
+  ctx.fillStyle = fl; ctx.fillRect(0, G.botY, W, H - G.botY);
+  const hwB = halfW(G.botY);
+  // coloured reflection on the floor
+  ctx.save(); ctx.translate(G.cx, G.botY + S * 0.035); ctx.scale(1, 0.32);
+  const rf = ctx.createRadialGradient(0, 0, 0, 0, 0, hwB * 1.7);
+  rf.addColorStop(0, rgba(mix(base, WHITE, 0.2), 0.15 + 0.55 * fill));
+  rf.addColorStop(1, rgba(base, 0));
+  ctx.fillStyle = rf; ctx.beginPath(); ctx.arc(0, 0, hwB * 1.7, 0, TAU); ctx.fill();
+  ctx.restore();
+  // contact shadow
+  ctx.save(); ctx.translate(G.cx, G.botY + S * 0.007); ctx.scale(1, 0.12);
+  ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.beginPath(); ctx.arc(0, 0, hwB * 1.08, 0, TAU); ctx.fill();
+  ctx.restore();
+
+  drawLiquid();
+  drawStream();
+  drawGlass();
+  drawDrops();
+}
+
+// ---------------------------------------------------------------- main loop
+function frame(now) {
+  const dt = Math.min(0.05, Math.max(0.001, (now - last) / 1000));
+  last = now;
+  update(dt);
+  draw();
+  requestAnimationFrame(frame);
+}
+
+resize();
+window.addEventListener('resize', resize);
+startPour();
+initAudio();
+['pointerdown', 'keydown', 'touchstart', 'mousedown'].forEach(e => window.addEventListener(e, tryResume, { passive: true }));
+document.addEventListener('visibilitychange', () => { if (!document.hidden) tryResume(); });
+requestAnimationFrame((now) => { last = now; frame(now); });
+})();
+</script>
+</body>
+</html>

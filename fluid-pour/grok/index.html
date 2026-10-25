@@ -1,0 +1,1172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title></title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #070112;
+    overflow: hidden;
+    touch-action: none;
+  }
+  canvas {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+
+var canvas = document.getElementById('c');
+var ctx = canvas.getContext('2d', { alpha: false });
+
+var PAL = [
+  [255, 42, 130],
+  [255, 78, 24],
+  [255, 196, 0],
+  [186, 255, 20],
+  [0, 229, 255],
+  [68, 92, 255],
+  [196, 54, 255],
+  [255, 48, 210]
+];
+
+var W = 1, H = 1, S = 1;
+var cx = 0, topY = 0, outerBot = 0, innerBot = 0;
+var topR = 0, botR = 0, wall = 0, baseThick = 0, rimRy = 0;
+
+var vol = 0, maxVol = 1, fill = 0;
+var strata = [];
+var recordedUntil = 0;
+var spin = 0, energy = 0, t = 0;
+var spillVis = 0;
+
+var particles = [];
+var bubbles = [];
+var ripples = [];
+var foams = [];
+
+var dropTimer = 0.05;
+var crownTimer = 0.2;
+var mistTimer = 0.1;
+var lastNow = 0;
+
+var audioCtx = null;
+var master = null;
+var sourcesOn = false;
+var pourGain = null, pourFilter = null;
+var bodyOsc = null, bodyGain = null;
+var bedGain = null, bedFilter = null;
+var overGain = null, overFilter = null;
+var noiseBuf = null;
+
+function mix(a, b, u) {
+  return [
+    a[0] + (b[0] - a[0]) * u,
+    a[1] + (b[1] - a[1]) * u,
+    a[2] + (b[2] - a[2]) * u
+  ];
+}
+function rgb(c, a) {
+  return 'rgba(' + (c[0] | 0) + ',' + (c[1] | 0) + ',' + (c[2] | 0) + ',' + a + ')';
+}
+function lighten(c, u) { return mix(c, [255, 255, 255], u); }
+function darken(c, u) { return mix(c, [12, 0, 24], u); }
+function smoothstep(u) { return u * u * (3 - 2 * u); }
+
+function pourColor(time) {
+  var cycle = 5.6;
+  var x = time / cycle;
+  var i = Math.floor(x);
+  var f = smoothstep(x - i);
+  var n = PAL.length;
+  var i0 = ((i % n) + n) % n;
+  return mix(PAL[i0], PAL[(i0 + 1) % n], f);
+}
+function pourColor2(time) {
+  return pourColor(time + 2.1);
+}
+
+function halfAt(y, inset) {
+  var span = outerBot - topY;
+  var u = span <= 1 ? 0 : (y - topY) / span;
+  if (u < 0) u = 0;
+  if (u > 1) u = 1;
+  var taper = topR + (botR - topR) * u;
+  var belly = Math.sin(u * Math.PI) * S * 0.012;
+  var r = taper + belly - inset;
+  return r > 6 ? r : 6;
+}
+
+function layout() {
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+  W = Math.max(2, Math.round(window.innerWidth * dpr));
+  H = Math.max(2, Math.round(window.innerHeight * dpr));
+  canvas.width = W;
+  canvas.height = H;
+  S = Math.min(W, H);
+
+  var glassH = Math.min(H * 0.7, S * 0.74);
+  topY = Math.max(H * 0.1, (H - glassH) * 0.32);
+  if (topY + glassH > H * 0.92) topY = H * 0.92 - glassH;
+  outerBot = topY + glassH;
+
+  topR = Math.min(W * 0.3, S * 0.25);
+  botR = topR * 0.74;
+  wall = Math.max(3, S * 0.011);
+  baseThick = Math.max(8, S * 0.052);
+  rimRy = topR * 0.2;
+  cx = W * 0.5;
+  innerBot = outerBot - baseThick;
+
+  var ratio = maxVol > 0 ? vol / maxVol : 0;
+  buildVolume();
+  vol = ratio * maxVol;
+  if (strata.length === 0) {
+    strata.push(pourColor(0).slice());
+    recordedUntil = 0;
+  }
+}
+
+function buildVolume() {
+  var n = 240;
+  var acc = 0;
+  var prevR = halfAt(innerBot, wall);
+  volYs = new Array(n + 1);
+  volAcc = new Array(n + 1);
+  volYs[0] = innerBot;
+  volAcc[0] = 0;
+  for (var i = 1; i <= n; i++) {
+    var y = innerBot - (innerBot - topY) * (i / n);
+    var r = halfAt(y, wall);
+    var dy = (innerBot - topY) / n;
+    acc += (prevR * prevR + r * r) * 0.5 * dy;
+    prevR = r;
+    volYs[i] = y;
+    volAcc[i] = acc;
+  }
+  maxVol = acc > 1 ? acc : 1;
+}
+
+var volYs = [0];
+var volAcc = [0];
+
+function yForVolume(v) {
+  if (v <= 0 || volAcc.length < 2) return innerBot;
+  if (v >= maxVol) return volYs[volYs.length - 1];
+  var lo = 1;
+  var hi = volAcc.length - 1;
+  while (lo < hi) {
+    var mid = (lo + hi) >> 1;
+    if (volAcc[mid] < v) lo = mid + 1;
+    else hi = mid;
+  }
+  var a0 = volAcc[lo - 1];
+  var a1 = volAcc[lo];
+  var f = a1 > a0 ? (v - a0) / (a1 - a0) : 0;
+  return volYs[lo - 1] + (volYs[lo] - volYs[lo - 1]) * f;
+}
+
+function surfaceInfo() {
+  var y = yForVolume(vol);
+  var cap = topY + rimRy * 0.7;
+  if (y > innerBot) y = innerBot;
+  if (y < cap) y = cap;
+  var rx = halfAt(y, wall * 0.55);
+  var ry = Math.max(3, rx * 0.2);
+  return { y: y, rx: rx, ry: ry };
+}
+
+function recordColor(col) {
+  var frac = maxVol > 0 ? vol / maxVol : 0;
+  while (recordedUntil + 1 / 34 <= frac && strata.length < 56) {
+    recordedUntil += 1 / 34;
+    var prev = strata[strata.length - 1];
+    strata.push(mix(prev, col, 0.72));
+  }
+  if (frac > 0.98 && strata.length) {
+    var top = strata.length - 1;
+    strata[top] = mix(strata[top], col, 0.025);
+    if (top > 0) strata[top - 1] = mix(strata[top - 1], col, 0.008);
+  }
+}
+
+function colorAt(frac) {
+  if (strata.length === 1) return strata[0];
+  var x = frac * (strata.length - 1);
+  if (x < 0) x = 0;
+  var i = Math.floor(x);
+  if (i >= strata.length - 1) return strata[strata.length - 1];
+  return mix(strata[i], strata[i + 1], x - i);
+}
+
+function streamX(y, time) {
+  return cx
+    + Math.sin(time * 1.35) * S * 0.016
+    + Math.sin(time * 2.6 + y * 0.008) * S * 0.009;
+}
+
+function streamHw(y, time, impactY) {
+  var base = S * 0.024 * (1.05 - 0.18 * (y / Math.max(1, impactY)));
+  var pinch = 0.42 + 0.58 * (0.5 + 0.5 * Math.sin(y * 0.03 - time * 15));
+  var hw = base * pinch;
+  var near = impactY - y;
+  var skirt = S * 0.045;
+  if (near < skirt && near > 0) {
+    hw *= 1 + (1 - near / skirt) * 1.35;
+  }
+  var minW = S * 0.0035;
+  return hw < minW ? minW : hw;
+}
+
+function spawn(p) {
+  particles.push(p);
+  if (particles.length > 180) particles.splice(0, particles.length - 180);
+}
+
+function splashBurst(x, y, col, power, crown) {
+  var n = crown ? 10 : 4;
+  var i;
+  for (i = 0; i < n; i++) {
+    var ang = crown
+      ? (-Math.PI * 0.08 - (i / (n - 1)) * Math.PI * 0.84)
+      : (-Math.PI / 2 + (Math.random() - 0.5) * 2.1);
+    var sp = (crown ? S * 0.42 : S * 0.28) * power * (0.45 + Math.random() * 0.7);
+    spawn({
+      kind: 'splash',
+      x: x + (Math.random() - 0.5) * S * 0.01,
+      y: y,
+      vx: Math.cos(ang) * sp,
+      vy: Math.sin(ang) * sp,
+      r: (crown ? S * 0.008 : S * 0.005) * (0.6 + Math.random()),
+      life: crown ? 0.55 + Math.random() * 0.35 : 0.35 + Math.random() * 0.3,
+      age: 0,
+      color: lighten(col, Math.random() * 0.35),
+      grav: S * 1.55
+    });
+  }
+  ripples.push({ age: 0, life: crown ? 1.05 : 0.72, power: power });
+  if (ripples.length > 12) ripples.shift();
+  energy = Math.min(1, energy + (crown ? 0.34 : 0.02));
+}
+
+function spawnStreamDrop(impactY, col) {
+  var y = S * 0.02 + Math.random() * Math.max(8, impactY * 0.45);
+  spawn({
+    kind: 'stream',
+    x: streamX(y, t),
+    y: y,
+    vx: (Math.random() - 0.5) * S * 0.02,
+    vy: S * (0.35 + Math.random() * 0.25),
+    r: S * (0.006 + Math.random() * 0.008),
+    life: 2.4,
+    age: 0,
+    color: col,
+    grav: S * 1.35
+  });
+}
+
+function spawnBubble(surf) {
+  var depth = surf.y + (innerBot - surf.y) * (0.15 + Math.random() * 0.7);
+  bubbles.push({
+    x: cx + (Math.random() - 0.5) * surf.rx * 0.7,
+    y: depth,
+    r: S * (0.004 + Math.random() * 0.012),
+    vy: -S * (0.06 + Math.random() * 0.1),
+    wob: Math.random() * Math.PI * 2,
+    color: lighten(colorAt(0.7 + Math.random() * 0.3), 0.35)
+  });
+  if (bubbles.length > 36) bubbles.shift();
+}
+
+function spawnFoam(surf) {
+  foams.push({
+    a: Math.random() * Math.PI * 2,
+    rad: 0.15 + Math.random() * 0.75,
+    r: S * (0.004 + Math.random() * 0.01),
+    life: 1.4 + Math.random() * 2.2,
+    age: 0,
+    hue: Math.random()
+  });
+  if (foams.length > 28) foams.shift();
+}
+
+function simulate(dt) {
+  var col = pourColor(t);
+  var add = (maxVol / 58) * dt;
+  if (vol < maxVol) {
+    vol += add;
+    if (vol > maxVol) vol = maxVol;
+  }
+  fill = maxVol > 0 ? vol / maxVol : 0;
+  recordColor(col);
+
+  if (fill > 0.992) spillVis = Math.min(1, spillVis + dt * 0.55);
+  else spillVis = Math.max(0, spillVis - dt * 0.4);
+
+  spin += dt * (0.55 + (1 - fill) * 0.85 + energy * 0.4);
+  energy *= Math.exp(-dt * 1.8);
+
+  var surf = surfaceInfo();
+
+  dropTimer -= dt;
+  if (dropTimer <= 0) {
+    dropTimer = 0.12 + Math.random() * 0.1;
+    spawnStreamDrop(surf.y, lighten(col, 0.15));
+  }
+  crownTimer -= dt;
+  if (crownTimer <= 0) {
+    crownTimer = 0.28 + Math.random() * 0.22;
+    var ix = streamX(surf.y, t);
+    splashBurst(ix, surf.y, col, 0.85 + Math.random() * 0.3, true);
+    blip(0.75 + Math.random() * 0.35, 700 + Math.random() * 1600 - fill * 500, 0.09);
+  }
+  mistTimer -= dt;
+  if (mistTimer <= 0) {
+    mistTimer = 0.1 + Math.random() * 0.08;
+    splashBurst(streamX(surf.y, t), surf.y, col, 0.45, false);
+    if (Math.random() < 0.4) blip(0.26, 900 + Math.random() * 1400, 0.05);
+  }
+
+  if (Math.random() < dt * (1.2 + energy * 2.5)) spawnBubble(surf);
+  if (foams.length < 16 || Math.random() < dt * 4) spawnFoam(surf);
+
+  var gravWall = 0;
+  var i;
+  for (i = particles.length - 1; i >= 0; i--) {
+    var p = particles[i];
+    p.age += dt;
+    p.vy += p.grav * dt;
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    if (p.kind === 'stream') {
+      var sNow = surfaceInfo();
+      if (p.y >= sNow.y && Math.abs(p.x - cx) < sNow.rx * 1.05) {
+        splashBurst(p.x, sNow.y, p.color, 0.55, false);
+        blip(0.4, 500 + Math.random() * 900, 0.07);
+        particles.splice(i, 1);
+        continue;
+      }
+    } else if (p.kind === 'splash' && p.y > topY && p.y < outerBot) {
+      var lim = halfAt(Math.min(p.y, innerBot), wall) - p.r;
+      var dx = p.x - cx;
+      if (p.y > surf.y && Math.abs(dx) > lim) {
+        p.x = cx + Math.sign(dx) * lim;
+        p.vx *= -0.4;
+        p.vy *= 0.92;
+      }
+    }
+    if (p.age > p.life || p.y > H + 40) particles.splice(i, 1);
+  }
+
+  for (i = bubbles.length - 1; i >= 0; i--) {
+    var b = bubbles[i];
+    b.wob += dt * 3;
+    b.x += Math.sin(b.wob) * S * 0.012 * dt * 60 * 0.016;
+    b.y += b.vy * dt;
+    var limB = halfAt(b.y, wall * 1.4) - b.r;
+    if (b.x < cx - limB) b.x = cx - limB;
+    if (b.x > cx + limB) b.x = cx + limB;
+    if (b.y < surf.y + b.r) {
+      ripples.push({ age: 0, life: 0.55, power: 0.35 });
+      popTone(b.r);
+      bubbles.splice(i, 1);
+    }
+  }
+
+  for (i = ripples.length - 1; i >= 0; i--) {
+    ripples[i].age += dt;
+    if (ripples[i].age > ripples[i].life) ripples.splice(i, 1);
+  }
+  for (i = foams.length - 1; i >= 0; i--) {
+    foams[i].age += dt;
+    foams[i].a += dt * (0.7 + energy);
+    if (foams[i].age > foams[i].life) foams.splice(i, 1);
+  }
+
+  if (spillVis > 0.4 && Math.random() < dt * 5 * spillVis) {
+    var slot = (Math.random() * 4) | 0;
+    var side = [-0.78, -0.32, 0.36, 0.74][slot];
+    var yb = outerBot + S * 0.01;
+    spawn({
+      kind: 'drip',
+      x: cx + side * halfAt(outerBot, 0),
+      y: yb,
+      vx: side * S * 0.02,
+      vy: S * 0.05,
+      r: S * (0.005 + Math.random() * 0.007),
+      life: 1.3,
+      age: 0,
+      color: lighten(col, 0.1),
+      grav: S * 1.7
+    });
+  }
+}
+
+function traceBowl(inset) {
+  var rx = halfAt(topY, inset);
+  var ry = rimRy * (rx / Math.max(1, halfAt(topY, 0)));
+  var steps = 32;
+  var i;
+  ctx.beginPath();
+  for (i = 0; i <= 16; i++) {
+    var a = Math.PI + (i / 16) * Math.PI;
+    var x = cx + Math.cos(a) * rx;
+    var y = topY + Math.sin(a) * ry;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  for (i = 0; i <= steps; i++) {
+    var yR = topY + (innerBot - topY) * (i / steps);
+    ctx.lineTo(cx + halfAt(yR, inset), yR);
+  }
+  var brx = halfAt(innerBot, inset);
+  var bry = Math.max(4, brx * 0.3);
+  for (i = 0; i <= 12; i++) {
+    var a2 = (i / 12) * Math.PI;
+    ctx.lineTo(cx + Math.cos(a2) * brx, innerBot + Math.sin(a2) * bry);
+  }
+  for (i = steps; i >= 0; i--) {
+    var yL = topY + (innerBot - topY) * (i / steps);
+    ctx.lineTo(cx - halfAt(yL, inset), yL);
+  }
+  ctx.closePath();
+}
+
+function traceLiquid(surf, amp) {
+  var nArc = 42;
+  var steps = 24;
+  var i;
+  var left = surfacePoint(surf, Math.PI, amp);
+  var right = surfacePoint(surf, Math.PI * 2, amp);
+  var yL0 = left[1] < innerBot - 1 ? left[1] : innerBot - 1;
+  var yR0 = right[1] < innerBot - 1 ? right[1] : innerBot - 1;
+  ctx.beginPath();
+  ctx.moveTo(left[0], left[1]);
+  for (i = 1; i <= nArc; i++) {
+    var a = Math.PI + (i / nArc) * Math.PI;
+    var p = surfacePoint(surf, a, amp);
+    ctx.lineTo(p[0], p[1]);
+  }
+  for (i = 1; i <= steps; i++) {
+    var yR = yR0 + (innerBot - yR0) * (i / steps);
+    ctx.lineTo(cx + halfAt(yR, wall * 0.55), yR);
+  }
+  var brx = halfAt(innerBot, wall * 0.55);
+  var bry = Math.max(4, brx * 0.3);
+  for (i = 0; i <= 12; i++) {
+    var a2 = (i / 12) * Math.PI;
+    ctx.lineTo(cx + Math.cos(a2) * brx, innerBot + Math.sin(a2) * bry);
+  }
+  for (i = steps; i >= 1; i--) {
+    var yL = yL0 + (innerBot - yL0) * (i / steps);
+    ctx.lineTo(cx - halfAt(yL, wall * 0.55), yL);
+  }
+  ctx.closePath();
+}
+
+function drawBackground(colA, colB) {
+  var g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#14061f');
+  g.addColorStop(0.45, '#070112');
+  g.addColorStop(1, '#120818');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  var spots = [
+    [0.0, colA, 0.55],
+    [2.1, PAL[4], 0.42],
+    [4.0, colB, 0.38],
+    [5.3, PAL[2], 0.28]
+  ];
+  var i;
+  ctx.globalCompositeOperation = 'screen';
+  for (i = 0; i < spots.length; i++) {
+    var ang = spots[i][0] + t * 0.12;
+    var sx = cx + Math.cos(ang) * S * 0.22;
+    var sy = topY + (outerBot - topY) * 0.48 + Math.sin(ang * 0.8) * S * 0.08;
+    var rad = S * (0.42 + spots[i][2] * 0.25);
+    var rg = ctx.createRadialGradient(sx, sy, 0, sx, sy, rad);
+    rg.addColorStop(0, rgb(spots[i][1], 0.55 * spots[i][2] + 0.12));
+    rg.addColorStop(1, rgb(spots[i][1], 0));
+    ctx.fillStyle = rg;
+    ctx.beginPath();
+    ctx.arc(sx, sy, rad, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalCompositeOperation = 'source-over';
+
+  var floor = ctx.createLinearGradient(0, outerBot - S * 0.05, 0, H);
+  floor.addColorStop(0, 'rgba(0,0,0,0)');
+  floor.addColorStop(1, 'rgba(18,0,28,0.55)');
+  ctx.fillStyle = floor;
+  ctx.fillRect(0, outerBot - S * 0.02, W, H);
+}
+
+function drawReflection(col, surf) {
+  var gy = outerBot + S * 0.03;
+  ctx.save();
+  ctx.translate(cx, gy);
+  ctx.scale(1, 0.22);
+  var rg = ctx.createRadialGradient(0, 0, S * 0.02, 0, 0, topR * 1.05);
+  rg.addColorStop(0, rgb(lighten(col, 0.2), 0.28 + fill * 0.22));
+  rg.addColorStop(0.55, rgb(col, 0.14 + fill * 0.12));
+  rg.addColorStop(1, rgb(col, 0));
+  ctx.fillStyle = rg;
+  ctx.beginPath();
+  ctx.arc(0, 0, topR * 1.05, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.save();
+  ctx.translate(cx, gy + S * 0.012);
+  ctx.scale(1, 0.16);
+  var sh = ctx.createRadialGradient(0, 0, topR * 0.2, 0, 0, topR);
+  sh.addColorStop(0, 'rgba(0,0,0,0.45)');
+  sh.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = sh;
+  ctx.beginPath();
+  ctx.arc(0, 0, topR, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function strokeRim(back) {
+  var rx = halfAt(topY, 0);
+  var ry = rimRy;
+  ctx.beginPath();
+  if (back) ctx.ellipse(cx, topY, rx, ry, 0, Math.PI, Math.PI * 2);
+  else ctx.ellipse(cx, topY, rx, ry, 0, 0, Math.PI);
+  ctx.stroke();
+}
+
+function drawGlassBack() {
+  ctx.save();
+  traceBowl(wall * 0.2);
+  var gg = ctx.createLinearGradient(cx - topR, 0, cx + topR, 0);
+  gg.addColorStop(0, 'rgba(255,255,255,0.1)');
+  gg.addColorStop(0.16, 'rgba(255,255,255,0.03)');
+  gg.addColorStop(0.5, 'rgba(255,255,255,0.012)');
+  gg.addColorStop(0.84, 'rgba(120,190,210,0.05)');
+  gg.addColorStop(1, 'rgba(255,255,255,0.08)');
+  ctx.fillStyle = gg;
+  ctx.fill();
+  ctx.restore();
+
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineWidth = Math.max(2, wall * 0.55);
+  ctx.strokeStyle = 'rgba(190, 245, 255, 0.28)';
+  strokeRim(true);
+  ctx.restore();
+}
+
+function drawLiquid(surf, col) {
+  var amp = S * 0.0035 + energy * S * 0.01;
+  var topCol = colorAt(1);
+  ctx.save();
+  traceBowl(wall * 0.35);
+  ctx.clip();
+
+  traceLiquid(surf, amp);
+  var g = ctx.createLinearGradient(0, surf.y - surf.ry, 0, innerBot + S * 0.08);
+  var steps = 14;
+  var i;
+  for (i = 0; i <= steps; i++) {
+    var f = i / steps;
+    var c = colorAt(1 - f);
+    if (f > 0.82) c = darken(c, (f - 0.82) * 1.1);
+    if (f < 0.18) c = lighten(c, (0.18 - f) * 0.4);
+    g.addColorStop(f, rgb(c, 1));
+  }
+  ctx.fillStyle = g;
+  ctx.fill();
+
+  ctx.save();
+  traceLiquid(surf, amp);
+  ctx.clip();
+
+  ctx.globalCompositeOperation = 'screen';
+  for (i = 0; i < 6; i++) {
+    var ang = spin * (0.65 + i * 0.11) + i * 1.35;
+    var depth = 0.12 + 0.75 * ((i * 0.17) % 1);
+    var by = surf.y + (innerBot - surf.y) * depth;
+    var reach = halfAt(by, wall) * 0.48;
+    var bx = cx + Math.cos(ang) * reach;
+    var br = halfAt(by, wall) * (0.28 + 0.12 * Math.sin(i * 2.2 + spin));
+    var bc = PAL[(i + ((t / 5.6) | 0)) % PAL.length];
+    var rg = ctx.createRadialGradient(bx, by, 0, bx, by, br);
+    rg.addColorStop(0, rgb(bc, 0.4));
+    rg.addColorStop(1, rgb(bc, 0));
+    ctx.fillStyle = rg;
+    ctx.beginPath();
+    ctx.arc(bx, by, Math.max(1, br), 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalCompositeOperation = 'source-over';
+
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  for (i = 0; i < 3; i++) {
+    ctx.beginPath();
+    var k;
+    for (k = 0; k <= 28; k++) {
+      var p = k / 28;
+      var y = surf.y + (innerBot - surf.y) * p;
+      var x = cx + Math.sin(p * (5 + i) + spin * (1.4 + i * 0.35) + i) * halfAt(y, wall) * (0.42 + i * 0.08);
+      if (k === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    var vein = lighten(PAL[(i * 3 + 2) % PAL.length], 0.35);
+    ctx.strokeStyle = rgb(vein, 0.28);
+    ctx.lineWidth = S * (0.008 - i * 0.0015);
+    ctx.stroke();
+  }
+
+  ctx.globalAlpha = 0.55;
+  for (i = 0; i < 4; i++) {
+    ctx.beginPath();
+    var k2;
+    for (k2 = 0; k2 <= 20; k2++) {
+      var p2 = k2 / 20;
+      var y2 = innerBot - (innerBot - surf.y) * (0.05 + p2 * 0.55);
+      var x2 = cx + Math.sin(p2 * 9 + t * 3 + i * 1.7) * halfAt(y2, wall) * 0.72;
+      if (k2 === 0) ctx.moveTo(x2, y2);
+      else ctx.lineTo(x2, y2);
+    }
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.lineWidth = Math.max(1, S * 0.003);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  for (i = 0; i < bubbles.length; i++) {
+    var b = bubbles[i];
+    if (b.y < surf.y - surf.ry) continue;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.fillStyle = rgb(lighten(b.color, 0.4), 0.28);
+    ctx.fill();
+    ctx.lineWidth = Math.max(1, b.r * 0.22);
+    ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(b.x - b.r * 0.32, b.y - b.r * 0.32, Math.max(0.8, b.r * 0.28), 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.fill();
+  }
+
+  var sheenX = cx - halfAt((surf.y + innerBot) * 0.5, wall) + wall;
+  var sg = ctx.createLinearGradient(sheenX, 0, sheenX + S * 0.07, 0);
+  sg.addColorStop(0, 'rgba(255,255,255,0)');
+  sg.addColorStop(0.45, 'rgba(255,255,255,0.38)');
+  sg.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = sg;
+  ctx.fillRect(sheenX - 4, surf.y, S * 0.09, innerBot - surf.y + 8);
+
+  drawSurface(surf, topCol);
+  ctx.restore();
+  ctx.restore();
+}
+
+function surfacePoint(surf, a, amp) {
+  var wave = Math.sin(a * 3 + t * 4.2) * amp + Math.sin(a * 5 - t * 2.6) * amp * 0.45;
+  var men = Math.pow(Math.abs(Math.cos(a)), 6) * surf.ry * 0.22;
+  var wob = 0;
+  var r;
+  for (r = 0; r < ripples.length; r++) {
+    var rp = ripples[r];
+    var k = rp.age / rp.life;
+    var ring = Math.sin(a * 2 + k * 12);
+    wob += Math.sin((k * 1.15 - 0.15) * Math.PI) * amp * rp.power * (1 - k) * (0.35 + 0.65 * Math.abs(ring));
+  }
+  var px = cx + Math.cos(a) * surf.rx;
+  var py = surf.y + Math.sin(a) * surf.ry + wave + wob - men * 0.2;
+  return [px, py];
+}
+
+function drawSurface(surf, topCol) {
+  var amp = S * 0.0035 + energy * S * 0.01;
+  var n = 80;
+  ctx.beginPath();
+  var i;
+  for (i = 0; i <= n; i++) {
+    var a = (i / n) * Math.PI * 2 - Math.PI / 2;
+    var p = surfacePoint(surf, a, amp);
+    if (i === 0) ctx.moveTo(p[0], p[1]);
+    else ctx.lineTo(p[0], p[1]);
+  }
+  ctx.closePath();
+
+  var base = ctx.createRadialGradient(cx, surf.y - surf.ry * 0.2, surf.rx * 0.1, cx, surf.y, surf.rx);
+  base.addColorStop(0, rgb(darken(topCol, 0.15), 1));
+  base.addColorStop(0.55, rgb(topCol, 1));
+  base.addColorStop(1, rgb(lighten(topCol, 0.42), 1));
+  ctx.fillStyle = base;
+  ctx.fill();
+
+  ctx.save();
+  ctx.clip();
+  if (ctx.createConicGradient) {
+    var cg = ctx.createConicGradient(spin * 0.9, cx, surf.y);
+    var swatches = 8;
+    for (i = 0; i <= swatches; i++) {
+      var c = lighten(PAL[i % PAL.length], 0.18);
+      cg.addColorStop(i / swatches, rgb(c, 1));
+    }
+    ctx.globalAlpha = 0.48;
+    ctx.fillStyle = cg;
+    ctx.fillRect(cx - surf.rx * 1.3, surf.y - surf.ry * 2.2, surf.rx * 2.6, surf.ry * 4.4);
+    ctx.globalAlpha = 1;
+  }
+
+  for (i = 0; i < foams.length; i++) {
+    var f = foams[i];
+    var fade = 1 - f.age / f.life;
+    var fr = f.rad * (0.85 + 0.15 * Math.sin(t + i));
+    var fx = cx + Math.cos(f.a) * surf.rx * fr;
+    var fy = surf.y + Math.sin(f.a) * surf.ry * fr;
+    ctx.beginPath();
+    ctx.arc(fx, fy, f.r, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,' + (0.35 * fade) + ')';
+    ctx.fill();
+  }
+
+  var sx = cx - surf.rx * 0.28 + Math.sin(t * 0.8) * surf.rx * 0.12;
+  var sy = surf.y - surf.ry * 0.25;
+  var hg = ctx.createRadialGradient(sx, sy, 0, sx, sy, surf.rx * 0.55);
+  hg.addColorStop(0, 'rgba(255,255,255,0.85)');
+  hg.addColorStop(0.35, 'rgba(255,255,255,0.22)');
+  hg.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = hg;
+  ctx.beginPath();
+  ctx.ellipse(sx, sy, surf.rx * 0.42, surf.ry * 0.7, -0.4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.beginPath();
+  for (i = 0; i <= n; i++) {
+    var a2 = (i / n) * Math.PI * 2 - Math.PI / 2;
+    var q = surfacePoint(surf, a2, amp);
+    if (i === 0) ctx.moveTo(q[0], q[1]);
+    else ctx.lineTo(q[0], q[1]);
+  }
+  ctx.closePath();
+  ctx.strokeStyle = rgb(lighten(topCol, 0.55), 0.9);
+  ctx.lineWidth = Math.max(1.5, S * 0.004);
+  ctx.stroke();
+
+  for (i = 0; i < ripples.length; i++) {
+    var rp = ripples[i];
+    var k = rp.age / rp.life;
+    ctx.beginPath();
+    ctx.ellipse(cx, surf.y, surf.rx * k, Math.max(1, surf.ry * k), 0, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255,255,255,' + ((1 - k) * 0.45 * rp.power) + ')';
+    ctx.lineWidth = Math.max(1, S * 0.003);
+    ctx.stroke();
+  }
+}
+
+function drawStream(surf, col, col2) {
+  var y1 = surf.y + surf.ry * 0.15;
+  var step = Math.max(5, S * 0.008);
+  var left = [];
+  var right = [];
+  var y;
+  for (y = -step; y <= y1; y += step) {
+    var x = streamX(y, t);
+    var hw = streamHw(y, t, surf.y);
+    var yb = Math.min(y1, y + step);
+    var dx = streamX(yb, t) - x;
+    var dy = yb - y;
+    var len = Math.hypot(dx, dy) || 1;
+    var nx = -dy / len;
+    var ny = dx / len;
+    left.push([x + nx * hw, y + ny * hw]);
+    right.push([x - nx * hw, y - ny * hw]);
+  }
+  if (left.length < 2) return;
+
+  ctx.beginPath();
+  ctx.moveTo(left[0][0], left[0][1]);
+  var i;
+  for (i = 1; i < left.length; i++) ctx.lineTo(left[i][0], left[i][1]);
+  for (i = right.length - 1; i >= 0; i--) ctx.lineTo(right[i][0], right[i][1]);
+  ctx.closePath();
+
+  var span = S * 0.05;
+  var lg = ctx.createLinearGradient(cx - span, 0, cx + span, 0);
+  lg.addColorStop(0, rgb(darken(col, 0.25), 0.95));
+  lg.addColorStop(0.28, rgb(col, 1));
+  lg.addColorStop(0.48, rgb(lighten(col, 0.35), 1));
+  lg.addColorStop(0.58, rgb(lighten(col2, 0.55), 1));
+  lg.addColorStop(0.74, rgb(col2, 1));
+  lg.addColorStop(1, rgb(darken(col2, 0.3), 0.95));
+  ctx.fillStyle = lg;
+  ctx.fill();
+
+  ctx.beginPath();
+  for (i = 0; i < left.length; i += 1) {
+    var yy = -step + i * step;
+    var hw2 = streamHw(yy, t, surf.y);
+    var xh = streamX(yy, t) - hw2 * 0.28;
+    if (i === 0) ctx.moveTo(xh, yy);
+    else ctx.lineTo(xh, left[i][1]);
+  }
+  ctx.strokeStyle = 'rgba(255,255,255,0.72)';
+  ctx.lineWidth = Math.max(1.25, S * 0.0045);
+  ctx.lineCap = 'round';
+  ctx.stroke();
+
+  var ix = streamX(surf.y, t);
+  var splashG = ctx.createRadialGradient(ix, surf.y, 0, ix, surf.y, S * 0.045);
+  splashG.addColorStop(0, 'rgba(255,255,255,0.95)');
+  splashG.addColorStop(0.35, rgb(lighten(col, 0.4), 0.7));
+  splashG.addColorStop(1, rgb(col, 0));
+  ctx.fillStyle = splashG;
+  ctx.beginPath();
+  ctx.ellipse(ix, surf.y, S * 0.04, surf.ry * 0.85, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawParticles() {
+  var i;
+  for (i = 0; i < particles.length; i++) {
+    var p = particles[i];
+    var fade = 1 - p.age / p.life;
+    if (fade < 0) fade = 0;
+    var r = p.r * (p.kind === 'splash' ? (0.7 + 0.5 * fade) : 1);
+    var g = ctx.createRadialGradient(p.x - r * 0.3, p.y - r * 0.35, r * 0.1, p.x, p.y, r);
+    g.addColorStop(0, 'rgba(255,255,255,0.95)');
+    g.addColorStop(0.45, rgb(lighten(p.color, 0.25), 0.95 * fade));
+    g.addColorStop(1, rgb(p.color, 0.15 * fade));
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, Math.max(0.6, r), 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawGlassFront(col) {
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  var steps = 28;
+  var i;
+  ctx.beginPath();
+  for (i = 0; i <= steps; i++) {
+    var yO = topY + (outerBot - topY) * (i / steps);
+    if (i === 0) ctx.moveTo(cx - halfAt(yO, 0), yO);
+    else ctx.lineTo(cx - halfAt(yO, 0), yO);
+  }
+  var obrx = halfAt(outerBot, 0);
+  var obry = Math.max(5, obrx * 0.3);
+  for (i = 0; i <= 14; i++) {
+    var oa = Math.PI * (1 - i / 14);
+    ctx.lineTo(cx + Math.cos(oa) * obrx, outerBot + Math.sin(oa) * obry);
+  }
+  for (i = steps; i >= 0; i--) {
+    var yU = topY + (outerBot - topY) * (i / steps);
+    ctx.lineTo(cx + halfAt(yU, 0), yU);
+  }
+  ctx.strokeStyle = 'rgba(232, 248, 255, 0.5)';
+  ctx.lineWidth = Math.max(1.5, wall * 0.22);
+  ctx.stroke();
+
+  ctx.beginPath();
+  for (i = 0; i <= steps; i++) {
+    var y = topY + (outerBot - topY) * (i / steps);
+    var x = cx - halfAt(y, wall * 0.15);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  var hg = ctx.createLinearGradient(0, topY, 0, outerBot);
+  hg.addColorStop(0, 'rgba(255,255,255,0.05)');
+  hg.addColorStop(0.2, 'rgba(255,255,255,0.8)');
+  hg.addColorStop(0.55, 'rgba(210,250,255,0.35)');
+  hg.addColorStop(1, 'rgba(255,255,255,0.65)');
+  ctx.strokeStyle = hg;
+  ctx.lineWidth = Math.max(2, wall * 0.42);
+  ctx.stroke();
+
+  ctx.beginPath();
+  for (i = 0; i <= steps; i++) {
+    var yR = topY + (outerBot - topY) * (i / steps);
+    var xR = cx + halfAt(yR, 0);
+    if (i === 0) ctx.moveTo(xR, yR);
+    else ctx.lineTo(xR, yR);
+  }
+  ctx.strokeStyle = 'rgba(255, 180, 230, 0.28)';
+  ctx.lineWidth = Math.max(1.5, wall * 0.28);
+  ctx.stroke();
+
+  ctx.lineWidth = Math.max(2.5, wall * 0.72);
+  var rimG = ctx.createLinearGradient(cx - topR, topY, cx + topR, topY + rimRy);
+  rimG.addColorStop(0, 'rgba(255,255,255,0.95)');
+  rimG.addColorStop(0.45, 'rgba(200,245,255,0.55)');
+  rimG.addColorStop(1, rgb(lighten(col, 0.35), 0.45));
+  ctx.strokeStyle = rimG;
+  strokeRim(false);
+
+  var brx = halfAt(outerBot, 0);
+  var bry = Math.max(5, brx * 0.28);
+  ctx.beginPath();
+  ctx.ellipse(cx, outerBot, brx, bry, 0, Math.PI, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(230,245,255,0.35)';
+  ctx.lineWidth = Math.max(1.5, wall * 0.28);
+  ctx.stroke();
+
+  var irx = halfAt(innerBot, wall * 0.2);
+  var iry = Math.max(4, irx * 0.26);
+  ctx.beginPath();
+  ctx.ellipse(cx, innerBot, irx, iry, 0, 0, Math.PI);
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+  ctx.lineWidth = Math.max(1, wall * 0.2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawOverflow(col) {
+  if (spillVis < 0.02) return;
+  var slots = [-0.8, -0.34, 0.3, 0.76];
+  var i, k;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  for (i = 0; i < slots.length; i++) {
+    var side = slots[i];
+    ctx.beginPath();
+    var segs = 26;
+    for (k = 0; k <= segs; k++) {
+      var p = k / segs;
+      var y = topY + (outerBot - topY + S * 0.04) * p;
+      var edge = halfAt(Math.min(y, outerBot), 0);
+      var wob = Math.sin(p * 10 - t * 7 + i * 1.7) * S * 0.006;
+      var x = cx + side * (edge + wall * 0.15) + wob + (side > 0 ? 1 : -1) * wall * 0.25;
+      if (k === 0) ctx.moveTo(x, topY + rimRy * 0.2);
+      else ctx.lineTo(x, y);
+    }
+    var pulse = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(t * 6 + i * 2.2));
+    ctx.strokeStyle = rgb(col, 0.82 * spillVis);
+    ctx.lineWidth = Math.max(1.5, S * 0.01 * spillVis * pulse);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,' + (0.45 * spillVis) + ')';
+    ctx.lineWidth = Math.max(0.8, S * 0.003 * spillVis);
+    ctx.stroke();
+  }
+
+  ctx.save();
+  ctx.lineWidth = Math.max(2, wall * 0.35 * spillVis);
+  ctx.strokeStyle = rgb(lighten(col, 0.25), 0.55 * spillVis);
+  var rx = halfAt(topY, 0) + wall * 0.1;
+  ctx.beginPath();
+  ctx.ellipse(cx, topY + rimRy * 0.08, rx, rimRy * 1.05, 0, 0, Math.PI);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function draw() {
+  var col = pourColor(t);
+  var col2 = pourColor2(t);
+  var surf = surfaceInfo();
+  drawBackground(col, col2);
+  drawReflection(colorAt(0.5), surf);
+  drawGlassBack();
+  drawLiquid(surf, col);
+  drawStream(surf, col, col2);
+  drawGlassFront(col);
+  drawOverflow(col);
+  drawParticles();
+}
+
+function makeNoise() {
+  var len = audioCtx.sampleRate * 2;
+  var buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+  var data = buf.getChannelData(0);
+  var i;
+  for (i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+  return buf;
+}
+
+function startSources() {
+  if (sourcesOn || !audioCtx) return;
+  sourcesOn = true;
+  var pour = audioCtx.createBufferSource();
+  pour.buffer = noiseBuf;
+  pour.loop = true;
+  pour.connect(pourFilter);
+  pour.start();
+
+  var bed = audioCtx.createBufferSource();
+  bed.buffer = noiseBuf;
+  bed.loop = true;
+  bed.connect(bedFilter);
+  bed.start();
+
+  var over = audioCtx.createBufferSource();
+  over.buffer = noiseBuf;
+  over.loop = true;
+  over.connect(overFilter);
+  over.start();
+
+  bodyOsc.start();
+}
+
+function setupAudio() {
+  if (audioCtx) return;
+  var AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  try {
+    audioCtx = new AC();
+  } catch (e) {
+    audioCtx = null;
+    return;
+  }
+  noiseBuf = makeNoise();
+  master = audioCtx.createGain();
+  master.gain.value = 0.42;
+  var comp = audioCtx.createDynamicsCompressor();
+  comp.threshold.value = -16;
+  comp.knee.value = 18;
+  comp.ratio.value = 3.2;
+  comp.attack.value = 0.004;
+  comp.release.value = 0.18;
+  master.connect(comp);
+  comp.connect(audioCtx.destination);
+
+  pourFilter = audioCtx.createBiquadFilter();
+  pourFilter.type = 'bandpass';
+  pourFilter.frequency.value = 1400;
+  pourFilter.Q.value = 0.65;
+  pourGain = audioCtx.createGain();
+  pourGain.gain.value = 0.0001;
+  pourFilter.connect(pourGain);
+  pourGain.connect(master);
+
+  bedFilter = audioCtx.createBiquadFilter();
+  bedFilter.type = 'highpass';
+  bedFilter.frequency.value = 1800;
+  bedGain = audioCtx.createGain();
+  bedGain.gain.value = 0.0001;
+  bedFilter.connect(bedGain);
+  bedGain.connect(master);
+
+  overFilter = audioCtx.createBiquadFilter();
+  overFilter.type = 'bandpass';
+  overFilter.frequency.value = 2400;
+  overFilter.Q.value = 0.8;
+  overGain = audioCtx.createGain();
+  overGain.gain.value = 0.0001;
+  overFilter.connect(overGain);
+  overGain.connect(master);
+
+  bodyOsc = audioCtx.createOscillator();
+  bodyOsc.type = 'sine';
+  bodyOsc.frequency.value = 96;
+  bodyGain = audioCtx.createGain();
+  bodyGain.gain.value = 0.0001;
+  bodyOsc.connect(bodyGain);
+  bodyGain.connect(master);
+}
+
+function unlockAudio() {
+  setupAudio();
+  if (!audioCtx) return;
+  var resume = audioCtx.resume();
+  if (audioCtx.state === 'running') startSources();
+  if (resume && resume.then) {
+    resume.then(function () {
+      if (audioCtx.state === 'running') startSources();
+    }).catch(function () {});
+  }
+}
+
+function audioFollow() {
+  if (!audioCtx || audioCtx.state !== 'running' || !pourGain) return;
+  var now = audioCtx.currentTime;
+  var pulse = 0.78 + 0.22 * Math.sin(t * 15);
+  var pour = (0.1 + (1 - fill) * 0.04) * pulse;
+  pourGain.gain.setTargetAtTime(pour, now, 0.05);
+  pourFilter.frequency.setTargetAtTime(1680 - fill * 920, now, 0.08);
+  bedGain.gain.setTargetAtTime(0.012 + energy * 0.07, now, 0.04);
+  bedFilter.frequency.setTargetAtTime(1400 + energy * 900 - fill * 400, now, 0.05);
+  bodyGain.gain.setTargetAtTime(0.018 + fill * 0.05, now, 0.08);
+  bodyOsc.frequency.setTargetAtTime(150 - fill * 62, now, 0.1);
+  overGain.gain.setTargetAtTime(spillVis * 0.045, now, 0.08);
+}
+
+var lastBlip = 0;
+function blip(level, freq, dur) {
+  if (!audioCtx || audioCtx.state !== 'running' || !noiseBuf) return;
+  var nowMs = performance.now();
+  if (nowMs - lastBlip < 85) return;
+  lastBlip = nowMs;
+  var now = audioCtx.currentTime;
+  var src = audioCtx.createBufferSource();
+  src.buffer = noiseBuf;
+  var f = audioCtx.createBiquadFilter();
+  f.type = 'bandpass';
+  f.frequency.value = freq;
+  f.Q.value = 3.2;
+  var g = audioCtx.createGain();
+  var peak = Math.max(0.0001, 0.16 * level);
+  g.gain.setValueAtTime(0.0001, now);
+  g.gain.exponentialRampToValueAtTime(peak, now + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+  src.connect(f);
+  f.connect(g);
+  g.connect(master);
+  src.start(now);
+  src.stop(now + dur + 0.02);
+}
+
+function popTone(radius) {
+  if (!audioCtx || audioCtx.state !== 'running') return;
+  var now = audioCtx.currentTime;
+  var o = audioCtx.createOscillator();
+  o.type = 'sine';
+  var f0 = 520 + (1 - Math.min(1, radius / (S * 0.012))) * 640 + fill * 180;
+  o.frequency.setValueAtTime(f0, now);
+  o.frequency.exponentialRampToValueAtTime(Math.max(80, f0 * 0.55), now + 0.09);
+  var g = audioCtx.createGain();
+  g.gain.setValueAtTime(0.0001, now);
+  g.gain.exponentialRampToValueAtTime(0.05, now + 0.008);
+  g.gain.exponentialRampToValueAtTime(0.0001, now + 0.11);
+  o.connect(g);
+  g.connect(master);
+  o.start(now);
+  o.stop(now + 0.12);
+}
+
+function frame(now) {
+  if (!lastNow) lastNow = now;
+  var dt = (now - lastNow) / 1000;
+  lastNow = now;
+  if (dt > 0.033) dt = 0.033;
+  if (dt < 0) dt = 0;
+  t += dt;
+  simulate(dt);
+  draw();
+  audioFollow();
+  requestAnimationFrame(frame);
+}
+
+layout();
+window.addEventListener('resize', layout);
+unlockAudio();
+window.addEventListener('pointerdown', unlockAudio, true);
+window.addEventListener('keydown', unlockAudio, true);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

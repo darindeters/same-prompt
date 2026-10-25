@@ -246,3 +246,36 @@ Note: Rebuilt on Oct 23, 2026 with the current prompt, which adds the vivid-colo
 | Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:32 | [open](https://darindeters.github.io/same-prompt/marble-run/codex/) |
 | Gemini (4 Argon) | Antigravity CLI 1.4.5 | 4:17 | [open](https://darindeters.github.io/same-prompt/marble-run/gemini/) |
 | Grok (4.7) | Grok Build 1.0.62 | 27:47 | [open](https://darindeters.github.io/same-prompt/marble-run/grok/) |
+
+## Liquid Pour
+
+> Build a stream of glossy, colorful liquid pouring from above into a clear glass, splashing, swirling and slowly filling it up, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it sound effects that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 8:46 | [open](https://darindeters.github.io/same-prompt/fluid-pour/claude/) |
+| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:12 | [open](https://darindeters.github.io/same-prompt/fluid-pour/codex/) |
+| Gemini (4 Argon) | Antigravity CLI 1.4.5 | 3:35 | [open](https://darindeters.github.io/same-prompt/fluid-pour/gemini/) |
+| Grok (4.7) | Grok Build 1.0.62 | 18:08 | [open](https://darindeters.github.io/same-prompt/fluid-pour/grok/) |
+
+## Marble Music Machine
+
+> Build a marble music machine where glass marbles roll down tracks and drop onto xylophone bars, and each hit plays the next note of Beethoven's Ode to Joy, so the marbles play the melody, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it sound effects that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 10:10 | [open](https://darindeters.github.io/same-prompt/marble-music/claude/) |
+| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:17 | [open](https://darindeters.github.io/same-prompt/marble-music/codex/) |
+| Gemini (4 Argon) | Antigravity CLI 1.4.5 | 3:06 | [open](https://darindeters.github.io/same-prompt/marble-music/gemini/) |
+| Grok (4.7) | Grok Build 1.0.62 | 30:00 | [open](https://darindeters.github.io/same-prompt/marble-music/grok/) |
+
+## If AIs Were People
+
+> Build an animated portrait of yourself, the AI model writing this file, showing how you would look if you were a person, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give yourself a signature sound that fits who you are, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 6:07 | [open](https://darindeters.github.io/same-prompt/self-portrait/claude/) |
+| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:05 | [open](https://darindeters.github.io/same-prompt/self-portrait/codex/) |
+| Gemini (4 Argon) | Antigravity CLI 1.4.5 | 3:10 | [open](https://darindeters.github.io/same-prompt/self-portrait/gemini/) |
+| Grok (4.7) | Grok Build 1.0.62 | 15:44 | [open](https://darindeters.github.io/same-prompt/self-portrait/grok/) |

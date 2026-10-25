@@ -1,0 +1,1430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Glossy Liquid Pour</title>
+<style>
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #070510;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('scene');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  // Virtual coordinate space optimized for 1080x1080 while filling any screen
+  let width = 1080;
+  let height = 1080;
+  let scale = 1;
+  let offsetX = 0;
+  let offsetY = 0;
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(window.innerWidth * dpr);
+    canvas.height = Math.round(window.innerHeight * dpr);
+    scale = Math.min(canvas.width / 1080, canvas.height / 1080);
+    width = canvas.width / scale;
+    height = canvas.height / scale;
+    offsetX = (width - 1080) * 0.5;
+    offsetY = (height - 1080) * 0.5;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Glass geometry in 1080x1080 reference coordinates
+  const GLASS = {
+    cx: 540,
+    topY: 290,
+    bottomY: 855,
+    baseBottomY: 910,
+    topRx: 215,
+    topRy: 36,
+    bottomRx: 152,
+    bottomRy: 26,
+    wallThickness: 12
+  };
+
+  function getGlassRadiusX(y) {
+    const t = Math.max(0, Math.min(1, (y - GLASS.topY) / (GLASS.bottomY - GLASS.topY)));
+    // Slight elegant curve to the tumbler walls
+    const ease = t + 0.06 * Math.sin(t * Math.PI);
+    return GLASS.topRx + (GLASS.bottomRx - GLASS.topRx) * ease;
+  }
+
+  function getGlassRadiusY(y) {
+    const t = Math.max(0, Math.min(1, (y - GLASS.topY) / (GLASS.bottomY - GLASS.topY)));
+    return GLASS.topRy + (GLASS.bottomRy - GLASS.topRy) * t;
+  }
+
+  // Vivid color palette (tropical neon-berry / cyan / magenta / amber / violet)
+  function getStreamColor(time, offset = 0) {
+    const hue = (time * 38 + offset) % 360;
+    return hue;
+  }
+
+  function hsl(h, s, l, a = 1) {
+    return `hsla(${((h % 360) + 360) % 360}, ${s}%, ${l}%, ${a})`;
+  }
+
+  // 1D wave simulation for the liquid surface
+  const WAVE_COUNT = 65;
+  const waveHeight = new Float32Array(WAVE_COUNT);
+  const waveVel = new Float32Array(WAVE_COUNT);
+  const waveBackHeight = new Float32Array(WAVE_COUNT);
+  const waveBackVel = new Float32Array(WAVE_COUNT);
+
+  function disturbSurface(normX, force) {
+    const idx = Math.floor(((normX + 1) * 0.5) * (WAVE_COUNT - 1));
+    for (let i = -3; i <= 3; i++) {
+      const k = idx + i;
+      if (k > 0 && k < WAVE_COUNT - 1) {
+        const falloff = Math.cos((i / 4) * (Math.PI * 0.5));
+        waveVel[k] += force * falloff;
+        waveBackVel[k] -= force * 0.65 * falloff;
+      }
+    }
+  }
+
+  function updateWaves(dt) {
+    const tension = 190;
+    const damping = 3.2;
+    const spread = 0.28;
+
+    for (let i = 1; i < WAVE_COUNT - 1; i++) {
+      const acc = -tension * waveHeight[i] - damping * waveVel[i];
+      waveVel[i] += acc * dt;
+      const accB = -tension * waveBackHeight[i] - damping * waveBackVel[i];
+      waveBackVel[i] += accB * dt;
+    }
+
+    for (let i = 1; i < WAVE_COUNT - 1; i++) {
+      waveHeight[i] += waveVel[i] * dt;
+      waveBackHeight[i] += waveBackVel[i] * dt;
+    }
+
+    for (let pass = 0; pass < 2; pass++) {
+      for (let i = 1; i < WAVE_COUNT - 1; i++) {
+        const dL = spread * (waveHeight[i] - waveHeight[i - 1]);
+        const dR = spread * (waveHeight[i] - waveHeight[i + 1]);
+        waveVel[i - 1] += dL * 18 * dt;
+        waveVel[i + 1] += dR * 18 * dt;
+        waveHeight[i - 1] += dL * 0.5;
+        waveHeight[i + 1] += dR * 0.5;
+
+        const dbL = spread * (waveBackHeight[i] - waveBackHeight[i - 1]);
+        const dbR = spread * (waveBackHeight[i] - waveBackHeight[i + 1]);
+        waveBackVel[i - 1] += dbL * 18 * dt;
+        waveBackVel[i + 1] += dbR * 18 * dt;
+        waveBackHeight[i - 1] += dbL * 0.5;
+        waveBackHeight[i + 1] += dbR * 0.5;
+      }
+    }
+    waveHeight[0] = 0;
+    waveHeight[WAVE_COUNT - 1] = 0;
+    waveBackHeight[0] = 0;
+    waveBackHeight[WAVE_COUNT - 1] = 0;
+  }
+
+  // Particle systems: splashes, submerged bubbles, swirl ribbons, overflow drips
+  const droplets = [];
+  const bubbles = [];
+  const swirlRibbons = [];
+  const surfaceRings = [];
+  const wallBeads = [];
+
+  for (let i = 0; i < 18; i++) {
+    swirlRibbons.push({
+      phase: (i / 18) * Math.PI * 2,
+      depth: Math.random(),
+      radiusFactor: 0.22 + Math.random() * 0.68,
+      speed: (0.9 + Math.random() * 1.4) * (i % 2 === 0 ? 1 : 0.75),
+      hueOffset: i * 22,
+      thickness: 10 + Math.random() * 18,
+      verticalWave: Math.random() * Math.PI * 2
+    });
+  }
+
+  for (let i = 0; i < 28; i++) {
+    wallBeads.push({
+      angle: (Math.random() - 0.5) * 2.5,
+      y: GLASS.topY + 30 + Math.random() * 480,
+      r: 2.2 + Math.random() * 4.5,
+      hue: Math.random() * 360,
+      vy: 0
+    });
+  }
+
+  // Fill cycle state: slowly fills over ~22 seconds, brims with lively splashes, then gracefully vortex-drains & refills
+  let fillLevel = 0.03;
+  let cyclePhase = 'filling'; // 'filling' | 'brimming' | 'draining'
+  let phaseTimer = 0;
+  let pourRate = 1.0;
+  let baseHue = 325;
+  let streamReachY = GLASS.bottomY;
+
+  // ============================================================================
+  // PROCEDURAL WEB AUDIO API SOUND ENGINE
+  // ============================================================================
+  const Sound = {
+    ctx: null,
+    started: false,
+    masterGain: null,
+    pourGain: null,
+    cavityFilter: null,
+    formantFilter: null,
+    fizzFilter: null,
+    fizzGain: null,
+    subOsc: null,
+    subGain: null,
+    lastBloopTime: 0,
+    lastGlugTime: 0,
+
+    init() {
+      if (this.ctx) {
+        if (this.ctx.state === 'suspended') {
+          this.ctx.resume().catch(() => {});
+        }
+        return;
+      }
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+
+      try {
+        this.ctx = new AudioCtx();
+      } catch (e) {
+        return;
+      }
+
+      const ac = this.ctx;
+      this.masterGain = ac.createGain();
+      this.masterGain.gain.value = 0.42;
+      this.masterGain.connect(ac.destination);
+
+      // 1. Pink/White noise buffer for continuous liquid stream & cavity turbulence
+      const bufLen = ac.sampleRate * 3;
+      const noiseBuf = ac.createBuffer(1, bufLen, ac.sampleRate);
+      const output = noiseBuf.getChannelData(0);
+      let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+      for (let i = 0; i < bufLen; i++) {
+        const white = Math.random() * 2 - 1;
+        b0 = 0.99886 * b0 + white * 0.0555179;
+        b1 = 0.99332 * b1 + white * 0.0750759;
+        b2 = 0.96900 * b2 + white * 0.1538520;
+        b3 = 0.86650 * b3 + white * 0.3104856;
+        b4 = 0.55000 * b4 + white * 0.5329522;
+        b5 = -0.7616 * b5 - white * 0.0168980;
+        output[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.05;
+        b6 = white * 0.115926;
+      }
+
+      const noiseNode = ac.createBufferSource();
+      noiseNode.buffer = noiseBuf;
+      noiseNode.loop = true;
+
+      // Amplitude modulation on the noise to create natural liquid flutter
+      const flutterOsc = ac.createOscillator();
+      flutterOsc.frequency.value = 11.5;
+      const flutterGain = ac.createGain();
+      flutterGain.gain.value = 0.18;
+      flutterOsc.connect(flutterGain);
+
+      // Resonant glass cylinder cavity filter (pitch rises as glass fills)
+      this.cavityFilter = ac.createBiquadFilter();
+      this.cavityFilter.type = 'bandpass';
+      this.cavityFilter.frequency.value = 260;
+      this.cavityFilter.Q.value = 5.5;
+
+      // Secondary formant filter for glossy liquid body
+      this.formantFilter = ac.createBiquadFilter();
+      this.formantFilter.type = 'bandpass';
+      this.formantFilter.frequency.value = 620;
+      this.formantFilter.Q.value = 3.2;
+
+      // High-frequency sparkle/effervescence filter
+      this.fizzFilter = ac.createBiquadFilter();
+      this.fizzFilter.type = 'bandpass';
+      this.fizzFilter.frequency.value = 2400;
+      this.fizzFilter.Q.value = 1.8;
+
+      this.pourGain = ac.createGain();
+      this.pourGain.gain.value = 0.35;
+      flutterGain.connect(this.pourGain.gain);
+
+      const formantGain = ac.createGain();
+      formantGain.gain.value = 0.25;
+
+      this.fizzGain = ac.createGain();
+      this.fizzGain.gain.value = 0.12;
+
+      noiseNode.connect(this.cavityFilter);
+      noiseNode.connect(this.formantFilter);
+      noiseNode.connect(this.fizzFilter);
+
+      this.cavityFilter.connect(this.pourGain);
+      this.formantFilter.connect(formantGain);
+      this.fizzFilter.connect(this.fizzGain);
+
+      this.pourGain.connect(this.masterGain);
+      formantGain.connect(this.masterGain);
+      this.fizzGain.connect(this.masterGain);
+
+      // Warm sub-harmonic swirl hum
+      this.subOsc = ac.createOscillator();
+      this.subOsc.type = 'sine';
+      this.subOsc.frequency.value = 110;
+      this.subGain = ac.createGain();
+      this.subGain.gain.value = 0.04;
+      this.subOsc.connect(this.subGain);
+      this.subGain.connect(this.masterGain);
+
+      noiseNode.start();
+      flutterOsc.start();
+      this.subOsc.start();
+      this.started = true;
+    },
+
+    update(fill, rate, dt, time) {
+      if (!this.ctx || this.ctx.state !== 'running') return;
+      const now = this.ctx.currentTime;
+
+      // Resonant frequency rises with fill level (like pouring water into a glass)
+      const baseFreq = 220 + Math.pow(fill, 1.35) * 640 + Math.sin(time * 7.3) * 18;
+      this.cavityFilter.frequency.setTargetAtTime(baseFreq, now, 0.05);
+      this.cavityFilter.Q.setTargetAtTime(4.8 + fill * 4.5, now, 0.08);
+
+      const formantFreq = 520 + Math.pow(fill, 1.15) * 950 + Math.cos(time * 5.1) * 35;
+      this.formantFilter.frequency.setTargetAtTime(formantFreq, now, 0.05);
+
+      this.fizzFilter.frequency.setTargetAtTime(1900 + fill * 1500, now, 0.08);
+
+      const activeStream = Math.max(0.08, rate);
+      this.pourGain.gain.setTargetAtTime(0.32 * activeStream, now, 0.06);
+      this.fizzGain.gain.setTargetAtTime(0.11 * activeStream * (0.6 + 0.4 * fill), now, 0.06);
+
+      // Gentle glass rim resonance hum
+      this.subOsc.frequency.setTargetAtTime(140 + fill * 180, now, 0.1);
+      this.subGain.gain.setTargetAtTime(0.025 * (0.4 + 0.6 * fill) * activeStream, now, 0.1);
+
+      // Periodic deep liquid glug / swirl resonance
+      if (now - this.lastGlugTime > (0.11 + Math.random() * 0.09) && rate > 0.25) {
+        this.lastGlugTime = now;
+        this.triggerGlug(fill, rate);
+      }
+    },
+
+    // Upward-pitching sine chirp for a bubble or droplet hitting the liquid surface
+    triggerPlink(sizeNorm, fill) {
+      if (!this.ctx || this.ctx.state !== 'running') return;
+      const now = this.ctx.currentTime;
+      if (now - this.lastBloopTime < 0.022) return;
+      this.lastBloopTime = now;
+
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sine';
+
+      // Pitch scales with fill level and inversely with droplet size
+      const startFreq = (380 + fill * 540) * (1.35 - sizeNorm * 0.55) * (0.92 + Math.random() * 0.16);
+      const endFreq = startFreq * (1.42 + Math.random() * 0.35);
+      const dur = 0.045 + sizeNorm * 0.045;
+
+      osc.frequency.setValueAtTime(startFreq, now);
+      osc.frequency.exponentialRampToValueAtTime(endFreq, now + dur);
+
+      const peak = (0.04 + sizeNorm * 0.065) * 0.75;
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.linearRampToValueAtTime(peak, now + 0.006);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + dur + 0.01);
+    },
+
+    // Deeper hollow cavity bubble/glug from the pouring stream plunging into the pool
+    triggerGlug(fill, rate) {
+      if (!this.ctx || this.ctx.state !== 'running') return;
+      const now = this.ctx.currentTime;
+
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sine';
+
+      const f0 = (195 + Math.pow(fill, 1.3) * 440) * (0.9 + Math.random() * 0.22);
+      const f1 = f0 * (1.28 + Math.random() * 0.25);
+      const dur = 0.065 + Math.random() * 0.045;
+
+      osc.frequency.setValueAtTime(f0, now);
+      osc.frequency.exponentialRampToValueAtTime(f1, now + dur);
+
+      const amp = 0.045 * rate * (0.7 + 0.3 * Math.random());
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.linearRampToValueAtTime(amp, now + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + dur + 0.01);
+    }
+  };
+
+  // Start audio immediately on load, and unlock on first interaction if blocked
+  Sound.init();
+  const unlockAudio = () => {
+    Sound.init();
+    if (Sound.ctx && Sound.ctx.state === 'suspended') {
+      Sound.ctx.resume().catch(() => {});
+    }
+  };
+  window.addEventListener('pointerdown', unlockAudio, { passive: true });
+  window.addEventListener('mousedown', unlockAudio, { passive: true });
+  window.addEventListener('touchstart', unlockAudio, { passive: true });
+  window.addEventListener('keydown', unlockAudio, { passive: true });
+  window.addEventListener('click', unlockAudio, { passive: true });
+
+  // ============================================================================
+  // SIMULATION & SPAWNING
+  // ============================================================================
+  function getSurfaceY(fill) {
+    const minY = GLASS.topY + 14;
+    const maxY = GLASS.bottomY - 18;
+    return maxY - fill * (maxY - minY);
+  }
+
+  function getStreamX(y, time) {
+    const normY = Math.max(0, (y + 60) / 900);
+    return (
+      GLASS.cx +
+      Math.sin(time * 2.3 - normY * 3.2) * (18 * normY) +
+      Math.cos(time * 5.7 - normY * 6.5) * (6 * normY)
+    );
+  }
+
+  function getStreamRadius(y, time, rate) {
+    const normY = Math.max(0, Math.min(1, (y + 40) / 850));
+    // Stream narrows slightly as gravity accelerates it downward
+    const gravityPinch = 1.0 - 0.42 * Math.sqrt(normY);
+    const pulse = 1.0 + 0.11 * Math.sin(time * 9.5 - y * 0.028) + 0.06 * Math.cos(time * 16.0 - y * 0.05);
+    return Math.max(3.5, 29 * gravityPinch * pulse * Math.sqrt(Math.max(0.05, rate)));
+  }
+
+  function spawnSplashDroplets(impactX, surfaceY, surfaceRx, time, count, intensity = 1) {
+    for (let i = 0; i < count; i++) {
+      if (droplets.length > 160) break;
+      const angle = -Math.PI * (0.18 + Math.random() * 0.64);
+      const speed = (220 + Math.random() * 440) * intensity;
+      const size = 3.2 + Math.random() * 7.8;
+      const hue = getStreamColor(time, (Math.random() - 0.5) * 55);
+      droplets.push({
+        x: impactX + (Math.random() - 0.5) * 26,
+        y: surfaceY - 2,
+        vx: Math.cos(angle) * speed * (Math.random() < 0.5 ? 1 : -1) * (0.45 + Math.random() * 0.75),
+        vy: Math.sin(angle) * speed,
+        r: size,
+        hue,
+        alpha: 0.98,
+        life: 0,
+        maxLife: 1.2 + Math.random() * 0.8,
+        outsideGlass: false
+      });
+    }
+  }
+
+  function spawnSubmergedBubble(impactX, surfaceY, surfaceRx, bottomY, time) {
+    if (bubbles.length > 120) return;
+    const maxDepth = Math.min(220, Math.max(25, bottomY - surfaceY - 12));
+    const depth = 10 + Math.random() * maxDepth;
+    bubbles.push({
+      x: impactX + (Math.random() - 0.5) * Math.min(surfaceRx * 1.1, 95),
+      y: surfaceY + depth,
+      vx: (Math.random() - 0.5) * 90,
+      vy: -40 - Math.random() * 110,
+      r: 2.5 + Math.random() * 8.5,
+      hue: getStreamColor(time, Math.random() * 70 - 35),
+      wobblePhase: Math.random() * Math.PI * 2,
+      life: 0
+    });
+  }
+
+  function spawnSurfaceRing(x, normZ, maxR, hue) {
+    if (surfaceRings.length > 26) return;
+    surfaceRings.push({
+      x,
+      normZ,
+      r: 4,
+      maxR,
+      hue,
+      alpha: 0.9
+    });
+  }
+
+  let lastTime = performance.now() * 0.001;
+  let elapsed = 0;
+
+  function updateSimulation(dt, time) {
+    // Fill progression: slowly fills up over ~22 seconds, brims with splashes, then vortex-drains & repeats
+    if (cyclePhase === 'filling') {
+      pourRate = Math.min(1, pourRate + dt * 2.2);
+      // Gradually fills from 0.04 to 0.95 over ~21 seconds
+      fillLevel += dt * 0.043 * pourRate;
+      if (fillLevel >= 0.95) {
+        fillLevel = 0.95;
+        cyclePhase = 'brimming';
+        phaseTimer = 0;
+      }
+    } else if (cyclePhase === 'brimming') {
+      phaseTimer += dt;
+      fillLevel = 0.95 + Math.sin(phaseTimer * 3.5) * 0.012;
+      pourRate = 0.95;
+      if (phaseTimer > 3.6) {
+        cyclePhase = 'draining';
+        phaseTimer = 0;
+      }
+    } else if (cyclePhase === 'draining') {
+      phaseTimer += dt;
+      pourRate = Math.max(0.28, 1.0 - Math.sin(Math.min(1, phaseTimer / 2.6) * Math.PI) * 0.72);
+      fillLevel -= dt * 0.34;
+      if (fillLevel <= 0.06) {
+        fillLevel = 0.06;
+        cyclePhase = 'filling';
+        phaseTimer = 0;
+      }
+    }
+
+    baseHue = getStreamColor(time, 0);
+
+    const surfaceY = getSurfaceY(fillLevel);
+    const surfaceRx = getGlassRadiusX(surfaceY) - GLASS.wallThickness;
+    const surfaceRy = getGlassRadiusY(surfaceY);
+    const impactX = getStreamX(surfaceY, time);
+
+    // Stream reaches the surface rapidly on startup
+    streamReachY = Math.min(surfaceY, streamReachY + dt * 1800);
+    if (Math.abs(streamReachY - surfaceY) < 40) {
+      streamReachY = surfaceY;
+    }
+
+    // Continuous wave excitation where the pouring stream hits the liquid surface
+    const normImpactX = (impactX - GLASS.cx) / surfaceRx;
+    const waveForce = (Math.sin(time * 27) * 180 + (Math.random() - 0.5) * 260) * pourRate;
+    disturbSurface(normImpactX, waveForce * dt * 12);
+
+    // Secondary swirl waves across the surface
+    const swirlNormX = Math.sin(time * 3.4) * 0.65;
+    disturbSurface(swirlNormX, Math.cos(time * 6.8) * 55 * dt);
+
+    updateWaves(dt);
+
+    // Spawn splash droplets & submerged bubbles at impact point
+    if (Math.random() < 0.88 * pourRate) {
+      spawnSplashDroplets(impactX, surfaceY, surfaceRx, time, Math.random() < 0.35 ? 2 : 1, 0.82 + 0.35 * pourRate);
+    }
+    if (Math.random() < 0.75 * pourRate) {
+      spawnSubmergedBubble(impactX, surfaceY, surfaceRx, GLASS.bottomY - 16, time);
+    }
+    if (Math.random() < 0.42 * pourRate) {
+      spawnSurfaceRing(
+        impactX + (Math.random() - 0.5) * 24,
+        (Math.random() - 0.5) * 0.5,
+        35 + Math.random() * (surfaceRx * 0.65),
+        getStreamColor(time, Math.random() * 50 - 25)
+      );
+    }
+
+    // Update splash droplets
+    const gravity = 980;
+    for (let i = droplets.length - 1; i >= 0; i--) {
+      const d = droplets[i];
+      d.life += dt;
+      d.vy += gravity * dt;
+      d.x += d.vx * dt;
+      d.y += d.vy * dt;
+
+      // Collide with inner glass walls if inside glass vertical range
+      if (!d.outsideGlass && d.y > GLASS.topY && d.y < GLASS.bottomY) {
+        const wallRx = getGlassRadiusX(d.y) - GLASS.wallThickness - d.r;
+        const dx = d.x - GLASS.cx;
+        if (Math.abs(dx) > wallRx) {
+          if (d.y < GLASS.topY + 28 && Math.abs(d.vx) > 120) {
+            // Fly over the rim!
+            d.outsideGlass = true;
+          } else {
+            d.x = GLASS.cx + Math.sign(dx) * wallRx;
+            d.vx *= -0.45;
+            d.vy *= 0.78;
+          }
+        }
+      }
+
+      // Check impact with liquid surface when falling back down
+      if (!d.outsideGlass && d.vy > 0 && d.y >= surfaceY) {
+        const normX = (d.x - GLASS.cx) / surfaceRx;
+        if (Math.abs(normX) <= 1.0) {
+          disturbSurface(normX, Math.min(180, d.vy * 0.22 * (d.r / 5)));
+          spawnSurfaceRing(d.x, (Math.random() - 0.5) * 0.7, 16 + d.r * 5, d.hue);
+          Sound.triggerPlink(Math.min(1, d.r / 10), fillLevel);
+          droplets.splice(i, 1);
+          continue;
+        }
+      }
+
+      if (d.life > d.maxLife || d.y > 1060) {
+        droplets.splice(i, 1);
+      }
+    }
+
+    // Update submerged bubbles
+    for (let i = bubbles.length - 1; i >= 0; i--) {
+      const b = bubbles[i];
+      b.life += dt;
+      b.wobblePhase += dt * 7.5;
+      // Swirl horizontally with the vortex inside the glass
+      const relY = (b.y - surfaceY) / Math.max(1, GLASS.bottomY - surfaceY);
+      const vortexPush = Math.cos(time * 2.8 + relY * 4.0) * 65;
+      b.x += (b.vx + vortexPush + Math.sin(b.wobblePhase) * 28) * dt;
+      b.y += b.vy * dt;
+      b.vx *= Math.pow(0.25, dt);
+
+      const wallRx = getGlassRadiusX(b.y) - GLASS.wallThickness - b.r - 4;
+      const dx = b.x - GLASS.cx;
+      if (Math.abs(dx) > wallRx) {
+        b.x = GLASS.cx + Math.sign(dx) * wallRx;
+        b.vx *= -0.5;
+      }
+
+      // Pop when reaching surface
+      if (b.y <= surfaceY + 4) {
+        const normX = (b.x - GLASS.cx) / surfaceRx;
+        disturbSurface(normX, 32);
+        spawnSurfaceRing(b.x, (Math.random() - 0.5) * 0.75, 14 + b.r * 3.5, b.hue);
+        if (Math.random() < 0.45) {
+          Sound.triggerPlink(Math.min(1, b.r / 9), fillLevel);
+        }
+        bubbles.splice(i, 1);
+      }
+    }
+
+    // Update surface ripples
+    for (let i = surfaceRings.length - 1; i >= 0; i--) {
+      const ring = surfaceRings[i];
+      ring.r += dt * 95;
+      ring.alpha = Math.max(0, 1 - ring.r / ring.maxR);
+      if (ring.r >= ring.maxR) {
+        surfaceRings.splice(i, 1);
+      }
+    }
+
+    // Update glass wall beads (droplets clinging to inner glass above surface)
+    for (let i = 0; i < wallBeads.length; i++) {
+      const wb = wallBeads[i];
+      if (wb.y > surfaceY - 6) {
+        // Absorbed by rising liquid; respawn higher on the glass wall from splash mist
+        wb.y = GLASS.topY + 18 + Math.random() * Math.max(10, surfaceY - GLASS.topY - 28);
+        wb.angle = (Math.random() - 0.5) * 2.4;
+        wb.hue = getStreamColor(time, (Math.random() - 0.5) * 60);
+        wb.r = 2.0 + Math.random() * 4.5;
+        wb.vy = 4 + Math.random() * 14;
+      } else {
+        wb.y += wb.vy * dt;
+      }
+    }
+
+    Sound.update(fillLevel, pourRate, dt, time);
+  }
+
+  // ============================================================================
+  // RENDERING
+  // ============================================================================
+  function drawBackground(time) {
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const bgGrad = ctx.createRadialGradient(
+      canvas.width * 0.5, canvas.height * 0.48, canvas.width * 0.05,
+      canvas.width * 0.5, canvas.height * 0.52, canvas.width * 0.75
+    );
+    const glowHue = getStreamColor(time, -20);
+    bgGrad.addColorStop(0, hsl(glowHue, 68, 13));
+    bgGrad.addColorStop(0.45, '#0c071b');
+    bgGrad.addColorStop(1, '#04020a');
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.restore();
+
+    // Glossy dark tabletop horizon & ambient caustic glow under the glass
+    const tableY = 825;
+    const tableGrad = ctx.createLinearGradient(0, tableY, 0, 1080 + offsetY + 200);
+    tableGrad.addColorStop(0, 'rgba(18, 12, 36, 0.0)');
+    tableGrad.addColorStop(0.12, 'rgba(22, 15, 44, 0.75)');
+    tableGrad.addColorStop(0.45, 'rgba(12, 8, 26, 0.95)');
+    tableGrad.addColorStop(1, '#040209');
+    ctx.fillStyle = tableGrad;
+    ctx.fillRect(-offsetX, tableY, width, height - tableY + offsetY);
+
+    // Vivid refractive caustic projection on the tabletop beneath the glass
+    const causticHue1 = getStreamColor(time, -35);
+    const causticHue2 = getStreamColor(time, 35);
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+
+    const cGrad = ctx.createRadialGradient(
+      GLASS.cx, GLASS.baseBottomY + 8, 15,
+      GLASS.cx, GLASS.baseBottomY + 24, 290
+    );
+    cGrad.addColorStop(0, hsl(causticHue1, 100, 62, 0.42 * (0.25 + 0.75 * fillLevel)));
+    cGrad.addColorStop(0.42, hsl(causticHue2, 95, 52, 0.25 * (0.25 + 0.75 * fillLevel)));
+    cGrad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = cGrad;
+    ctx.beginPath();
+    ctx.ellipse(GLASS.cx, GLASS.baseBottomY + 18, 285, 64, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Rotating caustic light arcs on table
+    for (let i = 0; i < 3; i++) {
+      const a = time * 1.4 + i * 2.1;
+      const cx = GLASS.cx + Math.cos(a) * 36;
+      const cy = GLASS.baseBottomY + 14 + Math.sin(a) * 10;
+      const arcGrad = ctx.createRadialGradient(cx, cy, 10, cx, cy, 165);
+      arcGrad.addColorStop(0, hsl(causticHue1 + i * 35, 100, 70, 0.22 * fillLevel));
+      arcGrad.addColorStop(0.6, hsl(causticHue2 + i * 35, 100, 55, 0.1 * fillLevel));
+      arcGrad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = arcGrad;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, 175, 36, Math.sin(a) * 0.15, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function traceInnerGlassClip() {
+    const topRx = GLASS.topRx - GLASS.wallThickness;
+    const topRy = GLASS.topRy - 3;
+    const botRx = GLASS.bottomRx - GLASS.wallThickness;
+    const botRy = GLASS.bottomRy - 4;
+
+    ctx.beginPath();
+    ctx.moveTo(GLASS.cx - topRx, GLASS.topY);
+    ctx.bezierCurveTo(
+      GLASS.cx - topRx * 0.95, GLASS.topY + (GLASS.bottomY - GLASS.topY) * 0.45,
+      GLASS.cx - botRx * 1.03, GLASS.topY + (GLASS.bottomY - GLASS.topY) * 0.78,
+      GLASS.cx - botRx, GLASS.bottomY
+    );
+    ctx.ellipse(GLASS.cx, GLASS.bottomY, botRx, botRy, 0, Math.PI, 0, true);
+    ctx.bezierCurveTo(
+      GLASS.cx + botRx * 1.03, GLASS.topY + (GLASS.bottomY - GLASS.topY) * 0.78,
+      GLASS.cx + topRx * 0.95, GLASS.topY + (GLASS.bottomY - GLASS.topY) * 0.45,
+      GLASS.cx + topRx, GLASS.topY
+    );
+    ctx.ellipse(GLASS.cx, GLASS.topY, topRx, topRy, 0, 0, Math.PI, true);
+    ctx.closePath();
+  }
+
+  function drawGlassBack(time) {
+    const topRx = GLASS.topRx;
+    const topRy = GLASS.topRy;
+    const botRx = GLASS.bottomRx;
+    const botRy = GLASS.bottomRy;
+    const baseBotY = GLASS.baseBottomY;
+
+    // Shadow directly under the heavy glass base
+    const shadowGrad = ctx.createRadialGradient(
+      GLASS.cx, baseBotY + 6, 30,
+      GLASS.cx, baseBotY + 6, botRx * 1.35
+    );
+    shadowGrad.addColorStop(0, 'rgba(0, 0, 0, 0.75)');
+    shadowGrad.addColorStop(0.65, 'rgba(3, 1, 10, 0.45)');
+    shadowGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = shadowGrad;
+    ctx.beginPath();
+    ctx.ellipse(GLASS.cx, baseBotY + 8, botRx * 1.32, botRy * 1.45, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Heavy crystal glass base (between bottomY and baseBottomY)
+    const baseGrad = ctx.createLinearGradient(GLASS.cx - botRx, GLASS.bottomY, GLASS.cx + botRx, baseBotY);
+    baseGrad.addColorStop(0, 'rgba(210, 235, 255, 0.26)');
+    baseGrad.addColorStop(0.22, 'rgba(130, 190, 255, 0.12)');
+    baseGrad.addColorStop(0.5, 'rgba(255, 255, 255, 0.32)');
+    baseGrad.addColorStop(0.8, 'rgba(120, 175, 245, 0.14)');
+    baseGrad.addColorStop(1, 'rgba(235, 248, 255, 0.34)');
+
+    ctx.fillStyle = baseGrad;
+    ctx.beginPath();
+    ctx.moveTo(GLASS.cx - botRx, GLASS.bottomY);
+    ctx.lineTo(GLASS.cx - botRx * 0.96, baseBotY);
+    ctx.ellipse(GLASS.cx, baseBotY, botRx * 0.96, botRy * 0.96, 0, Math.PI, 0, true);
+    ctx.lineTo(GLASS.cx + botRx, GLASS.bottomY);
+    ctx.ellipse(GLASS.cx, GLASS.bottomY, botRx, botRy, 0, 0, Math.PI, false);
+    ctx.closePath();
+    ctx.fill();
+
+    // Colorful internal refraction inside the heavy glass base
+    const refrHue = getStreamColor(time, -45);
+    const baseRefrGrad = ctx.createLinearGradient(GLASS.cx - botRx * 0.8, GLASS.bottomY, GLASS.cx + botRx * 0.8, baseBotY);
+    baseRefrGrad.addColorStop(0, hsl(refrHue, 95, 60, 0.18 + 0.25 * fillLevel));
+    baseRefrGrad.addColorStop(0.5, hsl(refrHue + 55, 100, 68, 0.28 + 0.28 * fillLevel));
+    baseRefrGrad.addColorStop(1, hsl(refrHue + 110, 95, 58, 0.18 + 0.25 * fillLevel));
+    ctx.fillStyle = baseRefrGrad;
+    ctx.beginPath();
+    ctx.ellipse(GLASS.cx, (GLASS.bottomY + baseBotY) * 0.5 + 4, botRx * 0.84, botRy * 0.72, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Glass back wall subtle sheen
+    const backWallGrad = ctx.createLinearGradient(GLASS.cx - topRx, 0, GLASS.cx + topRx, 0);
+    backWallGrad.addColorStop(0, 'rgba(210, 235, 255, 0.18)');
+    backWallGrad.addColorStop(0.15, 'rgba(160, 210, 255, 0.05)');
+    backWallGrad.addColorStop(0.5, 'rgba(255, 255, 255, 0.02)');
+    backWallGrad.addColorStop(0.85, 'rgba(160, 210, 255, 0.06)');
+    backWallGrad.addColorStop(1, 'rgba(220, 242, 255, 0.2)');
+
+    ctx.fillStyle = backWallGrad;
+    ctx.beginPath();
+    ctx.moveTo(GLASS.cx - topRx, GLASS.topY);
+    ctx.bezierCurveTo(
+      GLASS.cx - topRx * 0.95, GLASS.topY + (GLASS.bottomY - GLASS.topY) * 0.45,
+      GLASS.cx - botRx * 1.03, GLASS.topY + (GLASS.bottomY - GLASS.topY) * 0.78,
+      GLASS.cx - botRx, GLASS.bottomY
+    );
+    ctx.ellipse(GLASS.cx, GLASS.bottomY, botRx, botRy, 0, Math.PI, 0, true);
+    ctx.bezierCurveTo(
+      GLASS.cx + botRx * 1.03, GLASS.topY + (GLASS.bottomY - GLASS.topY) * 0.78,
+      GLASS.cx + topRx * 0.95, GLASS.topY + (GLASS.bottomY - GLASS.topY) * 0.45,
+      GLASS.cx + topRx, GLASS.topY
+    );
+    ctx.ellipse(GLASS.cx, GLASS.topY, topRx, topRy, 0, 0, Math.PI, true);
+    ctx.closePath();
+    ctx.fill();
+
+    // Back half of the top rim
+    ctx.strokeStyle = 'rgba(220, 240, 255, 0.42)';
+    ctx.lineWidth = 3.5;
+    ctx.beginPath();
+    ctx.ellipse(GLASS.cx, GLASS.topY, topRx, topRy, 0, Math.PI, Math.PI * 2);
+    ctx.stroke();
+
+    // Inner cushion ellipse at bottom of glass cavity
+    ctx.strokeStyle = 'rgba(235, 248, 255, 0.28)';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.ellipse(GLASS.cx, GLASS.bottomY, botRx - GLASS.wallThickness, botRy - 4, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Droplets clinging to the inside of the glass wall
+    for (let i = 0; i < wallBeads.length; i++) {
+      const wb = wallBeads[i];
+      const rx = getGlassRadiusX(wb.y) - GLASS.wallThickness - 4;
+      const ry = getGlassRadiusY(wb.y) - 3;
+      const bx = GLASS.cx + Math.sin(wb.angle) * rx * 0.92;
+      const by = wb.y + Math.cos(wb.angle) * ry * 0.35;
+
+      const bGrad = ctx.createRadialGradient(bx - wb.r * 0.3, by - wb.r * 0.3, 0.5, bx, by, wb.r);
+      bGrad.addColorStop(0, '#ffffff');
+      bGrad.addColorStop(0.35, hsl(wb.hue, 100, 68, 0.9));
+      bGrad.addColorStop(1, hsl(wb.hue, 95, 45, 0.0));
+      ctx.fillStyle = bGrad;
+      ctx.beginPath();
+      ctx.arc(bx, by, wb.r * 1.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function getFrontSurfaceEdgePoint(t, surfaceY, surfaceRx, surfaceRy) {
+    // t in [0, 1] from left to right along front half of meniscus
+    const angle = Math.PI * (1 - t); // PI to 0
+    const idx = Math.min(WAVE_COUNT - 1, Math.max(0, Math.floor(t * (WAVE_COUNT - 1))));
+    const waveOffset = waveHeight[idx];
+    const x = GLASS.cx + Math.cos(angle) * surfaceRx;
+    const y = surfaceY + Math.sin(angle) * surfaceRy + waveOffset;
+    return { x, y };
+  }
+
+  function getBackSurfaceEdgePoint(t, surfaceY, surfaceRx, surfaceRy) {
+    // t in [0, 1] from left to right along back half of meniscus
+    const angle = Math.PI + t * Math.PI; // PI to 2*PI
+    const idx = Math.min(WAVE_COUNT - 1, Math.max(0, Math.floor(t * (WAVE_COUNT - 1))));
+    const waveOffset = waveBackHeight[idx];
+    const x = GLASS.cx + Math.cos(angle) * surfaceRx;
+    const y = surfaceY + Math.sin(angle) * surfaceRy + waveOffset;
+    return { x, y };
+  }
+
+  function drawLiquidBody(time) {
+    const surfaceY = getSurfaceY(fillLevel);
+    const surfaceRx = getGlassRadiusX(surfaceY) - GLASS.wallThickness;
+    const surfaceRy = getGlassRadiusY(surfaceY) - 3;
+    const botRx = GLASS.bottomRx - GLASS.wallThickness;
+    const botRy = GLASS.bottomRy - 4;
+
+    ctx.save();
+    traceInnerGlassClip();
+    ctx.clip();
+
+    // 1. Main glossy multi-hue liquid body gradient
+    const hueTop = getStreamColor(time, 0);
+    const hueMid = getStreamColor(time, -52);
+    const hueBot = getStreamColor(time, -110);
+
+    const bodyGrad = ctx.createLinearGradient(0, surfaceY - 20, 0, GLASS.bottomY + botRy);
+    bodyGrad.addColorStop(0, hsl(hueTop, 100, 58, 0.94));
+    bodyGrad.addColorStop(0.45, hsl(hueMid, 98, 50, 0.96));
+    bodyGrad.addColorStop(0.85, hsl(hueBot, 96, 42, 0.98));
+    bodyGrad.addColorStop(1, hsl(hueBot - 25, 95, 32, 0.99));
+
+    ctx.fillStyle = bodyGrad;
+    ctx.beginPath();
+    // Start along back surface wave from left to right
+    const firstBack = getBackSurfaceEdgePoint(0, surfaceY, surfaceRx, surfaceRy);
+    ctx.moveTo(firstBack.x, firstBack.y);
+    for (let i = 1; i <= 48; i++) {
+      const pt = getBackSurfaceEdgePoint(i / 48, surfaceY, surfaceRx, surfaceRy);
+      ctx.lineTo(pt.x, pt.y);
+    }
+    // Down right inner wall to bottom
+    ctx.lineTo(GLASS.cx + botRx, GLASS.bottomY);
+    ctx.ellipse(GLASS.cx, GLASS.bottomY, botRx, botRy, 0, 0, Math.PI, false);
+    ctx.closePath();
+    ctx.fill();
+
+    // Radial internal luminance (subsurface scattering glow inside the liquid)
+    const impactX = getStreamX(surfaceY, time);
+    const sssGrad = ctx.createRadialGradient(
+      impactX, surfaceY + 45, 12,
+      GLASS.cx, (surfaceY + GLASS.bottomY) * 0.52, surfaceRx * 1.25
+    );
+    sssGrad.addColorStop(0, hsl(hueTop + 22, 100, 78, 0.72));
+    sssGrad.addColorStop(0.4, hsl(hueTop, 100, 60, 0.35));
+    sssGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = sssGrad;
+    ctx.fillRect(GLASS.cx - GLASS.topRx, surfaceY - 50, GLASS.topRx * 2, GLASS.bottomY - surfaceY + 90);
+
+    // 2. Swirling glossy internal ribbons (3D helical currents inside the liquid)
+    const liquidHeight = Math.max(24, GLASS.bottomY - surfaceY);
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    for (let i = 0; i < swirlRibbons.length; i++) {
+      const r = swirlRibbons[i];
+      const baseDepthY = surfaceY + 12 + ((r.depth + time * 0.14 * r.speed) % 1) * (liquidHeight - 18);
+      if (baseDepthY > GLASS.bottomY - 6 || baseDepthY < surfaceY + 4) continue;
+
+      const localRx = (getGlassRadiusX(baseDepthY) - GLASS.wallThickness - 8) * r.radiusFactor;
+      const localRy = getGlassRadiusY(baseDepthY) * 0.82 * r.radiusFactor;
+      const angle = time * (2.2 + (1 - r.depth) * 1.8) * r.speed + r.phase;
+      const ribbonHue = getStreamColor(time, r.hueOffset - 35);
+
+      ctx.strokeStyle = hsl(ribbonHue, 100, 68, 0.34);
+      ctx.lineWidth = r.thickness * (0.55 + 0.45 * fillLevel);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      for (let s = 0; s <= 18; s++) {
+        const u = s / 18;
+        const a = angle + u * 2.4;
+        const rx = GLASS.cx + Math.cos(a) * localRx * (1 - u * 0.18);
+        const ry = baseDepthY + Math.sin(a) * localRy + Math.sin(u * Math.PI * 2 + time * 4 + r.verticalWave) * 12 - u * 22;
+        if (s === 0) ctx.moveTo(rx, ry);
+        else ctx.lineTo(rx, ry);
+      }
+      ctx.stroke();
+
+      // Inner bright core of each swirl ribbon
+      ctx.strokeStyle = hsl(ribbonHue + 18, 100, 86, 0.26);
+      ctx.lineWidth = r.thickness * 0.28;
+      ctx.stroke();
+    }
+
+    // 3. Plunging turbulent jet plume directly beneath the stream impact point
+    const plumeDepth = Math.min(liquidHeight - 10, 65 + 155 * pourRate);
+    if (plumeDepth > 12) {
+      const plumeGrad = ctx.createLinearGradient(impactX, surfaceY, impactX, surfaceY + plumeDepth);
+      plumeGrad.addColorStop(0, 'rgba(255, 255, 255, 0.85)');
+      plumeGrad.addColorStop(0.35, hsl(hueTop + 15, 100, 76, 0.55));
+      plumeGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+      ctx.fillStyle = plumeGrad;
+      ctx.beginPath();
+      ctx.moveTo(impactX - 22, surfaceY);
+      ctx.quadraticCurveTo(
+        impactX + Math.sin(time * 14) * 34,
+        surfaceY + plumeDepth * 0.65,
+        impactX + Math.cos(time * 9) * 18,
+        surfaceY + plumeDepth
+      );
+      ctx.quadraticCurveTo(
+        impactX - Math.sin(time * 11) * 38,
+        surfaceY + plumeDepth * 0.55,
+        impactX + 22,
+        surfaceY
+      );
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // 4. Submerged glossy bubbles rising & swirling
+    for (let i = 0; i < bubbles.length; i++) {
+      const b = bubbles[i];
+      if (b.y < surfaceY + 2) continue;
+      const bGrad = ctx.createRadialGradient(
+        b.x - b.r * 0.32, b.y - b.r * 0.32, b.r * 0.08,
+        b.x, b.y, b.r
+      );
+      bGrad.addColorStop(0, 'rgba(255, 255, 255, 0.95)');
+      bGrad.addColorStop(0.3, hsl(b.hue + 20, 100, 82, 0.65));
+      bGrad.addColorStop(0.75, hsl(b.hue, 100, 60, 0.22));
+      bGrad.addColorStop(1, 'rgba(255, 255, 255, 0.55)');
+      ctx.fillStyle = bGrad;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    // 5. Deep glossy shadow around the bottom interior perimeter for 3D volume
+    const innerEdgeShadow = ctx.createLinearGradient(GLASS.cx - GLASS.topRx, 0, GLASS.cx + GLASS.topRx, 0);
+    innerEdgeShadow.addColorStop(0, 'rgba(10, 2, 28, 0.42)');
+    innerEdgeShadow.addColorStop(0.14, 'rgba(10, 2, 28, 0.0)');
+    innerEdgeShadow.addColorStop(0.86, 'rgba(10, 2, 28, 0.0)');
+    innerEdgeShadow.addColorStop(1, 'rgba(10, 2, 28, 0.42)');
+    ctx.fillStyle = innerEdgeShadow;
+    ctx.fillRect(GLASS.cx - GLASS.topRx, surfaceY - 40, GLASS.topRx * 2, GLASS.bottomY - surfaceY + 80);
+
+    // 6. Top liquid surface meniscus (glossy elliptical disk with dynamic wave rim)
+    ctx.beginPath();
+    const startB = getBackSurfaceEdgePoint(0, surfaceY, surfaceRx, surfaceRy);
+    ctx.moveTo(startB.x, startB.y);
+    for (let i = 1; i <= 48; i++) {
+      const pt = getBackSurfaceEdgePoint(i / 48, surfaceY, surfaceRx, surfaceRy);
+      ctx.lineTo(pt.x, pt.y);
+    }
+    for (let i = 48; i >= 0; i--) {
+      const pt = getFrontSurfaceEdgePoint(i / 48, surfaceY, surfaceRx, surfaceRy);
+      ctx.lineTo(pt.x, pt.y);
+    }
+    ctx.closePath();
+
+    const surfGrad = ctx.createRadialGradient(
+      impactX, surfaceY, 6,
+      GLASS.cx, surfaceY, surfaceRx * 1.08
+    );
+    surfGrad.addColorStop(0, '#ffffff');
+    surfGrad.addColorStop(0.16, hsl(hueTop + 28, 100, 78, 0.96));
+    surfGrad.addColorStop(0.55, hsl(hueTop, 100, 62, 0.95));
+    surfGrad.addColorStop(0.88, hsl(hueMid, 98, 52, 0.96));
+    surfGrad.addColorStop(1, hsl(hueTop + 35, 100, 75, 0.98));
+    ctx.fillStyle = surfGrad;
+    ctx.fill();
+
+    // Swirling vortex spiral bands on the top surface of the liquid
+    ctx.save();
+    ctx.clip(); // Clip to the meniscus surface shape
+    ctx.globalCompositeOperation = 'screen';
+
+    for (let arm = 0; arm < 4; arm++) {
+      const armHue = getStreamColor(time, arm * 42);
+      ctx.strokeStyle = hsl(armHue + 20, 100, 78, 0.48);
+      ctx.lineWidth = 7;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      for (let step = 0; step <= 26; step++) {
+        const u = step / 26;
+        const theta = time * 4.2 + arm * (Math.PI * 0.5) + u * 4.8;
+        const rad = u * surfaceRx * 0.92;
+        const centerShiftX = GLASS.cx + (impactX - GLASS.cx) * (1 - u);
+        const sx = centerShiftX + Math.cos(theta) * rad;
+        const sy = surfaceY + Math.sin(theta) * (rad * (surfaceRy / surfaceRx));
+        if (step === 0) ctx.moveTo(sx, sy);
+        else ctx.lineTo(sx, sy);
+      }
+      ctx.stroke();
+    }
+
+    // Concentric expanding ripple rings on the surface
+    for (let i = 0; i < surfaceRings.length; i++) {
+      const ring = surfaceRings[i];
+      const ry = ring.r * (surfaceRy / surfaceRx);
+      ctx.strokeStyle = hsl(ring.hue + 25, 100, 86, ring.alpha * 0.7);
+      ctx.lineWidth = 2.4 * ring.alpha + 0.8;
+      ctx.beginPath();
+      ctx.ellipse(
+        ring.x,
+        surfaceY + ring.normZ * surfaceRy * 0.55,
+        ring.r,
+        Math.max(1.5, ry),
+        0,
+        0,
+        Math.PI * 2
+      );
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Glowing meniscus rim highlight along front and back wave edges
+    ctx.strokeStyle = hsl(hueTop + 30, 100, 88, 0.85);
+    ctx.lineWidth = 3.2;
+    ctx.beginPath();
+    for (let i = 0; i <= 48; i++) {
+      const pt = getFrontSurfaceEdgePoint(i / 48, surfaceY, surfaceRx, surfaceRy);
+      if (i === 0) ctx.moveTo(pt.x, pt.y);
+      else ctx.lineTo(pt.x, pt.y);
+    }
+    ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    for (let i = 0; i <= 48; i++) {
+      const pt = getBackSurfaceEdgePoint(i / 48, surfaceY, surfaceRx, surfaceRy);
+      if (i === 0) ctx.moveTo(pt.x, pt.y);
+      else ctx.lineTo(pt.x, pt.y);
+    }
+    ctx.stroke();
+
+    ctx.restore(); // End inner glass clip
+  }
+
+  function drawPouringStream(time) {
+    const surfaceY = getSurfaceY(fillLevel);
+    const topStart = -offsetY - 40;
+    const endY = Math.min(surfaceY + 4, streamReachY);
+    const steps = 68;
+
+    const leftPts = [];
+    const rightPts = [];
+    const centerPts = [];
+
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const y = topStart + t * (endY - topStart);
+      const cx = getStreamX(y, time);
+      const r = getStreamRadius(y, time, pourRate);
+      // Slight flared collar right where the stream meets the surface
+      const impactFlare = t > 0.92 ? 1 + Math.pow((t - 0.92) / 0.08, 2) * 0.85 : 1;
+      const rx = r * impactFlare;
+      centerPts.push({ x: cx, y, r: rx });
+      leftPts.push({ x: cx - rx, y });
+      rightPts.push({ x: cx + rx, y });
+    }
+
+    // Outer vivid aura around the pouring stream
+    const hueTop = getStreamColor(time, 45);
+    const hueMid = getStreamColor(time, 20);
+    const hueImpact = getStreamColor(time, 0);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(leftPts[0].x, leftPts[0].y);
+    for (let i = 1; i <= steps; i++) {
+      ctx.lineTo(leftPts[i].x, leftPts[i].y);
+    }
+    for (let i = steps; i >= 0; i--) {
+      ctx.lineTo(rightPts[i].x, rightPts[i].y);
+    }
+    ctx.closePath();
+
+    const streamGrad = ctx.createLinearGradient(0, topStart, 0, endY);
+    streamGrad.addColorStop(0, hsl(hueTop, 100, 56, 0.97));
+    streamGrad.addColorStop(0.5, hsl(hueMid, 100, 58, 0.96));
+    streamGrad.addColorStop(0.92, hsl(hueImpact, 100, 62, 0.98));
+    streamGrad.addColorStop(1, '#ffffff');
+    ctx.fillStyle = streamGrad;
+    ctx.fill();
+
+    // Clip to stream silhouette for internal glossy refraction ribbons & specular streaks
+    ctx.clip();
+
+    // Twisting internal color ribbons inside the falling liquid column
+    for (let strand = 0; strand < 3; strand++) {
+      const strandHue = getStreamColor(time, strand * 38 + 10);
+      ctx.strokeStyle = hsl(strandHue, 100, 74, 0.65);
+      ctx.lineWidth = 7 - strand * 1.5;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      for (let i = 0; i <= steps; i++) {
+        const c = centerPts[i];
+        const phase = time * 11 - c.y * 0.026 + strand * 2.1;
+        const sx = c.x + Math.sin(phase) * (c.r * 0.55);
+        if (i === 0) ctx.moveTo(sx, c.y);
+        else ctx.lineTo(sx, c.y);
+      }
+      ctx.stroke();
+    }
+
+    // Crisp white-hot specular highlight along the left edge of the stream
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.88)';
+    ctx.lineWidth = 4.2;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    for (let i = 0; i <= steps; i++) {
+      const c = centerPts[i];
+      const sx = c.x - c.r * 0.52;
+      if (i === 0) ctx.moveTo(sx, c.y);
+      else ctx.lineTo(sx, c.y);
+    }
+    ctx.stroke();
+
+    // Secondary thinner rim reflection on the right edge
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.48)';
+    ctx.lineWidth = 2.0;
+    ctx.beginPath();
+    for (let i = 0; i <= steps; i++) {
+      const c = centerPts[i];
+      const sx = c.x + c.r * 0.64;
+      if (i === 0) ctx.moveTo(sx, c.y);
+      else ctx.lineTo(sx, c.y);
+    }
+    ctx.stroke();
+
+    ctx.restore();
+
+    // Splash crown & foam collar right where the stream strikes the surface
+    const impactPt = centerPts[steps];
+    const crownRadius = impactPt.r * 1.45;
+    const crownGrad = ctx.createRadialGradient(
+      impactPt.x, impactPt.y, 2,
+      impactPt.x, impactPt.y, crownRadius * 2.1
+    );
+    crownGrad.addColorStop(0, '#ffffff');
+    crownGrad.addColorStop(0.38, hsl(hueImpact + 25, 100, 82, 0.85));
+    crownGrad.addColorStop(0.75, hsl(hueImpact, 100, 62, 0.35));
+    crownGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+
+    ctx.fillStyle = crownGrad;
+    ctx.beginPath();
+    ctx.ellipse(impactPt.x, impactPt.y, crownRadius * 2.0, crownRadius * 0.55, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Dynamic splash crown spikes erupting around the impact point
+    const spikeCount = 7;
+    for (let s = 0; s < spikeCount; s++) {
+      const a = (s / spikeCount) * Math.PI * 2 + time * 5.2;
+      const osc = 0.5 + 0.5 * Math.sin(time * 16 + s * 1.9);
+      const len = (14 + 26 * osc) * pourRate;
+      const baseX = impactPt.x + Math.cos(a) * (impactPt.r * 0.8);
+      const baseY = impactPt.y + Math.sin(a) * (impactPt.r * 0.22);
+      const tipX = baseX + Math.cos(a) * len * 1.1;
+      const tipY = baseY - len * (0.7 + 0.3 * Math.sin(a));
+
+      ctx.strokeStyle = hsl(hueImpact + s * 12, 100, 84, 0.82 * osc);
+      ctx.lineWidth = 3.5 * (1 - 0.3 * osc);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(baseX, baseY);
+      ctx.quadraticCurveTo((baseX + tipX) * 0.5, tipY - 6, tipX, tipY);
+      ctx.stroke();
+    }
+  }
+
+  function drawSplashDroplets() {
+    for (let i = 0; i < droplets.length; i++) {
+      const d = droplets[i];
+      const speed = Math.hypot(d.vx, d.vy);
+      const stretch = Math.min(2.1, 1 + speed / 680);
+      const angle = Math.atan2(d.vy, d.vx);
+
+      ctx.save();
+      ctx.translate(d.x, d.y);
+      ctx.rotate(angle);
+
+      // Glossy stretched droplet body
+      const dGrad = ctx.createRadialGradient(-d.r * 0.25, -d.r * 0.25, d.r * 0.1, 0, 0, d.r * stretch);
+      dGrad.addColorStop(0, '#ffffff');
+      dGrad.addColorStop(0.35, hsl(d.hue + 18, 100, 74, 0.96));
+      dGrad.addColorStop(0.85, hsl(d.hue, 100, 54, 0.9));
+      dGrad.addColorStop(1, hsl(d.hue - 15, 95, 42, 0.0));
+
+      ctx.fillStyle = dGrad;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, d.r * stretch, d.r * 0.88, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Pinpoint white specular highlight
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
+      ctx.beginPath();
+      ctx.arc(-d.r * 0.28, -d.r * 0.24, Math.max(1.1, d.r * 0.28), 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.restore();
+    }
+  }
+
+  function drawGlassFront(time) {
+    const topRx = GLASS.topRx;
+    const topRy = GLASS.topRy;
+    const botRx = GLASS.bottomRx;
+    const botRy = GLASS.bottomRy;
+    const baseBotY = GLASS.baseBottomY;
+
+    // 1. Crisp outer glass contour (Fresnel rim glow)
+    const rimHue = getStreamColor(time, 15);
+    const outerStrokeGrad = ctx.createLinearGradient(GLASS.cx - topRx, GLASS.topY, GLASS.cx + topRx, GLASS.bottomY);
+    outerStrokeGrad.addColorStop(0, 'rgba(240, 250, 255, 0.85)');
+    outerStrokeGrad.addColorStop(0.35, hsl(rimHue, 90, 82, 0.45));
+    outerStrokeGrad.addColorStop(0.7, 'rgba(200, 235, 255, 0.6)');
+    outerStrokeGrad.addColorStop(1, 'rgba(245, 252, 255, 0.88)');
+
+    ctx.strokeStyle = outerStrokeGrad;
+    ctx.lineWidth = 3.5;
+    ctx.beginPath();
+    ctx.moveTo(GLASS.cx - topRx, GLASS.topY);
+    ctx.bezierCurveTo(
+      GLASS.cx - topRx * 0.95, GLASS.topY + (GLASS.bottomY - GLASS.topY) * 0.45,
+      GLASS.cx - botRx * 1.03, GLASS.topY + (GLASS.bottomY - GLASS.topY) * 0.78,
+      GLASS.cx - botRx, GLASS.bottomY
+    );
+    ctx.lineTo(GLASS.cx - botRx * 0.96, baseBotY);
+    ctx.ellipse(GLASS.cx, baseBotY, botRx * 0.96, botRy * 0.96, 0, Math.PI, 0, true);
+    ctx.lineTo(GLASS.cx + botRx, GLASS.bottomY);
+    ctx.bezierCurveTo(
+      GLASS.cx + botRx * 1.03, GLASS.topY + (GLASS.bottomY - GLASS.topY) * 0.78,
+      GLASS.cx + topRx * 0.95, GLASS.topY + (GLASS.bottomY - GLASS.topY) * 0.45,
+      GLASS.cx + topRx, GLASS.topY
+    );
+    ctx.stroke();
+
+    // 2. Inner wall thickness line for authentic crystal glass refraction
+    const inTopRx = topRx - GLASS.wallThickness;
+    const inBotRx = botRx - GLASS.wallThickness;
+    ctx.strokeStyle = 'rgba(225, 245, 255, 0.32)';
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.moveTo(GLASS.cx - inTopRx, GLASS.topY);
+    ctx.bezierCurveTo(
+      GLASS.cx - inTopRx * 0.95, GLASS.topY + (GLASS.bottomY - GLASS.topY) * 0.45,
+      GLASS.cx - inBotRx * 1.03, GLASS.topY + (GLASS.bottomY - GLASS.topY) * 0.78,
+      GLASS.cx - inBotRx, GLASS.bottomY
+    );
+    ctx.moveTo(GLASS.cx + inTopRx, GLASS.topY);
+    ctx.bezierCurveTo(
+      GLASS.cx + inTopRx * 0.95, GLASS.topY + (GLASS.bottomY - GLASS.topY) * 0.45,
+      GLASS.cx + inBotRx * 1.03, GLASS.topY + (GLASS.bottomY - GLASS.topY) * 0.78,
+      GLASS.cx + inBotRx, GLASS.bottomY
+    );
+    ctx.stroke();
+
+    // 3. Sweeping studio softbox specular reflection on the left front of the glass
+    const leftSpecGrad = ctx.createLinearGradient(0, GLASS.topY + 18, 0, GLASS.bottomY - 12);
+    leftSpecGrad.addColorStop(0, 'rgba(255, 255, 255, 0.58)');
+    leftSpecGrad.addColorStop(0.45, 'rgba(255, 255, 255, 0.28)');
+    leftSpecGrad.addColorStop(0.85, 'rgba(255, 255, 255, 0.48)');
+    leftSpecGrad.addColorStop(1, 'rgba(255, 255, 255, 0.08)');
+
+    ctx.fillStyle = leftSpecGrad;
+    ctx.beginPath();
+    ctx.moveTo(GLASS.cx - topRx * 0.80, GLASS.topY + 26);
+    ctx.bezierCurveTo(
+      GLASS.cx - topRx * 0.76, GLASS.topY + 240,
+      GLASS.cx - botRx * 0.82, GLASS.topY + 420,
+      GLASS.cx - botRx * 0.78, GLASS.bottomY - 18
+    );
+    ctx.lineTo(GLASS.cx - botRx * 0.65, GLASS.bottomY - 14);
+    ctx.bezierCurveTo(
+      GLASS.cx - botRx * 0.69, GLASS.topY + 420,
+      GLASS.cx - topRx * 0.62, GLASS.topY + 240,
+      GLASS.cx - topRx * 0.66, GLASS.topY + 28
+    );
+    ctx.closePath();
+    ctx.fill();
+
+    // Thin secondary highlight streak next to the main left softbox reflection
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.42)';
+    ctx.lineWidth = 3.5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(GLASS.cx - topRx * 0.56, GLASS.topY + 38);
+    ctx.bezierCurveTo(
+      GLASS.cx - topRx * 0.53, GLASS.topY + 240,
+      GLASS.cx - botRx * 0.58, GLASS.topY + 420,
+      GLASS.cx - botRx * 0.55, GLASS.bottomY - 34
+    );
+    ctx.stroke();
+
+    // 4. Sharp right-side rim highlight
+    const rightSpecGrad = ctx.createLinearGradient(0, GLASS.topY + 24, 0, GLASS.bottomY - 20);
+    rightSpecGrad.addColorStop(0, 'rgba(255, 255, 255, 0.65)');
+    rightSpecGrad.addColorStop(0.5, 'rgba(215, 240, 255, 0.25)');
+    rightSpecGrad.addColorStop(1, 'rgba(255, 255, 255, 0.55)');
+
+    ctx.strokeStyle = rightSpecGrad;
+    ctx.lineWidth = 7;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(GLASS.cx + topRx * 0.83, GLASS.topY + 26);
+    ctx.bezierCurveTo(
+      GLASS.cx + topRx * 0.79, GLASS.topY + 240,
+      GLASS.cx + botRx * 0.85, GLASS.topY + 420,
+      GLASS.cx + botRx * 0.81, GLASS.bottomY - 22
+    );
+    ctx.stroke();
+
+    // 5. Front half of the glass top rim (thick rounded lip with bright specular glints)
+    ctx.strokeStyle = 'rgba(240, 250, 255, 0.82)';
+    ctx.lineWidth = 5.5;
+    ctx.beginPath();
+    ctx.ellipse(GLASS.cx, GLASS.topY, topRx, topRy, 0, 0, Math.PI);
+    ctx.stroke();
+
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2.4;
+    ctx.beginPath();
+    ctx.ellipse(GLASS.cx, GLASS.topY, topRx - 2, topRy - 1, 0, 0.12 * Math.PI, 0.88 * Math.PI);
+    ctx.stroke();
+
+    // 6. Heavy crystal base front highlights
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.68)';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.ellipse(GLASS.cx, GLASS.bottomY, botRx, botRy, 0, 0.08 * Math.PI, 0.92 * Math.PI);
+    ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.52)';
+    ctx.lineWidth = 3.2;
+    ctx.beginPath();
+    ctx.ellipse(GLASS.cx, baseBotY, botRx * 0.96, botRy * 0.96, 0, 0.15 * Math.PI, 0.85 * Math.PI);
+    ctx.stroke();
+  }
+
+  function frame(nowMs) {
+    const now = nowMs * 0.001;
+    const dt = Math.min(0.033, Math.max(0.001, now - lastTime));
+    lastTime = now;
+    elapsed += dt;
+
+    updateSimulation(dt, elapsed);
+
+    ctx.save();
+    ctx.setTransform(scale, 0, 0, scale, scale * offsetX, scale * offsetY);
+
+    drawBackground(elapsed);
+    drawGlassBack(elapsed);
+    drawLiquidBody(elapsed);
+    drawPouringStream(elapsed);
+    drawSplashDroplets();
+    drawGlassFront(elapsed);
+
+    ctx.restore();
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

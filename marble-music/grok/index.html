@@ -1,0 +1,1299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Marble Music Machine</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #140022;
+    overscroll-behavior: none;
+    touch-action: none;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+    touch-action: none;
+    outline: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="c" aria-label="Glass marbles roll down tracks and play a melody on a xylophone"></canvas>
+<script>
+'use strict';
+
+var DT = 1 / 120;
+var GRAV = 1180;
+var MAX_V = 520;
+var MIN_V = 28;
+var BEAT = 0.5;
+var MARBLE_R = 15;
+var RAIL_DROP = 9;
+var SCENE = 1080;
+var COL_L = 96;
+var COL_R = 984;
+var BAR_W = 74;
+var BAR_TOP = 856;
+var PLINTH_Y = 1046;
+
+var NOTES = [
+  { name: 'G3', freq: 196.00, color: '#FF2A2A' },
+  { name: 'A3', freq: 220.00, color: '#FF7800' },
+  { name: 'B3', freq: 246.94, color: '#FFD000' },
+  { name: 'C4', freq: 261.63, color: '#B6FF00' },
+  { name: 'D4', freq: 293.66, color: '#00E676' },
+  { name: 'E4', freq: 329.63, color: '#00E5FF' },
+  { name: 'F4', freq: 349.23, color: '#4D6BFF' },
+  { name: 'G4', freq: 392.00, color: '#EE3CFF' }
+];
+
+// Ode to Joy, transposed to C. Durations are in quarter-note beats.
+var MELODY = [
+  ['E4', 1], ['E4', 1], ['F4', 1], ['G4', 1],
+  ['G4', 1], ['F4', 1], ['E4', 1], ['D4', 1],
+  ['C4', 1], ['C4', 1], ['D4', 1], ['E4', 1],
+  ['E4', 1.5], ['D4', 0.5], ['D4', 2],
+
+  ['E4', 1], ['E4', 1], ['F4', 1], ['G4', 1],
+  ['G4', 1], ['F4', 1], ['E4', 1], ['D4', 1],
+  ['C4', 1], ['C4', 1], ['D4', 1], ['E4', 1],
+  ['D4', 1.5], ['C4', 0.5], ['C4', 2],
+
+  ['D4', 1], ['D4', 1], ['E4', 1], ['C4', 1],
+  ['D4', 1], ['E4', 1], ['F4', 1], ['E4', 1],
+  ['C4', 1], ['D4', 1], ['E4', 1], ['F4', 1],
+  ['E4', 1], ['D4', 1], ['C4', 1], ['D4', 1],
+
+  ['E4', 1], ['E4', 1], ['F4', 1], ['G4', 1],
+  ['G4', 1], ['F4', 1], ['E4', 1], ['D4', 1],
+  ['C4', 1], ['C4', 1], ['D4', 1], ['E4', 1],
+  ['D4', 1.5], ['C4', 0.5], ['C4', 2]
+];
+
+var HOPPER = [
+  { x: 540, y: 164 },
+  { x: 512, y: 140 },
+  { x: 568, y: 140 },
+  { x: 496, y: 114 },
+  { x: 540, y: 108 },
+  { x: 584, y: 114 },
+  { x: 518, y: 84 },
+  { x: 562, y: 84 }
+];
+
+function colX(i) {
+  var w = (COL_R - COL_L) / NOTES.length;
+  return COL_L + w * (i + 0.5);
+}
+
+function hexToRgb(hex) {
+  var n = parseInt(hex.slice(1), 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+function rgba(hex, a) {
+  var c = hexToRgb(hex);
+  return 'rgba(' + c.r + ',' + c.g + ',' + c.b + ',' + a + ')';
+}
+
+function mixHex(hex, other, t) {
+  var a = hexToRgb(hex);
+  var b = hexToRgb(other);
+  var r = Math.round(a.r + (b.r - a.r) * t);
+  var g = Math.round(a.g + (b.g - a.g) * t);
+  var bl = Math.round(a.b + (b.b - a.b) * t);
+  return 'rgb(' + r + ',' + g + ',' + bl + ')';
+}
+
+function clamp(v, a, b) {
+  return v < a ? a : v > b ? b : v;
+}
+
+function upNormal(tx, ty) {
+  var nx = -ty;
+  var ny = tx;
+  if (ny > 0 || (ny === 0 && nx > 0)) {
+    nx = -nx;
+    ny = -ny;
+  }
+  return { nx: nx, ny: ny };
+}
+
+function buildPath(points) {
+  var segs = [];
+  var total = 0;
+  var i, a, b, len;
+  for (i = 0; i < points.length - 1; i++) {
+    a = points[i];
+    b = points[i + 1];
+    len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (len < 0.001) continue;
+    segs.push({
+      a: a,
+      b: b,
+      len: len,
+      start: total,
+      tx: (b.x - a.x) / len,
+      ty: (b.y - a.y) / len
+    });
+    total += len;
+  }
+  return { segs: segs, length: total };
+}
+
+function samplePath(path, s) {
+  var segs = path.segs;
+  var lo, hi, mid, seg, u;
+  s = Math.max(0, Math.min(path.length - 1e-6, s));
+  lo = 0;
+  hi = segs.length - 1;
+  while (lo < hi) {
+    mid = (lo + hi) >> 1;
+    if (s >= segs[mid].start + segs[mid].len) lo = mid + 1;
+    else hi = mid;
+  }
+  seg = segs[lo];
+  u = (s - seg.start) / seg.len;
+  return {
+    x: seg.a.x + (seg.b.x - seg.a.x) * u,
+    y: seg.a.y + (seg.b.y - seg.a.y) * u,
+    tx: seg.tx,
+    ty: seg.ty,
+    segIndex: lo
+  };
+}
+
+function buildLanes() {
+  var lanes = [];
+  var maxH = PLINTH_Y - BAR_TOP - 10;
+  var minH = 96;
+  var i, x, s, pts, path, splitS, h, halfTop, halfBot;
+  for (i = 0; i < NOTES.length; i++) {
+    x = colX(i);
+    s = (i % 2 === 0) ? 1 : -1;
+    pts = [
+      { x: 540, y: 168 },
+      { x: 540, y: 254 },
+      { x: x, y: 342 },
+      { x: x - s * 28, y: 438 },
+      { x: x + s * 28, y: 534 },
+      { x: x - s * 28, y: 630 },
+      { x: x + s * 28, y: 690 },
+      { x: x - s * 6, y: 748 },
+      { x: x, y: 770 }
+    ];
+    path = buildPath(pts);
+    splitS = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+    h = maxH - (maxH - minH) * (i / (NOTES.length - 1));
+    halfTop = 42;
+    halfBot = BAR_W / 2 - 4;
+    lanes.push({
+      index: i,
+      name: NOTES[i].name,
+      freq: NOTES[i].freq,
+      color: NOTES[i].color,
+      path: path,
+      splitS: splitS,
+      bar: { x: x - BAR_W / 2, y: BAR_TOP, w: BAR_W, h: h },
+      walls: [
+        [{ x: x - halfTop, y: 786 }, { x: x - halfBot, y: BAR_TOP - 1 }],
+        [{ x: x + halfTop, y: 786 }, { x: x + halfBot, y: BAR_TOP - 1 }]
+      ],
+      glow: 0,
+      flash: 0
+    });
+  }
+  return lanes;
+}
+
+function collideCircleSegment(m, a, b, rest) {
+  var abx = b.x - a.x;
+  var aby = b.y - a.y;
+  var len2 = abx * abx + aby * aby;
+  var t, cx, cy, dx, dy, d, pen, vn;
+  if (len2 < 1e-6) return false;
+  t = ((m.x - a.x) * abx + (m.y - a.y) * aby) / len2;
+  if (t < 0) t = 0;
+  else if (t > 1) t = 1;
+  cx = a.x + abx * t;
+  cy = a.y + aby * t;
+  dx = m.x - cx;
+  dy = m.y - cy;
+  d = Math.hypot(dx, dy);
+  if (d < 1e-6) {
+    dx = -aby;
+    dy = abx;
+    d = Math.hypot(dx, dy) || 1;
+  }
+  pen = m.r - d;
+  if (pen <= 0) return false;
+  dx /= d;
+  dy /= d;
+  m.x += dx * pen;
+  m.y += dy * pen;
+  vn = m.vx * dx + m.vy * dy;
+  if (vn < 0) {
+    m.vx -= (1 + rest) * vn * dx;
+    m.vy -= (1 + rest) * vn * dy;
+  }
+  return true;
+}
+
+function integrateMarble(m, lane, dt, hooks) {
+  var path, p, q, a, dot, end, bar, top, impact, w, wi;
+  if (m.mode === 'path') {
+    path = lane.path;
+    p = samplePath(path, Math.min(m.s, path.length - 1e-4));
+    a = GRAV * p.ty - 16 - m.v * 0.55;
+    m.v = Math.max(MIN_V, Math.min(MAX_V, m.v + a * dt));
+    m.s += m.v * dt;
+    m.angle += (m.v / m.r) * dt;
+    if (m.s >= path.length) {
+      end = samplePath(path, path.length - 1e-4);
+      m.mode = 'free';
+      m.x = end.x;
+      m.y = end.y;
+      m.vx = end.tx * m.v;
+      m.vy = end.ty * m.v;
+      m.s = path.length;
+      return;
+    }
+    q = samplePath(path, m.s);
+    dot = p.tx * q.tx + p.ty * q.ty;
+    if (q.segIndex !== p.segIndex && dot < 0.9) {
+      m.v = Math.max(MIN_V, m.v * (0.84 + 0.16 * Math.max(0, dot)));
+      if (hooks && hooks.onClack) hooks.onClack(m, dot);
+    }
+    m.x = q.x;
+    m.y = q.y;
+    return;
+  }
+
+  m.vy += GRAV * dt;
+  m.vx *= (1 - 0.35 * dt);
+  m.x += m.vx * dt;
+  m.y += m.vy * dt;
+  m.angle += ((m.vx + m.vy) / m.r) * dt * 0.35;
+
+  for (wi = 0; wi < lane.walls.length; wi++) {
+    w = lane.walls[wi];
+    collideCircleSegment(m, w[0], w[1], 0.25);
+  }
+
+  bar = lane.bar;
+  top = bar.y;
+  if (!m.ignoreBar && m.vy > 0 &&
+      m.y + m.r >= top && m.y - m.r <= top + 14 &&
+      m.x >= bar.x - 2 && m.x <= bar.x + bar.w + 2) {
+    m.y = top - m.r;
+    impact = m.vy;
+    m.vy = -impact * 0.36;
+    m.vx *= 0.62;
+    if (!m.noted) {
+      m.noted = true;
+      m.cleanHit = true;
+      m.sinceHit = 0;
+      m.hitX = m.x;
+      m.hitY = top;
+      if (hooks && hooks.onHit) hooks.onHit(m, impact);
+    } else if (!m.extraTick) {
+      m.extraTick = true;
+      if (hooks && hooks.onBounce) hooks.onBounce(m, impact);
+    }
+  } else if (!m.noted && m.y > top + m.r + 8) {
+    m.noted = true;
+    m.cleanHit = false;
+    m.sinceHit = 0;
+    m.hitX = m.x;
+    m.hitY = top;
+    if (hooks && hooks.onHit) hooks.onHit(m, Math.abs(m.vy));
+  }
+
+  if (m.noted) {
+    m.sinceHit += dt;
+    if (m.sinceHit > 0.28) m.ignoreBar = true;
+  }
+}
+
+function measureTravel(lane) {
+  var start = samplePath(lane.path, 0);
+  var m = {
+    lane: lane.index,
+    r: MARBLE_R,
+    s: 0,
+    v: 42,
+    mode: 'path',
+    x: start.x,
+    y: start.y,
+    vx: 0,
+    vy: 0,
+    angle: 0,
+    noted: false,
+    cleanHit: false,
+    sinceHit: 0,
+    ignoreBar: false,
+    extraTick: false
+  };
+  var t = 0;
+  var n;
+  for (n = 0; n < 120 * 12; n++) {
+    integrateMarble(m, lane, DT, null);
+    t += DT;
+    if (m.noted) return { time: t, clean: !!m.cleanHit, x: m.hitX, y: m.hitY };
+  }
+  return { time: NaN, clean: false, x: m.x, y: m.y };
+}
+
+function beatTable() {
+  var beatAt = [];
+  var total = 0;
+  var i;
+  for (i = 0; i < MELODY.length; i++) {
+    beatAt.push(total);
+    total += MELODY[i][1];
+  }
+  return { beatAt: beatAt, totalBeats: total };
+}
+
+function createWorld() {
+  var lanes = buildLanes();
+  var travels = [];
+  var reports = [];
+  var table = beatTable();
+  var pitchLane = {};
+  var i, rep, minT, startHit, world, t0;
+  for (i = 0; i < lanes.length; i++) {
+    rep = measureTravel(lanes[i]);
+    travels.push(rep.time);
+    reports.push(rep);
+    pitchLane[lanes[i].name] = i;
+  }
+  minT = Math.min.apply(null, travels);
+  startHit = Math.min(0.58, minT * 0.42);
+  if (!(startHit > 0.12)) startHit = 0.42;
+  world = {
+    lanes: lanes,
+    travels: travels,
+    reports: reports,
+    pitchLane: pitchLane,
+    beatAt: table.beatAt,
+    totalBeats: table.totalBeats,
+    startHit: startHit,
+    marbles: [],
+    particles: [],
+    ripples: [],
+    simTime: 0,
+    nextNote: 0,
+    audible: false,
+    arm: Math.PI / 2,
+    focusLane: 4,
+    splitS: lanes[0].splitS
+  };
+  t0 = 0;
+  for (i = 0; i < MELODY.length; i++) t0 = Math.min(t0, spawnTime(world, i));
+  world.simTime = t0;
+  while (world.simTime < -1e-9) {
+    var stepDt = Math.min(DT, -world.simTime);
+    world.simTime += stepDt;
+    stepWorld(world, stepDt, null);
+  }
+  world.audible = true;
+  return world;
+}
+
+function hitTime(world, i) {
+  var idx = i % MELODY.length;
+  var cycle = Math.floor(i / MELODY.length);
+  return world.startHit + (cycle * world.totalBeats + world.beatAt[idx]) * BEAT;
+}
+
+function spawnTime(world, i) {
+  var name = MELODY[i % MELODY.length][0];
+  return hitTime(world, i) - world.travels[world.pitchLane[name]];
+}
+
+function spawnMarble(world, noteIndex) {
+  var idx = noteIndex % MELODY.length;
+  var name = MELODY[idx][0];
+  var lane = world.pitchLane[name];
+  var start = samplePath(world.lanes[lane].path, 0);
+  world.marbles.push({
+    lane: lane,
+    r: MARBLE_R,
+    s: 0,
+    v: 42,
+    mode: 'path',
+    x: start.x,
+    y: start.y,
+    vx: 0,
+    vy: 0,
+    angle: noteIndex * 1.3,
+    noted: false,
+    cleanHit: false,
+    sinceHit: 0,
+    ignoreBar: false,
+    extraTick: false,
+    noteIndex: noteIndex,
+    dur: MELODY[idx][1],
+    pitch: name,
+    born: world.simTime
+  });
+}
+
+function stepWorld(world, dt, hooks) {
+  var guard = 0;
+  var i, m, lane, dead, focus, bestS, desired, diff, idx;
+  while (spawnTime(world, world.nextNote) <= world.simTime + 1e-8 && guard < 6) {
+    spawnMarble(world, world.nextNote);
+    if (hooks && hooks.onSpawn) hooks.onSpawn(world.marbles[world.marbles.length - 1]);
+    world.nextNote++;
+    guard++;
+  }
+  dead = [];
+  for (i = 0; i < world.marbles.length; i++) {
+    m = world.marbles[i];
+    lane = world.lanes[m.lane];
+    integrateMarble(m, lane, dt, hooks);
+    if (m.y > 1160 || (m.noted && m.sinceHit > 2.4)) dead.push(i);
+  }
+  for (i = dead.length - 1; i >= 0; i--) world.marbles.splice(dead[i], 1);
+
+  for (i = 0; i < world.lanes.length; i++) {
+    world.lanes[i].glow *= Math.exp(-dt * 2.6);
+    world.lanes[i].flash *= Math.exp(-dt * 7.5);
+  }
+
+  focus = null;
+  bestS = 1e9;
+  for (i = 0; i < world.marbles.length; i++) {
+    m = world.marbles[i];
+    if (m.mode === 'path' && m.s < bestS) {
+      bestS = m.s;
+      focus = m.lane;
+    }
+  }
+  if (focus === null) {
+    idx = world.nextNote % MELODY.length;
+    focus = world.pitchLane[MELODY[idx][0]];
+  }
+  world.focusLane = focus;
+  desired = Math.atan2(342 - 254, colX(focus) - 540);
+  diff = desired - world.arm;
+  diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+  world.arm += diff * Math.min(1, dt * 7);
+
+  for (i = world.particles.length - 1; i >= 0; i--) {
+    world.particles[i].vy += 1400 * dt;
+    world.particles[i].x += world.particles[i].vx * dt;
+    world.particles[i].y += world.particles[i].vy * dt;
+    world.particles[i].life -= dt;
+    if (world.particles[i].life <= 0) world.particles.splice(i, 1);
+  }
+  for (i = world.ripples.length - 1; i >= 0; i--) {
+    world.ripples[i].age += dt;
+    if (world.ripples[i].age >= world.ripples[i].dur) world.ripples.splice(i, 1);
+  }
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  r = Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function traceLane(ctx, path, s0, yOff) {
+  var step = 7;
+  var end = path.length;
+  var started = false;
+  var s, p;
+  ctx.beginPath();
+  for (s = s0; s < end; s += step) {
+    p = samplePath(path, s);
+    if (!started) {
+      ctx.moveTo(p.x, p.y + yOff);
+      started = true;
+    } else ctx.lineTo(p.x, p.y + yOff);
+  }
+  p = samplePath(path, end - 1e-4);
+  if (!started) ctx.moveTo(p.x, p.y + yOff);
+  else ctx.lineTo(p.x, p.y + yOff);
+}
+
+function drawGear(ctx, x, y, r, teeth, rot, fill, edge) {
+  var i, a, half, rIn, rOut;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rot);
+  ctx.beginPath();
+  rOut = r;
+  rIn = r - Math.max(7, r * 0.16);
+  for (i = 0; i < teeth; i++) {
+    a = (i / teeth) * Math.PI * 2;
+    half = Math.PI / teeth;
+    ctx.lineTo(Math.cos(a) * rIn, Math.sin(a) * rIn);
+    ctx.lineTo(Math.cos(a + half * 0.28) * rOut, Math.sin(a + half * 0.28) * rOut);
+    ctx.lineTo(Math.cos(a + half * 0.92) * rOut, Math.sin(a + half * 0.92) * rOut);
+    ctx.lineTo(Math.cos(a + half * 1.25) * rIn, Math.sin(a + half * 1.25) * rIn);
+  }
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.lineWidth = Math.max(2, r * 0.045);
+  ctx.strokeStyle = edge;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.34, 0, Math.PI * 2);
+  ctx.fillStyle = '#2A0850';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.14, 0, Math.PI * 2);
+  ctx.fillStyle = '#FFE08A';
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawMarble(ctx, x, y, r, color, angle, alpha) {
+  var g;
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  ctx.translate(x, y);
+  ctx.beginPath();
+  ctx.ellipse(r * 0.2, r * 0.62, r * 0.78, r * 0.32, 0, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.28)';
+  ctx.fill();
+  g = ctx.createRadialGradient(-r * 0.38, -r * 0.42, r * 0.12, r * 0.05, r * 0.1, r);
+  g.addColorStop(0, '#ffffff');
+  g.addColorStop(0.16, mixHex(color, '#ffffff', 0.72));
+  g.addColorStop(0.48, color);
+  g.addColorStop(0.8, mixHex(color, '#1A0530', 0.28));
+  g.addColorStop(1, mixHex(color, '#140018', 0.45));
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.fillStyle = g;
+  ctx.fill();
+  ctx.save();
+  ctx.rotate(angle);
+  ctx.beginPath();
+  ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+  ctx.lineWidth = Math.max(1.2, r * 0.09);
+  ctx.arc(0, 0, r * 0.46, 0.15, 2.15);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.strokeStyle = 'rgba(255,255,255,0.28)';
+  ctx.lineWidth = Math.max(1, r * 0.07);
+  ctx.arc(r * 0.08, r * 0.02, r * 0.22, 2.5, 5.1);
+  ctx.stroke();
+  ctx.restore();
+  ctx.beginPath();
+  ctx.arc(0, 0, r - 0.6, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.ellipse(-r * 0.32, -r * 0.36, r * 0.3, r * 0.16, -0.65, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(r * 0.28, r * 0.22, r * 0.1, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.38)';
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawBackground(ctx, w, h, t) {
+  var orbs, i, o, g, x, y;
+  ctx.fillStyle = '#140022';
+  ctx.fillRect(0, 0, w, h);
+  orbs = [
+    { x: 0.12, y: 0.18, r: 0.52, c0: 'rgba(255,30,130,0.62)', c1: 'rgba(255,30,130,0)' },
+    { x: 0.88, y: 0.12, r: 0.46, c0: 'rgba(0,229,255,0.5)', c1: 'rgba(0,229,255,0)' },
+    { x: 0.5, y: 0.92, r: 0.55, c0: 'rgba(150,40,255,0.55)', c1: 'rgba(150,40,255,0)' },
+    { x: 0.08, y: 0.78, r: 0.38, c0: 'rgba(255,140,0,0.45)', c1: 'rgba(255,140,0,0)' },
+    { x: 0.92, y: 0.62, r: 0.36, c0: 'rgba(255,220,0,0.32)', c1: 'rgba(255,220,0,0)' }
+  ];
+  for (i = 0; i < orbs.length; i++) {
+    o = orbs[i];
+    x = (o.x + Math.sin(t * 0.17 + i) * 0.03) * w;
+    y = (o.y + Math.cos(t * 0.13 + i * 1.7) * 0.03) * h;
+    g = ctx.createRadialGradient(x, y, 0, x, y, Math.max(w, h) * o.r);
+    g.addColorStop(0, o.c0);
+    g.addColorStop(1, o.c1);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+  }
+}
+
+function drawScene(ctx, world) {
+  var t = world.simTime;
+  var i, lane, p, s, n, m, a, b, g, col, alpha, bob, dx, dy, idx;
+  var sorted, k, pt, bar, glow, top, by, bh, hitAge;
+
+  ctx.save();
+  ctx.globalAlpha = 0.16;
+  drawGear(ctx, 210, 500, 168, 16, t * 0.18, '#FF3D8A', 'rgba(255,224,138,0.4)');
+  drawGear(ctx, 890, 640, 132, 14, -t * 0.22, '#7A3CFF', 'rgba(255,224,138,0.35)');
+  ctx.restore();
+
+  roundRect(ctx, 28, 36, 44, 1010, 16);
+  g = ctx.createLinearGradient(28, 36, 72, 1046);
+  g.addColorStop(0, '#FF3D8A');
+  g.addColorStop(1, '#6A2BFF');
+  ctx.fillStyle = g;
+  ctx.fill();
+  roundRect(ctx, 1008, 36, 44, 1010, 16);
+  g = ctx.createLinearGradient(1008, 36, 1052, 1046);
+  g.addColorStop(0, '#00E5FF');
+  g.addColorStop(1, '#5B2BFF');
+  ctx.fillStyle = g;
+  ctx.fill();
+  ctx.fillStyle = '#FFE08A';
+  for (i = 0; i < 12; i++) {
+    ctx.beginPath();
+    ctx.arc(50, 80 + i * 80, 5, 0, Math.PI * 2);
+    ctx.arc(1030, 80 + i * 80, 5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  drawGear(ctx, 236, 112, 64, 12, t * 0.9, '#FF3D8A', '#FFE08A');
+  drawGear(ctx, 844, 100, 48, 10, -t * 1.08, '#FFC400', '#FFF1B0');
+
+  roundRect(ctx, 62, 832, 956, 216, 22);
+  g = ctx.createLinearGradient(62, 832, 62, 1048);
+  g.addColorStop(0, '#4A12A0');
+  g.addColorStop(1, '#240052');
+  ctx.fillStyle = g;
+  ctx.fill();
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = '#FFE08A';
+  ctx.stroke();
+
+  ctx.fillStyle = '#FFC94A';
+  roundRect(ctx, 48, 454, 984, 12, 6);
+  ctx.fill();
+  roundRect(ctx, 48, 626, 984, 12, 6);
+  ctx.fill();
+  ctx.fillStyle = '#C47A12';
+  roundRect(ctx, 48, 462, 984, 5, 3);
+  ctx.fill();
+  roundRect(ctx, 48, 634, 984, 5, 3);
+  ctx.fill();
+
+  for (i = 0; i < world.lanes.length; i++) {
+    lane = world.lanes[i];
+    roundRect(ctx, colX(i) - 5, 348, 10, 400, 5);
+    ctx.fillStyle = mixHex(lane.color, '#2A0858', 0.45);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(colX(i), 348, 7, 0, Math.PI * 2);
+    ctx.fillStyle = '#FFE08A';
+    ctx.fill();
+  }
+
+  for (i = 0; i < world.lanes.length; i++) {
+    lane = world.lanes[i];
+    a = lane.walls[0];
+    b = lane.walls[1];
+    ctx.beginPath();
+    ctx.moveTo(a[0].x, a[0].y);
+    ctx.lineTo(a[1].x, a[1].y);
+    ctx.moveTo(b[0].x, b[0].y);
+    ctx.lineTo(b[1].x, b[1].y);
+    ctx.lineWidth = 8;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = '#E7B043';
+    ctx.stroke();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = lane.color;
+    ctx.stroke();
+  }
+
+  for (i = 0; i < world.lanes.length; i++) {
+    lane = world.lanes[i];
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    s = lane.splitS;
+    while (s < lane.path.length) {
+      p = samplePath(lane.path, s);
+      n = upNormal(p.tx, p.ty);
+      dx = -n.nx * 11;
+      dy = -n.ny * 11 + 4;
+      if (s === lane.splitS) ctx.moveTo(p.x + dx, p.y + dy);
+      else ctx.lineTo(p.x + dx, p.y + dy);
+      s += 22;
+    }
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(40,10,0,0.45)';
+    ctx.stroke();
+
+    traceLane(ctx, lane.path, lane.splitS, RAIL_DROP);
+    ctx.lineWidth = 20;
+    ctx.strokeStyle = 'rgba(0,0,0,0.28)';
+    ctx.stroke();
+    ctx.lineWidth = 16;
+    ctx.strokeStyle = '#8A5A12';
+    ctx.stroke();
+    ctx.lineWidth = 10;
+    ctx.strokeStyle = '#FFD56A';
+    ctx.stroke();
+    ctx.lineWidth = 4.5;
+    ctx.strokeStyle = lane.color;
+    ctx.stroke();
+    ctx.save();
+    ctx.lineWidth = 1.6;
+    ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+    ctx.setLineDash([8, 28]);
+    ctx.lineDashOffset = -t * 80 - i * 18;
+    ctx.stroke();
+    ctx.restore();
+
+    p = samplePath(lane.path, lane.path.length - 1e-4);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y + RAIL_DROP, 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#FFE08A';
+    ctx.fill();
+  }
+
+  ctx.beginPath();
+  ctx.moveTo(522, 150);
+  ctx.lineTo(522, 262);
+  ctx.moveTo(558, 150);
+  ctx.lineTo(558, 262);
+  ctx.lineCap = 'round';
+  ctx.lineWidth = 9;
+  ctx.strokeStyle = '#FFE08A';
+  ctx.stroke();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(255,255,255,0.65)';
+  ctx.stroke();
+
+  for (i = 0; i < world.lanes.length; i++) {
+    lane = world.lanes[i];
+    bar = lane.bar;
+    glow = lane.glow;
+    top = bar.y + Math.sin(t * 46) * glow * 3.2;
+    by = top;
+    bh = bar.h - (top - bar.y);
+    ctx.beginPath();
+    ctx.ellipse(colX(i), PLINTH_Y + 4, BAR_W * 0.38, 7, 0, 0, Math.PI * 2);
+    ctx.fillStyle = rgba(lane.color, 0.16 + glow * 0.35);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(bar.x + bar.w, by);
+    ctx.lineTo(bar.x + bar.w + 12, by - 7);
+    ctx.lineTo(bar.x + bar.w + 12, by + Math.min(bh * 0.72, bh - 8));
+    ctx.lineTo(bar.x + bar.w, by + Math.min(bh * 0.78, bh));
+    ctx.closePath();
+    ctx.fillStyle = mixHex(lane.color, '#140018', 0.38);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(bar.x, by);
+    ctx.lineTo(bar.x + 8, by - 8);
+    ctx.lineTo(bar.x + bar.w + 8, by - 8);
+    ctx.lineTo(bar.x + bar.w, by);
+    ctx.closePath();
+    ctx.fillStyle = mixHex(lane.color, '#FFFFFF', 0.5 + glow * 0.4);
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(255,255,255,' + (0.45 + glow * 0.5) + ')';
+    ctx.stroke();
+    roundRect(ctx, bar.x, by, bar.w, bh, 10);
+    g = ctx.createLinearGradient(bar.x, by, bar.x, by + bh);
+    g.addColorStop(0, mixHex(lane.color, '#FFFFFF', 0.35 + glow * 0.4));
+    g.addColorStop(0.18, lane.color);
+    g.addColorStop(1, mixHex(lane.color, '#1A0530', 0.42));
+    ctx.fillStyle = g;
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = glow > 0.15 ? '#FFFFFF' : 'rgba(255,255,255,0.55)';
+    ctx.stroke();
+    roundRect(ctx, bar.x + 6, by + 5, bar.w - 12, Math.min(14, bh * 0.18), 6);
+    ctx.fillStyle = 'rgba(255,255,255,' + (0.28 + glow * 0.55) + ')';
+    ctx.fill();
+    ctx.fillStyle = '#2A0850';
+    ctx.beginPath();
+    ctx.arc(bar.x + 14, by + bh * 0.22, 3.2, 0, Math.PI * 2);
+    ctx.arc(bar.x + bar.w - 14, by + bh * 0.22, 3.2, 0, Math.PI * 2);
+    ctx.fill();
+    if (lane.flash > 0.02) {
+      ctx.beginPath();
+      ctx.arc(colX(i), by, 10 + (1 - lane.flash) * 26, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255,255,255,' + lane.flash * 0.8 + ')';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+    }
+  }
+
+  roundRect(ctx, 70, PLINTH_Y, 940, 28, 10);
+  g = ctx.createLinearGradient(70, PLINTH_Y, 70, PLINTH_Y + 28);
+  g.addColorStop(0, '#FFD56A');
+  g.addColorStop(0.4, '#C45CFF');
+  g.addColorStop(1, '#6A12C8');
+  ctx.fillStyle = g;
+  ctx.fill();
+
+  drawGear(ctx, 540, 254, 26, 10, -t * 0.6, '#FFC400', '#FFF4C2');
+  col = world.lanes[world.focusLane].color;
+  ctx.beginPath();
+  ctx.moveTo(540, 254);
+  ctx.lineTo(540 + Math.cos(world.arm) * 58, 254 + Math.sin(world.arm) * 58);
+  ctx.lineWidth = 7;
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = '#FFE08A';
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(540 + Math.cos(world.arm) * 58, 254 + Math.sin(world.arm) * 58, 7, 0, Math.PI * 2);
+  ctx.fillStyle = col;
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#FFFFFF';
+  ctx.stroke();
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(540, 108, 84, 0, Math.PI * 2);
+  g = ctx.createRadialGradient(510, 78, 8, 540, 108, 84);
+  g.addColorStop(0, 'rgba(255,255,255,0.42)');
+  g.addColorStop(0.35, 'rgba(120,220,255,0.12)');
+  g.addColorStop(1, 'rgba(50,0,90,0.38)');
+  ctx.fillStyle = g;
+  ctx.fill();
+  ctx.clip();
+  for (i = 0; i < HOPPER.length; i++) {
+    k = world.nextNote + i;
+    idx = k % MELODY.length;
+    lane = world.lanes[world.pitchLane[MELODY[idx][0]]];
+    pt = HOPPER[i];
+    alpha = 1;
+    if (i === 0) {
+      var nearest = 999;
+      for (var mi = 0; mi < world.marbles.length; mi++) {
+        m = world.marbles[mi];
+        nearest = Math.min(nearest, Math.hypot(m.x - pt.x, m.y - pt.y));
+      }
+      alpha = clamp((nearest - 18) / 28, 0, 1);
+    }
+    if (alpha < 0.02) continue;
+    bob = Math.sin(t * 2.4 + i * 1.1) * 1.6;
+    drawMarble(ctx, pt.x, pt.y + bob, 12.5, lane.color, t * 0.6 + i, alpha);
+  }
+  ctx.restore();
+  ctx.beginPath();
+  ctx.arc(540, 108, 84, 0, Math.PI * 2);
+  ctx.lineWidth = 8;
+  ctx.strokeStyle = '#FFE08A';
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+  ctx.lineWidth = 4;
+  ctx.arc(540, 108, 70, -2.5, -0.7);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(540, 30, 12, 0, Math.PI * 2);
+  ctx.fillStyle = '#FF3D8A';
+  ctx.fill();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = '#FFE08A';
+  ctx.stroke();
+
+  sorted = world.marbles.slice().sort(function (a, b) { return a.y - b.y; });
+  for (i = 0; i < sorted.length; i++) {
+    m = sorted[i];
+    lane = world.lanes[m.lane];
+    alpha = 1;
+    dx = m.x;
+    dy = m.y;
+    if (m.mode === 'path') {
+      p = samplePath(lane.path, Math.min(m.s, lane.path.length - 1e-4));
+      n = upNormal(p.tx, p.ty);
+      bob = Math.sin(m.s * 0.62) * Math.min(1.7, m.v / 260);
+      dx = p.x + n.nx * bob;
+      dy = p.y + n.ny * bob;
+    }
+    if (m.noted && m.y > lane.bar.y + m.r + 18) {
+      alpha = clamp(1 - (m.y - lane.bar.y - m.r - 18) / 170, 0, 1);
+    }
+    var rr = m.r;
+    if (m.noted) rr = m.r * (1 + clamp((m.y - lane.bar.y) / 220, 0, 1) * 0.22);
+    drawMarble(ctx, dx, dy, rr, lane.color, m.angle, alpha);
+  }
+
+  for (i = 0; i < world.ripples.length; i++) {
+    var rp = world.ripples[i];
+    hitAge = rp.age / rp.dur;
+    ctx.beginPath();
+    ctx.arc(rp.x, rp.y, 8 + hitAge * 64, 0, Math.PI * 2);
+    ctx.strokeStyle = rgba(rp.color, (1 - hitAge) * 0.75);
+    ctx.lineWidth = 3 * (1 - hitAge) + 0.5;
+    ctx.stroke();
+  }
+  for (i = 0; i < world.particles.length; i++) {
+    pt = world.particles[i];
+    ctx.globalAlpha = clamp(pt.life / 0.45, 0, 1);
+    ctx.fillStyle = pt.color;
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, pt.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+}
+
+function createAudio() {
+  var Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return null;
+  var ctx = new Ctx();
+  var master = ctx.createGain();
+  master.gain.value = 0.9;
+  var comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -14;
+  comp.knee.value = 8;
+  comp.ratio.value = 3;
+  comp.attack.value = 0.003;
+  comp.release.value = 0.16;
+  master.connect(comp);
+  comp.connect(ctx.destination);
+  var noiseLen = Math.floor(ctx.sampleRate * 1.2);
+  var noiseBuf = ctx.createBuffer(1, noiseLen, ctx.sampleRate);
+  var data = noiseBuf.getChannelData(0);
+  var i;
+  for (i = 0; i < noiseLen; i++) data[i] = Math.random() * 2 - 1;
+  var rollFilter = ctx.createBiquadFilter();
+  rollFilter.type = 'bandpass';
+  rollFilter.frequency.value = 880;
+  rollFilter.Q.value = 0.65;
+  var rollGain = ctx.createGain();
+  rollGain.gain.value = 0;
+  var rollPan = null;
+  if (ctx.createStereoPanner) {
+    rollPan = ctx.createStereoPanner();
+    rollFilter.connect(rollPan);
+    rollPan.connect(rollGain);
+  } else {
+    rollFilter.connect(rollGain);
+  }
+  rollGain.connect(master);
+  var rollSrc = ctx.createBufferSource();
+  rollSrc.buffer = noiseBuf;
+  rollSrc.loop = true;
+  rollSrc.connect(rollFilter);
+  return {
+    ctx: ctx,
+    master: master,
+    noiseBuf: noiseBuf,
+    rollFilter: rollFilter,
+    rollGain: rollGain,
+    rollPan: rollPan,
+    rollSrc: rollSrc,
+    rollStarted: false,
+    rollAmp: 0,
+    pan: 0
+  };
+}
+
+function audioLive(audio) {
+  return !!(audio && audio.ctx && audio.ctx.state === 'running');
+}
+
+function armAudio(audio) {
+  var start;
+  if (!audio) return;
+  start = function () {
+    if (audio.ctx.state === 'running' && !audio.rollStarted) {
+      try {
+        audio.rollSrc.start();
+        audio.rollStarted = true;
+      } catch (e) {}
+    }
+  };
+  try {
+    var p = audio.ctx.resume();
+    if (p && p.then) p.then(start).catch(function () {});
+  } catch (e) {}
+  start();
+}
+
+function playXylo(audio, freq, when, durBeats, vel, pan) {
+  var amp = 0.16 + 0.2 * clamp(vel, 0, 1);
+  var dur = Math.min(1.2, 0.24 + durBeats * 0.28);
+  var partials = [
+    { ratio: 1, a: 1, d: dur },
+    { ratio: 3.02, a: 0.34, d: dur * 0.4 },
+    { ratio: 6.1, a: 0.11, d: dur * 0.16 }
+  ];
+  var dest = audio.master;
+  var panner = null;
+  var pi, p, o, g, peak, src, bp, ng, tick, tg;
+  if (audio.ctx.createStereoPanner) {
+    panner = audio.ctx.createStereoPanner();
+    panner.pan.setValueAtTime(clamp(pan, -1, 1), when);
+    panner.connect(audio.master);
+    dest = panner;
+  }
+  for (pi = 0; pi < partials.length; pi++) {
+    p = partials[pi];
+    o = audio.ctx.createOscillator();
+    g = audio.ctx.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(freq * p.ratio, when);
+    peak = Math.max(0.0002, amp * p.a);
+    g.gain.setValueAtTime(0.0001, when);
+    g.gain.exponentialRampToValueAtTime(peak, when + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + Math.max(0.06, p.d));
+    o.connect(g);
+    g.connect(dest);
+    o.start(when);
+    o.stop(when + p.d + 0.04);
+  }
+  src = audio.ctx.createBufferSource();
+  src.buffer = audio.noiseBuf;
+  bp = audio.ctx.createBiquadFilter();
+  bp.type = 'highpass';
+  bp.frequency.setValueAtTime(1600, when);
+  ng = audio.ctx.createGain();
+  ng.gain.setValueAtTime(Math.max(0.0002, amp * 0.62), when);
+  ng.gain.exponentialRampToValueAtTime(0.0001, when + 0.04);
+  src.connect(bp);
+  bp.connect(ng);
+  ng.connect(dest);
+  src.start(when);
+  src.stop(when + 0.05);
+  tick = audio.ctx.createOscillator();
+  tg = audio.ctx.createGain();
+  tick.type = 'triangle';
+  tick.frequency.setValueAtTime(1500 + freq * 1.8, when);
+  tick.frequency.exponentialRampToValueAtTime(280, when + 0.06);
+  tg.gain.setValueAtTime(Math.max(0.0002, amp * 0.22), when);
+  tg.gain.exponentialRampToValueAtTime(0.0001, when + 0.06);
+  tick.connect(tg);
+  tg.connect(dest);
+  tick.start(when);
+  tick.stop(when + 0.07);
+}
+
+function playPop(audio, when) {
+  var o = audio.ctx.createOscillator();
+  var g = audio.ctx.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(620, when);
+  o.frequency.exponentialRampToValueAtTime(180, when + 0.05);
+  g.gain.setValueAtTime(0.07, when);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + 0.06);
+  o.connect(g);
+  g.connect(audio.master);
+  o.start(when);
+  o.stop(when + 0.07);
+}
+
+function playClack(audio, when, speed) {
+  var o = audio.ctx.createOscillator();
+  var g = audio.ctx.createGain();
+  var vol = clamp(speed / 9000, 0.012, 0.045);
+  o.type = 'triangle';
+  o.frequency.setValueAtTime(220 + Math.min(speed, 700) * 0.35, when);
+  o.frequency.exponentialRampToValueAtTime(90, when + 0.045);
+  g.gain.setValueAtTime(vol, when);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + 0.05);
+  o.connect(g);
+  g.connect(audio.master);
+  o.start(when);
+  o.stop(when + 0.06);
+}
+
+function playGlass(audio, when, gain) {
+  var o = audio.ctx.createOscillator();
+  var g = audio.ctx.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(2400, when);
+  o.frequency.exponentialRampToValueAtTime(700, when + 0.04);
+  g.gain.setValueAtTime(gain, when);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + 0.045);
+  o.connect(g);
+  g.connect(audio.master);
+  o.start(when);
+  o.stop(when + 0.05);
+}
+
+function updateRoll(audio, world) {
+  var energy = 0;
+  var panE = 0;
+  var i, m, e, target, pf;
+  if (!audioLive(audio)) return;
+  for (i = 0; i < world.marbles.length; i++) {
+    m = world.marbles[i];
+    if (m.mode !== 'path') continue;
+    e = clamp(m.v / MAX_V, 0, 1);
+    energy += e;
+    panE += ((m.x - 540) / 540) * e;
+  }
+  target = Math.min(0.11, energy * 0.03);
+  audio.rollAmp += (target - audio.rollAmp) * 0.12;
+  audio.rollGain.gain.value = audio.rollAmp;
+  pf = energy > 0.01 ? panE / energy : 0;
+  audio.pan += (clamp(pf, -1, 1) - audio.pan) * 0.08;
+  if (audio.rollPan) audio.rollPan.pan.value = audio.pan;
+  audio.rollFilter.frequency.value = 480 + Math.min(energy, 5) * 160;
+}
+
+function burst(world, m) {
+  var lane = world.lanes[m.lane];
+  var k, ang, sp;
+  lane.glow = 1;
+  lane.flash = 1;
+  world.ripples.push({
+    x: m.hitX || m.x,
+    y: lane.bar.y,
+    age: 0,
+    dur: 0.42,
+    color: lane.color
+  });
+  for (k = 0; k < 12; k++) {
+    ang = -Math.PI / 2 + (k - 5.5) * 0.22 + (Math.random() - 0.5) * 0.2;
+    sp = 90 + Math.random() * 220;
+    world.particles.push({
+      x: m.hitX || m.x,
+      y: lane.bar.y,
+      vx: Math.cos(ang) * sp,
+      vy: Math.sin(ang) * sp,
+      life: 0.32 + Math.random() * 0.22,
+      r: 1.8 + Math.random() * 2.4,
+      color: k % 3 === 0 ? '#FFFFFF' : lane.color
+    });
+  }
+  if (world.particles.length > 140) world.particles.splice(0, world.particles.length - 140);
+}
+
+function boot() {
+  var canvas = document.getElementById('c');
+  var ctx = canvas.getContext('2d');
+  var world = createWorld();
+  var audio = null;
+  var cssW = 1;
+  var cssH = 1;
+  var viewDpr = 1;
+  var last = performance.now();
+  var acc = 0;
+  var audioFrameBase = 0;
+  var frameStartSim = 0;
+
+  try { audio = createAudio(); } catch (e) { audio = null; }
+
+  function whenAudio() {
+    if (!audioLive(audio)) return audio ? audio.ctx.currentTime : 0;
+    return Math.max(audio.ctx.currentTime, audioFrameBase + (world.simTime - frameStartSim));
+  }
+
+  var hooks = {
+    onHit: function (m, impact) {
+      burst(world, m);
+      if (!audioLive(audio) || !world.audible) return;
+      playXylo(
+        audio,
+        world.lanes[m.lane].freq,
+        whenAudio(),
+        m.dur,
+        impact / 650,
+        (colX(m.lane) - 540) / 470
+      );
+    },
+    onBounce: function (m) {
+      if (!audioLive(audio) || !world.audible) return;
+      playGlass(audio, whenAudio(), 0.05);
+    },
+    onClack: function (m) {
+      if (!audioLive(audio) || !world.audible) return;
+      if (m.v < 160) return;
+      if (world.simTime - (m.lastClack || -1) < 0.055) return;
+      m.lastClack = world.simTime;
+      playClack(audio, whenAudio(), m.v);
+    },
+    onSpawn: function () {
+      if (!audioLive(audio) || !world.audible) return;
+      playPop(audio, whenAudio());
+    }
+  };
+
+  function resize() {
+    viewDpr = Math.min(window.devicePixelRatio || 1, 2);
+    cssW = Math.max(1, window.innerWidth);
+    cssH = Math.max(1, window.innerHeight);
+    canvas.width = Math.round(cssW * viewDpr);
+    canvas.height = Math.round(cssH * viewDpr);
+  }
+
+  function draw(now) {
+    var scale, ox, oy, vg;
+    ctx.setTransform(viewDpr, 0, 0, viewDpr, 0, 0);
+    drawBackground(ctx, cssW, cssH, world.simTime);
+    scale = Math.min(cssW, cssH) / SCENE;
+    ox = (cssW - SCENE * scale) / 2;
+    oy = (cssH - SCENE * scale) / 2;
+    ctx.save();
+    ctx.translate(ox, oy);
+    ctx.scale(scale, scale);
+    drawScene(ctx, world);
+    ctx.restore();
+    vg = ctx.createRadialGradient(cssW / 2, cssH / 2, Math.min(cssW, cssH) * 0.35, cssW / 2, cssH / 2, Math.max(cssW, cssH) * 0.72);
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, 'rgba(0,0,0,0.28)');
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, cssW, cssH);
+  }
+
+  function frame(now) {
+    var delta = (now - last) / 1000;
+    last = now;
+    if (delta > 0.05) delta = 0.05;
+    if (delta < 0) delta = 0;
+    audioFrameBase = audio ? audio.ctx.currentTime : 0;
+    frameStartSim = world.simTime;
+    acc += delta;
+    while (acc >= DT) {
+      world.simTime += DT;
+      stepWorld(world, DT, hooks);
+      acc -= DT;
+    }
+    updateRoll(audio, world);
+    draw(now);
+    requestAnimationFrame(frame);
+  }
+
+  window.addEventListener('pointerdown', function () { armAudio(audio); });
+  window.addEventListener('keydown', function () { armAudio(audio); });
+  window.addEventListener('resize', resize);
+  resize();
+  armAudio(audio);
+  draw(performance.now());
+  requestAnimationFrame(frame);
+}
+
+if (typeof window !== 'undefined') boot();
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    createWorld: createWorld,
+    stepWorld: stepWorld,
+    MELODY: MELODY,
+    NOTES: NOTES,
+    hitTime: hitTime,
+    spawnTime: spawnTime,
+    DT: DT,
+    buildLanes: buildLanes,
+    measureTravel: measureTravel,
+    samplePath: samplePath,
+    colX: colX
+  };
+}
+</script>
+</body>
+</html>

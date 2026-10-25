@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Liquid</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#090516}body{overscroll-behavior:none}canvas{display:block;width:100%;height:100%}
+</style>
+</head>
+<body>
+<canvas aria-label="A colorful stream of liquid splashing and swirling into a clear glass"></canvas>
+<script>
+'use strict';
+(() => {
+  const canvas = document.querySelector('canvas'), ctx = canvas.getContext('2d', {alpha:false});
+  const TAU = Math.PI*2;
+  let width=0,height=0,dpr=1,scale=1,ox=0,oy=0,backdrop;
+  let time=0,last=0,spawn=0,particles=[],rings=[],bubbleClock=0;
+  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+  const mix=(a,b,t)=>a+(b-a)*t;
+  const smooth=t=>t*t*(3-2*t);
+  const ellipse=(x,y,rx,ry)=>{ctx.beginPath();ctx.ellipse(x,y,rx,ry,0,0,TAU);};
+  function glassPath(){
+    ctx.beginPath();ctx.moveTo(307,410);
+    ctx.bezierCurveTo(310,548,344,820,359,891);
+    ctx.bezierCurveTo(374,956,706,956,721,891);
+    ctx.bezierCurveTo(736,820,770,548,773,410);
+    ctx.bezierCurveTo(773,322,307,322,307,410);ctx.closePath();
+  }
+  function resize(){
+    width=innerWidth;height=innerHeight;dpr=Math.min(devicePixelRatio||1,2);
+    canvas.width=Math.round(width*dpr);canvas.height=Math.round(height*dpr);
+    scale=Math.min(width/1080,height/1080);ox=(width-1080*scale)/2;oy=(height-1080*scale)/2;
+    backdrop=document.createElement('canvas');backdrop.width=canvas.width;backdrop.height=canvas.height;
+    const b=backdrop.getContext('2d');b.scale(dpr,dpr);
+    b.fillStyle='#090516';b.fillRect(0,0,width,height);
+    const glow=(x,y,r,c)=>{let g=b.createRadialGradient(x,y,0,x,y,r);g.addColorStop(0,c);g.addColorStop(1,'transparent');b.fillStyle=g;b.fillRect(0,0,width,height);};
+    glow(ox+300*scale,oy+430*scale,580*scale,'#351047');
+    glow(ox+790*scale,oy+650*scale,440*scale,'#072c43');
+    glow(ox+530*scale,oy+995*scale,400*scale,'#29164b');
+    b.save();b.translate(ox,oy);b.scale(scale,scale);
+    let g=b.createRadialGradient(540,947,8,540,947,330);g.addColorStop(0,'#592c7660');g.addColorStop(.5,'#381c5c24');g.addColorStop(1,'#17102500');
+    b.save();b.translate(0,718);b.scale(1,.24);b.fillStyle=g;b.fillRect(120,550,850,750);b.restore();
+    b.restore();
+  }
+  addEventListener('resize',resize,{passive:true});resize();
+
+  // A filtered noise bed supplies the continuous pour; small pitched envelopes make bubbles.
+  let audio,noiseSource,pourGain,filter,pan,master,nextBubble=0;
+  function startAudio(){
+    try{
+      if(!audio){
+        const Audio=window.AudioContext||window.webkitAudioContext;if(!Audio)return;
+        audio=new Audio();master=audio.createGain();master.gain.value=.42;master.connect(audio.destination);
+        const buffer=audio.createBuffer(1,audio.sampleRate*3,audio.sampleRate),data=buffer.getChannelData(0);
+        let brown=0;for(let i=0;i<data.length;i++){brown=(brown+Math.random()*.08-.04)/1.025;data[i]=brown*4+(Math.random()*2-1)*.16;}
+        noiseSource=audio.createBufferSource();noiseSource.buffer=buffer;noiseSource.loop=true;
+        filter=audio.createBiquadFilter();filter.type='bandpass';filter.frequency.value=1150;filter.Q.value=.55;
+        pourGain=audio.createGain();pourGain.gain.value=0;
+        pan=audio.createStereoPanner?audio.createStereoPanner():audio.createGain();
+        noiseSource.connect(filter);filter.connect(pourGain);pourGain.connect(pan);pan.connect(master);noiseSource.start();
+      }
+      if(audio.state==='suspended')audio.resume().catch(()=>{});
+    }catch(e){/* Silent animation remains available if audio is unsupported. */}
+  }
+  startAudio();
+  addEventListener('pointerdown',startAudio,{passive:true});addEventListener('keydown',startAudio);
+  function sound(flow,fill,impact){
+    if(!audio||audio.state!=='running')return;
+    const t=audio.currentTime;
+    pourGain.gain.setTargetAtTime(flow*(.16+.045*Math.sin(time*13)+.025*Math.sin(time*31)),t,.06);
+    filter.frequency.setTargetAtTime(850+fill*1400+Math.sin(time*5)*120,t,.12);
+    if(pan.pan)pan.pan.setTargetAtTime((impact-540)/600,t,.1);
+    if(flow>.1&&t>nextBubble){
+      nextBubble=t+.10+Math.random()*.24;
+      const o=audio.createOscillator(),g=audio.createGain();o.type='sine';
+      const f=350+Math.random()*700+fill*550;
+      o.frequency.setValueAtTime(f,t);o.frequency.exponentialRampToValueAtTime(f*.44,t+.095);
+      g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.025*flow,t+.006);g.gain.exponentialRampToValueAtTime(.0001,t+.14);
+      o.connect(g);g.connect(master);o.start(t);o.stop(t+.15);
+      o.onended=()=>{o.disconnect();g.disconnect();};
+    }
+  }
+  function drawGlassBack(){
+    ctx.save();glassPath();
+    let g=ctx.createLinearGradient(300,0,780,0);g.addColorStop(0,'#a9eaff15');g.addColorStop(.2,'#bddaff03');g.addColorStop(.7,'#82caff03');g.addColorStop(1,'#6acfff1c');
+    ctx.fillStyle=g;ctx.fill();ctx.strokeStyle='#aed5ff25';ctx.lineWidth=2;ctx.stroke();
+    ellipse(540,410,233,65);ctx.fillStyle='#94cfff07';ctx.fill();ctx.strokeStyle='#c0e7ff36';ctx.lineWidth=3;ctx.stroke();
+    ctx.beginPath();ctx.ellipse(540,410,226,59,0,Math.PI,TAU);ctx.strokeStyle='#e9faff75';ctx.lineWidth=2;ctx.stroke();ctx.restore();
+  }
+  function liquid(y,rx,fill,flow){
+    ctx.save();glassPath();ctx.clip();
+    ctx.beginPath();ctx.moveTo(540-rx,y);ctx.bezierCurveTo(540-rx,y-69,540+rx,y-69,540+rx,y);
+    ctx.lineTo(765,940);ctx.lineTo(315,940);ctx.closePath();
+    const g=ctx.createLinearGradient(330,y,740,940);
+    g.addColorStop(0,'#ffbd34');g.addColorStop(.20,'#ff4a79');g.addColorStop(.46,'#ed157e');g.addColorStop(.70,'#8227ed');g.addColorStop(.88,'#3634ce');g.addColorStop(1,'#02bace');ctx.fillStyle=g;ctx.fill();ctx.clip();
+    // Moving broad ribbons are refracted through the curved body of the glass.
+    for(let i=0;i<10;i++){
+      let yy=y+30+i*63+Math.sin(time*.8+i)*15;
+      ctx.beginPath();ctx.moveTo(290,yy);
+      ctx.bezierCurveTo(460,yy+100*Math.sin(time*.55+i*.6),610,yy-100,790,yy+35);
+      ctx.strokeStyle=['#ffbb2933','#ff24564a','#ff65c734','#a43cfa55','#35cbef3c'][i%5];ctx.lineWidth=35+Math.sin(i)*15;ctx.stroke();
+    }
+    let inner=ctx.createLinearGradient(310,0,775,0);inner.addColorStop(0,'#180c5e85');inner.addColorStop(.13,'#fff5e91f');inner.addColorStop(.37,'#ffffff00');inner.addColorStop(.77,'#ffffff00');inner.addColorStop(.94,'#35096d65');inner.addColorStop(1,'#040c3366');ctx.fillStyle=inner;ctx.fillRect(300,y-80,490,1040-y);
+    for(let i=0;i<28;i++){
+      let p=(time*(.025+(i%5)*.004)+i*.618)%1;
+      let by=mix(915,y+6,p),bx=540+Math.sin(i*5.7+time*.45+p*3)*(95+i%6*16),r=1.4+i%4;
+      if(by>y+12){ellipse(bx,by,r,r*1.18);ctx.strokeStyle='#ffd8ff55';ctx.lineWidth=1;ctx.stroke();ellipse(bx-r*.23,by-r*.3,r*.28,r*.28);ctx.fillStyle='#fff7e58a';ctx.fill();}
+    }
+    ctx.restore();
+    // The elliptical surface has its own revolving currents and concentric wakes.
+    ctx.save();ellipse(540,y,rx,rx*.245);ctx.clip();
+    let s=ctx.createLinearGradient(540-rx,y-60,540+rx,y+45);s.addColorStop(0,'#ffcf50');s.addColorStop(.36,'#ff7486');s.addColorStop(.68,'#fa288e');s.addColorStop(1,'#7d35f5');ctx.fillStyle=s;ctx.fillRect(300,y-70,490,140);
+    for(let i=0;i<7;i++){
+      ctx.beginPath();
+      for(let j=0;j<=100;j++){
+        let a=j/100*TAU+time*(.5+i*.035),r=(i+1)/8*rx;
+        let x=540+Math.cos(a)*r,y1=y+Math.sin(a)*r*.245+Math.sin(a*3+time*2+i)*3;
+        if(j===0)ctx.moveTo(x,y1);else ctx.lineTo(x,y1);
+      }
+      ctx.strokeStyle=i%2?'#ffcfa968':'#ffecb94d';ctx.lineWidth=2.5;ctx.stroke();
+    }
+    for(const r of rings){ellipse(r.x,y+r.z,r.r,r.r*.25);ctx.strokeStyle=`rgba(255,230,179,${r.life*.5})`;ctx.lineWidth=1.8;ctx.stroke();}
+    ctx.restore();ellipse(540,y,rx,rx*.245);ctx.strokeStyle='#ffabbd99';ctx.lineWidth=1.8;ctx.stroke();
+  }
+  function stream(y,x,flow){
+    if(flow<.005)return;
+    const w=24*Math.sqrt(flow),sway=Math.sin(time*1.8)*8;
+    ctx.save();
+    ctx.beginPath();ctx.moveTo(501-w,-40);ctx.bezierCurveTo(484-w,125,533-w+sway,y*.56,x-w*.74,y);
+    ctx.quadraticCurveTo(x,y+18,x+w*.85,y);ctx.bezierCurveTo(530+w+sway,y*.57,510+w,120,501+w,-40);ctx.closePath();
+    let g=ctx.createLinearGradient(467,0,540,0);g.addColorStop(0,'#ff2f9a');g.addColorStop(.21,'#ff616c');g.addColorStop(.48,'#ffcb56');g.addColorStop(.63,'#fff1b0');g.addColorStop(.73,'#ff905d');g.addColorStop(1,'#f51e89');ctx.fillStyle=g;ctx.fill();
+    ctx.clip();
+    for(let i=0;i<5;i++){
+      ctx.beginPath();ctx.moveTo(484+i*9,-30);ctx.bezierCurveTo(484+i*9+Math.sin(time*2+i)*8,180,535+i*3-22+sway,y*.57,x+(i-2)*7,y+8);
+      ctx.strokeStyle=['#ff74be70','#ff335c60','#fff4bbab','#fff8de85','#ff4d7760'][i];ctx.lineWidth=i===2?3:5;ctx.stroke();
+    }
+    for(let i=0;i<12;i++){
+      let yy=((time*540+i*83)%(y+120))-70;
+      ctx.beginPath();ctx.ellipse(509+Math.sin(yy*.009+time)*5,yy,20,22,0,0,TAU);ctx.strokeStyle='#fff3bc20';ctx.lineWidth=2;ctx.stroke();
+    }
+    ctx.restore();
+    ellipse(x,y+4,33+Math.sin(time*24)*4,10);ctx.fillStyle='#ffe0a3b0';ctx.fill();
+    // A curling crown surrounds the point where the stream meets the surface.
+    for(let i=0;i<5;i++){
+      let a=time*2+i*TAU/5,dx=Math.cos(a),h=(13+Math.sin(time*11+i)*9)*flow;
+      ctx.beginPath();ctx.moveTo(x+dx*8,y+3);ctx.quadraticCurveTo(x+dx*35,y-h*2,x+dx*53,y+Math.sin(a)*9);
+      ctx.strokeStyle=i%2?'#ffb66bdd':'#ff7a9cbb';ctx.lineWidth=4;ctx.lineCap='round';ctx.stroke();
+    }
+  }
+  function drawParticles(dt,y,x,flow){
+    spawn+=dt*flow*43;
+    while(spawn>1){spawn--;let a=Math.random()*TAU,v=45+Math.random()*135;
+      particles.push({x:x+(Math.random()-.5)*25,y:y-5,vx:Math.cos(a)*v,vy:-90-Math.random()*225,r:2+Math.random()*5,life:0,z:Math.random()*16-8,h:Math.random()});
+      if(rings.length<24)rings.push({x:x+(Math.random()-.5)*40,z:Math.random()*12-6,r:8,life:1});
+    }
+    for(let i=particles.length-1;i>=0;i--){let p=particles[i];p.life+=dt;p.vy+=510*dt;p.x+=p.vx*dt;p.y+=p.vy*dt;
+      if(p.y>y+p.z&&p.vy>0||p.life>2){particles.splice(i,1);continue;}
+      ctx.save();ctx.translate(p.x,p.y);ctx.rotate(-Math.atan2(p.vx,p.vy));
+      let g=ctx.createRadialGradient(-p.r*.3,-p.r*.4,.1,0,0,p.r*1.4);g.addColorStop(0,'#fff8d9');g.addColorStop(.28,'#ffc973');g.addColorStop(.7,p.h>.5?'#ff558c':'#fb9b4d');g.addColorStop(1,'#e3237d');ctx.fillStyle=g;
+      ellipse(0,0,p.r*.8,p.r*(1+Math.min(.8,Math.abs(p.vy)/350)));ctx.fill();ctx.restore();
+    }
+    for(let i=rings.length-1;i>=0;i--){rings[i].r+=dt*76;rings[i].life-=dt*.85;if(rings[i].life<0)rings.splice(i,1);}
+  }
+  function drawGlassFront(){
+    ctx.save();glassPath();ctx.clip();
+    let g=ctx.createLinearGradient(310,0,775,0);g.addColorStop(0,'#c3eaff3b');g.addColorStop(.025,'#efffff7a');g.addColorStop(.065,'#d3efff09');g.addColorStop(.17,'#ffffff12');g.addColorStop(.24,'#ffffff00');g.addColorStop(.85,'#ffffff00');g.addColorStop(.96,'#70d9ff1c');g.addColorStop(1,'#d0faff77');ctx.fillStyle=g;ctx.fillRect(300,360,480,600);
+    ctx.beginPath();ctx.moveTo(328,456);ctx.bezierCurveTo(332,569,352,733,367,804);ctx.strokeStyle='#f1faffb3';ctx.lineWidth=5;ctx.lineCap='round';ctx.stroke();
+    ctx.beginPath();ctx.moveTo(343,480);ctx.bezierCurveTo(350,571,358,622,363,646);ctx.strokeStyle='#fff9ff30';ctx.lineWidth=13;ctx.stroke();
+    ctx.beginPath();ctx.moveTo(752,457);ctx.bezierCurveTo(750,550,729,764,714,835);ctx.strokeStyle='#9ceaff8f';ctx.lineWidth=3;ctx.stroke();
+    ctx.beginPath();ctx.ellipse(540,895,176,38,0,0,Math.PI);ctx.strokeStyle='#d0edff72';ctx.lineWidth=7;ctx.stroke();
+    ctx.beginPath();ctx.ellipse(540,903,166,26,0,.12,Math.PI-.12);ctx.strokeStyle='#fff6ff75';ctx.lineWidth=2;ctx.stroke();ctx.restore();
+    ctx.beginPath();ctx.ellipse(540,410,233,65,0,0,Math.PI);ctx.strokeStyle='#d8eeff9e';ctx.lineWidth=4;ctx.stroke();
+    ctx.beginPath();ctx.ellipse(540,410,225,58,0,.05,Math.PI-.05);ctx.strokeStyle='#c3deff42';ctx.lineWidth=1.5;ctx.stroke();
+    ctx.beginPath();ctx.ellipse(540,410,233,65,0,Math.PI*1.12,Math.PI*1.45);ctx.strokeStyle='#f6faffdb';ctx.lineWidth=3;ctx.stroke();
+  }
+  function frame(now){
+    if(!last)last=now;let dt=Math.min((now-last)/1000,.04);last=now;time+=dt;
+    // A long fill, a brief rest, and a soft return keep the sculpture moving indefinitely.
+    const cycle=time%82;
+    let fill,flow;
+    if(cycle<64){fill=.035+.93*smooth(cycle/64);flow=clamp(cycle*2,0,1)*clamp((64-cycle)/2,0,1);}
+    else if(cycle<69){fill=.965;flow=0;}
+    else{fill=mix(.965,.035,smooth((cycle-69)/13));flow=0;}
+    let y=mix(887,474,fill),rx=mix(174,223,clamp((887-y)/477,0,1));
+    let impact=514+Math.sin(time*1.8)*9+Math.sin(time*.7)*5;
+    ctx.setTransform(1,0,0,1,0,0);ctx.drawImage(backdrop,0,0);
+    ctx.setTransform(dpr*scale,0,0,dpr*scale,dpr*ox,dpr*oy);
+    // Colored caustics ground the glass on the dark reflective stage.
+    ctx.save();ctx.translate(540,956);ctx.scale(1,.15);
+    let halo=ctx.createRadialGradient(0,0,5,0,0,250);halo.addColorStop(0,'#fa298d38');halo.addColorStop(.5,'#854aff20');halo.addColorStop(1,'#3320ff00');ctx.fillStyle=halo;ctx.fillRect(-260,-260,520,520);ctx.restore();
+    drawGlassBack();liquid(y,rx,fill,flow);stream(y,impact,flow);drawParticles(dt,y,impact,flow);drawGlassFront();sound(flow,fill,impact);
+    requestAnimationFrame(frame);
+  }
+  document.addEventListener('visibilitychange',()=>{last=0;if(audio&&audio.state==='running'){master.gain.setTargetAtTime(document.hidden?0:.42,audio.currentTime,.1);}});
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
