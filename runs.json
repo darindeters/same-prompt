@@ -1013,5 +1013,73 @@
     "elapsed_s": 1037.3
    }
   }
+ },
+ "pumpkin": {
+  "title": "Pumpkin Carving Contest",
+  "prompt": "Build your entry in a jack-o'-lantern carving contest: a pumpkin being carved in real time, the knife cutting out a face of your own design and the pieces popping out, then a candle lighting it from inside so it glows in the dark, all within about twenty seconds, then the glowing jack-o'-lantern holds before the carving starts again, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it sound effects that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "claude": {
+    "model": "claude-fable-5-1",
+    "effort": "medium",
+    "cli": "2.1.303 (Claude Code)",
+    "start_utc": "2026-10-26T10:26:17Z",
+    "elapsed_s": 491.3
+   },
+   "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-26T10:34:28Z",
+    "elapsed_s": 194.4
+   },
+   "gemini": {
+    "model": "gemini-4-argon-medium",
+    "effort": "medium",
+    "cli": "1.4.7",
+    "start_utc": "2026-10-26T10:26:15Z",
+    "elapsed_s": 228.7
+   },
+   "grok": {
+    "model": "grok-4.7",
+    "effort": "medium",
+    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
+    "start_utc": "2026-10-26T10:26:17Z",
+    "elapsed_s": 1479.8
+   }
+  }
+ },
+ "costume": {
+  "title": "AI Halloween Costumes",
+  "prompt": "Build an animated portrait of yourself, the AI model writing this file, as a person wearing your Halloween costume, as one self-contained file named index.html in this folder. Pick the costume yourself, make it something that fits who you are, and show it off in a spooky Halloween night scene with movement. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it Halloween sound effects that fit your costume, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+  "runs": {
+   "claude": {
+    "model": "claude-fable-5-1",
+    "effort": "medium",
+    "cli": "2.1.303 (Claude Code)",
+    "start_utc": "2026-10-26T10:26:50Z",
+    "elapsed_s": 275.8
+   },
+   "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-26T10:31:26Z",
+    "elapsed_s": 228.0
+   },
+   "gemini": {
+    "model": "gemini-4-argon-medium",
+    "effort": "medium",
+    "cli": "1.4.7",
+    "start_utc": "2026-10-26T10:30:11Z",
+    "elapsed_s": 191.7
+   },
+   "grok": {
+    "model": "grok-4.7",
+    "effort": "medium",
+    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
+    "start_utc": "2026-10-26T10:26:50Z",
+    "elapsed_s": 1247.2
+   }
+  }
  }
 }

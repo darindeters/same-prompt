@@ -1,0 +1,1404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Halloween Portrait</title>
+<style>
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #070312;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('stage');
+  const ctx = canvas.getContext('2d');
+
+  // Virtual 1080x1080 coordinate space for crisp composition in a square window
+  // while filling any aspect ratio seamlessly.
+  let width = window.innerWidth;
+  let height = window.innerHeight;
+  let dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Deterministic PRNG for procedural scenery details
+  let seed = 421031;
+  function rand() {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  }
+
+  // Stars in background
+  const stars = Array.from({ length: 160 }, () => ({
+    x: (rand() - 0.5) * 2000,
+    y: -540 + rand() * 780,
+    r: 1 + rand() * 2.8,
+    phase: rand() * Math.PI * 2,
+    speed: 1.5 + rand() * 3,
+    hue: rand() > 0.5 ? 188 : (rand() > 0.4 ? 42 : 295)
+  }));
+
+  // Floating antigravity pebbles & rune shards
+  const shards = Array.from({ length: 28 }, (_, i) => ({
+    angle: (i / 28) * Math.PI * 2,
+    radius: 260 + rand() * 250,
+    baseY: -60 + (rand() - 0.5) * 650,
+    size: 7 + rand() * 16,
+    speed: 0.35 + rand() * 0.65,
+    bobSpeed: 1.2 + rand() * 1.8,
+    phase: rand() * Math.PI * 2,
+    isCrystal: i % 2 === 0,
+    hue: i % 3 === 0 ? 185 : (i % 3 === 1 ? 315 : 35)
+  }));
+
+  // Spooky bats
+  const bats = Array.from({ length: 11 }, () => ({
+    x: (rand() - 0.5) * 1400,
+    y: -480 + rand() * 520,
+    vx: (rand() > 0.5 ? 1 : -1) * (55 + rand() * 75),
+    vy: (rand() - 0.5) * 18,
+    scale: 0.55 + rand() * 0.75,
+    flapPhase: rand() * Math.PI * 2,
+    flapSpeed: 9 + rand() * 5
+  }));
+
+  // Rising magic embers / sparks
+  const embers = Array.from({ length: 65 }, () => ({
+    x: (rand() - 0.5) * 1200,
+    y: -540 + rand() * 1100,
+    vx: (rand() - 0.5) * 24,
+    vy: -(35 + rand() * 65),
+    r: 1.8 + rand() * 4.2,
+    phase: rand() * Math.PI * 2,
+    color: rand() > 0.45 ? '#00ffd5' : (rand() > 0.45 ? '#ff7b00' : '#ff2a85')
+  }));
+
+  // Background gothic hills & trees points
+  const lightning = {
+    alpha: 0,
+    timer: 3.2,
+    bolt: []
+  };
+
+  function triggerLightning(playThunder = true) {
+    lightning.alpha = 0.95;
+    lightning.bolt = [];
+    let bx = (Math.random() > 0.5 ? -1 : 1) * (240 + Math.random() * 220);
+    let by = -540;
+    lightning.bolt.push({ x: bx, y: by });
+    while (by < 180) {
+      bx += (Math.random() - 0.5) * 90;
+      by += 35 + Math.random() * 45;
+      lightning.bolt.push({ x: bx, y: by });
+    }
+    if (playThunder) AudioEngine.playThunder();
+  }
+
+  // ============================================================================
+  // WEB AUDIO API: Procedural Cyber-Occult & Antigravity Halloween Synth
+  // ============================================================================
+  const AudioEngine = (() => {
+    let actx = null;
+    let master = null;
+    let started = false;
+    let stepIndex = 0;
+    let nextNoteTime = 0;
+
+    // Haunted Dorian / Harmonic Minor scale frequencies (D minor / occult vibe)
+    const arpFreqs = [
+      293.66, 349.23, 440.00, 466.16, 554.37, 587.33,
+      698.46, 554.37, 466.16, 440.00, 349.23, 329.63
+    ];
+
+    function init() {
+      if (actx) {
+        if (actx.state === 'suspended') {
+          actx.resume().catch(() => {});
+        }
+        return;
+      }
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+
+      actx = new AudioCtx();
+      master = actx.createGain();
+      master.gain.value = 0.28;
+      master.connect(actx.destination);
+
+      // 1. Deep Cosmic Antigravity Sub-Drone
+      const droneOsc1 = actx.createOscillator();
+      const droneOsc2 = actx.createOscillator();
+      const droneFilter = actx.createBiquadFilter();
+      const droneGain = actx.createGain();
+
+      droneOsc1.type = 'sawtooth';
+      droneOsc2.type = 'triangle';
+      droneOsc1.frequency.value = 73.42; // D2
+      droneOsc2.frequency.value = 110.00; // A2
+      droneOsc2.detune.value = 7;
+
+      droneFilter.type = 'lowpass';
+      droneFilter.frequency.value = 190;
+      droneFilter.Q.value = 4;
+
+      const droneLfo = actx.createOscillator();
+      const droneLfoGain = actx.createGain();
+      droneLfo.frequency.value = 0.18;
+      droneLfoGain.gain.value = 75;
+      droneLfo.connect(droneLfoGain);
+      droneLfoGain.connect(droneFilter.frequency);
+
+      droneGain.gain.value = 0.35;
+      droneOsc1.connect(droneFilter);
+      droneOsc2.connect(droneFilter);
+      droneFilter.connect(droneGain);
+      droneGain.connect(master);
+
+      droneOsc1.start();
+      droneOsc2.start();
+      droneLfo.start();
+
+      // 2. Spooky Haunted Wind (Filtered Pink/White Noise)
+      const bufSize = actx.sampleRate * 3;
+      const noiseBuf = actx.createBuffer(1, bufSize, actx.sampleRate);
+      const output = noiseBuf.getChannelData(0);
+      let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+      for (let i = 0; i < bufSize; i++) {
+        const white = Math.random() * 2 - 1;
+        b0 = 0.99886 * b0 + white * 0.0555179;
+        b1 = 0.99332 * b1 + white * 0.0750759;
+        b2 = 0.96900 * b2 + white * 0.1538520;
+        b3 = 0.86650 * b3 + white * 0.3104856;
+        b4 = 0.55000 * b4 + white * 0.5329522;
+        b5 = -0.7616 * b5 - white * 0.0168980;
+        output[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.04;
+        b6 = white * 0.115926;
+      }
+
+      const windSource = actx.createBufferSource();
+      windSource.buffer = noiseBuf;
+      windSource.loop = true;
+
+      const windFilter = actx.createBiquadFilter();
+      windFilter.type = 'bandpass';
+      windFilter.frequency.value = 420;
+      windFilter.Q.value = 6.5;
+
+      const windLfo = actx.createOscillator();
+      const windLfoGain = actx.createGain();
+      windLfo.frequency.value = 0.13;
+      windLfoGain.gain.value = 260;
+      windLfo.connect(windLfoGain);
+      windLfoGain.connect(windFilter.frequency);
+
+      const windGain = actx.createGain();
+      windGain.gain.value = 0.45;
+      windSource.connect(windFilter);
+      windFilter.connect(windGain);
+      windGain.connect(master);
+
+      windSource.start();
+      windLfo.start();
+
+      // 3. Ghostly AI Theremin Lead (Smooth Vibrato Sine)
+      const theremin = actx.createOscillator();
+      const thereminGain = actx.createGain();
+      const vibrato = actx.createOscillator();
+      const vibratoGain = actx.createGain();
+
+      theremin.type = 'sine';
+      theremin.frequency.value = 587.33;
+      vibrato.frequency.value = 6.2;
+      vibratoGain.gain.value = 11;
+      vibrato.connect(vibratoGain);
+      vibratoGain.connect(theremin.frequency);
+
+      thereminGain.gain.value = 0.055;
+      theremin.connect(thereminGain);
+      thereminGain.connect(master);
+      theremin.start();
+      vibrato.start();
+
+      AudioEngine.theremin = theremin;
+      AudioEngine.thereminGain = thereminGain;
+      AudioEngine.noiseBuf = noiseBuf;
+      nextNoteTime = actx.currentTime + 0.1;
+      started = true;
+
+      if (actx.state === 'suspended') {
+        actx.resume().catch(() => {});
+      }
+    }
+
+    // Play a crystalline neural-spell chime note
+    function triggerChime(freq, time) {
+      if (!actx || actx.state !== 'running') return;
+      const osc = actx.createOscillator();
+      const sub = actx.createOscillator();
+      const gain = actx.createGain();
+
+      osc.type = 'triangle';
+      sub.type = 'sine';
+      osc.frequency.setValueAtTime(freq, time);
+      sub.frequency.setValueAtTime(freq * 2, time);
+
+      gain.gain.setValueAtTime(0.0001, time);
+      gain.gain.exponentialRampToValueAtTime(0.11, time + 0.025);
+      gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.65);
+
+      osc.connect(gain);
+      sub.connect(gain);
+      gain.connect(master);
+
+      osc.start(time);
+      sub.start(time);
+      osc.stop(time + 0.7);
+      sub.stop(time + 0.7);
+    }
+
+    function playThunder() {
+      if (!actx || actx.state !== 'running' || !AudioEngine.noiseBuf) return;
+      const now = actx.currentTime;
+      const src = actx.createBufferSource();
+      src.buffer = AudioEngine.noiseBuf;
+      src.loop = true;
+
+      const filter = actx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(520, now);
+      filter.frequency.exponentialRampToValueAtTime(65, now + 2.4);
+
+      const gain = actx.createGain();
+      gain.gain.setValueAtTime(0.001, now);
+      gain.gain.linearRampToValueAtTime(0.75, now + 0.06);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 2.5);
+
+      src.connect(filter);
+      filter.connect(gain);
+      gain.connect(master);
+      src.start(now);
+      src.stop(now + 2.6);
+    }
+
+    function update() {
+      if (!actx || !started || actx.state !== 'running') return;
+      const now = actx.currentTime;
+      if (nextNoteTime < now) nextNoteTime = now;
+
+      while (nextNoteTime < now + 0.15) {
+        const freq = arpFreqs[stepIndex % arpFreqs.length];
+        const octave = (stepIndex % 4 === 0) ? 0.5 : ((stepIndex % 7 === 0) ? 2 : 1);
+        triggerChime(freq * octave, nextNoteTime);
+
+        // Glide theremin on every 3rd step for spooky melodic movement
+        if (stepIndex % 3 === 0 && AudioEngine.theremin) {
+          const target = arpFreqs[(stepIndex * 5) % arpFreqs.length] * 1.5;
+          AudioEngine.theremin.frequency.exponentialRampToValueAtTime(target, nextNoteTime + 0.42);
+          const swell = (stepIndex % 6 === 0) ? 0.08 : 0.03;
+          AudioEngine.thereminGain.gain.linearRampToValueAtTime(swell, nextNoteTime + 0.35);
+        }
+
+        nextNoteTime += 0.28;
+        stepIndex++;
+      }
+    }
+
+    return { init, update, playThunder };
+  })();
+
+  // Start audio immediately on load and bind fallback on first interaction
+  AudioEngine.init();
+  const unlockAudio = () => {
+    AudioEngine.init();
+  };
+  window.addEventListener('pointerdown', unlockAudio, { passive: true });
+  window.addEventListener('click', unlockAudio, { passive: true });
+  window.addEventListener('keydown', unlockAudio, { passive: true });
+  window.addEventListener('touchstart', unlockAudio, { passive: true });
+
+  // ============================================================================
+  // DRAWING HELPERS
+  // ============================================================================
+  function drawStarPolygon(x, y, spikes, outerR, innerR, rot = 0) {
+    ctx.beginPath();
+    for (let i = 0; i < spikes * 2; i++) {
+      const r = i % 2 === 0 ? outerR : innerR;
+      const a = rot + (i * Math.PI) / spikes;
+      const px = x + Math.cos(a) * r;
+      const py = y + Math.sin(a) * r;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+  }
+
+  function drawBat(x, y, scale, flap) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(scale, scale);
+    const wingY = Math.sin(flap) * 18;
+    ctx.fillStyle = '#090314';
+    ctx.beginPath();
+    ctx.moveTo(0, 4);
+    ctx.quadraticCurveTo(-18, -16 + wingY, -38, -4 + wingY * 1.2);
+    ctx.quadraticCurveTo(-26, 8 + wingY * 0.5, -18, 12);
+    ctx.quadraticCurveTo(-8, 8, 0, 14);
+    ctx.quadraticCurveTo(8, 8, 18, 12);
+    ctx.quadraticCurveTo(26, 8 + wingY * 0.5, 38, -4 + wingY * 1.2);
+    ctx.quadraticCurveTo(18, -16 + wingY, 0, 4);
+    ctx.fill();
+
+    // Little glowing eyes
+    ctx.fillStyle = '#ff2a85';
+    ctx.beginPath();
+    ctx.arc(-3, 3, 1.5, 0, Math.PI * 2);
+    ctx.arc(3, 3, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawTwistedTree(baseX, baseY, scaleX, scaleY, sway) {
+    ctx.save();
+    ctx.translate(baseX, baseY);
+    ctx.scale(scaleX, scaleY);
+    ctx.fillStyle = '#070210';
+    ctx.beginPath();
+    ctx.moveTo(-45, 0);
+    ctx.quadraticCurveTo(-20, -180, -35 + sway * 0.4, -360);
+    ctx.quadraticCurveTo(-110 + sway, -430, -175 + sway * 1.4, -495);
+    ctx.quadraticCurveTo(-90 + sway, -455, -28 + sway * 0.5, -395);
+    ctx.quadraticCurveTo(-10 + sway * 0.8, -510, 35 + sway * 1.3, -590);
+    ctx.quadraticCurveTo(8 + sway * 0.7, -485, 4 + sway * 0.5, -380);
+    ctx.quadraticCurveTo(85 + sway, -440, 145 + sway * 1.2, -475);
+    ctx.quadraticCurveTo(75 + sway * 0.8, -405, 18 + sway * 0.4, -335);
+    ctx.quadraticCurveTo(15, -170, 50, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawFamiliarOrb(x, y, radius, mainColor, glowColor, t, isSolar) {
+    ctx.save();
+    ctx.translate(x, y);
+
+    // Outer aura
+    const aura = ctx.createRadialGradient(0, 0, radius * 0.2, 0, 0, radius * 2.6);
+    aura.addColorStop(0, mainColor);
+    aura.addColorStop(0.45, glowColor);
+    aura.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = aura;
+    ctx.beginPath();
+    ctx.arc(0, 0, radius * 2.6, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Orbiting tech-magic ring around familiar
+    ctx.save();
+    ctx.rotate(t * (isSolar ? 1.8 : -1.8));
+    ctx.strokeStyle = mainColor;
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([10, 8]);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, radius * 1.45, radius * 0.55, 0.35, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+
+    // Spectral pumpkin-core body
+    const bodyGrad = ctx.createRadialGradient(-radius * 0.25, -radius * 0.25, radius * 0.1, 0, 0, radius);
+    bodyGrad.addColorStop(0, '#ffffff');
+    bodyGrad.addColorStop(0.35, mainColor);
+    bodyGrad.addColorStop(1, '#16052b');
+    ctx.fillStyle = bodyGrad;
+    ctx.beginPath();
+    ctx.arc(0, 0, radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Cute/spooky carved face on the familiar spirit
+    ctx.fillStyle = '#070210';
+    // Left eye
+    ctx.beginPath();
+    ctx.moveTo(-radius * 0.48, -radius * 0.08);
+    ctx.lineTo(-radius * 0.22, -radius * 0.35);
+    ctx.lineTo(-radius * 0.12, -radius * 0.05);
+    ctx.closePath();
+    ctx.fill();
+    // Right eye
+    ctx.beginPath();
+    ctx.moveTo(radius * 0.48, -radius * 0.08);
+    ctx.lineTo(radius * 0.22, -radius * 0.35);
+    ctx.lineTo(radius * 0.12, -radius * 0.05);
+    ctx.closePath();
+    ctx.fill();
+    // Zigzag grin
+    ctx.beginPath();
+    ctx.moveTo(-radius * 0.52, radius * 0.2);
+    ctx.lineTo(-radius * 0.25, radius * 0.42);
+    ctx.lineTo(0, radius * 0.26);
+    ctx.lineTo(radius * 0.25, radius * 0.42);
+    ctx.lineTo(radius * 0.52, radius * 0.2);
+    ctx.lineTo(radius * 0.28, radius * 0.56);
+    ctx.lineTo(0, radius * 0.42);
+    ctx.lineTo(-radius * 0.28, radius * 0.56);
+    ctx.closePath();
+    ctx.fill();
+
+    // Little glowing stem/antenna
+    ctx.strokeStyle = mainColor;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(0, -radius);
+    ctx.quadraticCurveTo(8, -radius - 14, 14, -radius - 10);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  // ============================================================================
+  // MAIN ANIMATION LOOP
+  // ============================================================================
+  let lastTime = performance.now();
+
+  function render(now) {
+    const dt = Math.min((now - lastTime) / 1000, 0.1);
+    lastTime = now;
+    const t = now * 0.001;
+
+    AudioEngine.update();
+
+    // Update lightning timer
+    lightning.timer -= dt;
+    if (lightning.timer <= 0) {
+      triggerLightning(true);
+      lightning.timer = 4.5 + Math.random() * 5.5;
+    }
+    if (lightning.alpha > 0) {
+      lightning.alpha = Math.max(0, lightning.alpha - dt * 2.6);
+    }
+
+    ctx.save();
+    ctx.scale(dpr, dpr);
+
+    // Scale coordinate system so 1080x1080 is centered and always visible, while background covers 100%
+    const scale = Math.max(width / 1080, height / 1080);
+    const portraitScale = Math.min(width / 1080, height / 1080);
+
+    // ------------------------------------------------------------------------
+    // 1. VIVID HALLOWEEN NIGHT SKY (Full Bleed)
+    // ------------------------------------------------------------------------
+    const skyGrad = ctx.createLinearGradient(0, 0, 0, height);
+    skyGrad.addColorStop(0, '#070214');
+    skyGrad.addColorStop(0.38, '#1a0638');
+    skyGrad.addColorStop(0.72, '#3d0b5e');
+    skyGrad.addColorStop(0.92, '#8a1c64');
+    skyGrad.addColorStop(1, '#ff5500');
+    ctx.fillStyle = skyGrad;
+    ctx.fillRect(0, 0, width, height);
+
+    // Center origin for background elements that scale to cover
+    ctx.save();
+    ctx.translate(width / 2, height / 2);
+    ctx.scale(scale, scale);
+
+    // Twinkling stars & Gemini constellations
+    for (let i = 0; i < stars.length; i++) {
+      const s = stars[i];
+      const twinkle = 0.4 + 0.6 * Math.sin(t * s.speed + s.phase);
+      ctx.fillStyle = `hsla(${s.hue}, 100%, 80%, ${twinkle})`;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r * (0.7 + 0.5 * twinkle), 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Lightning flash overlay & jagged sky bolt
+    if (lightning.alpha > 0.01) {
+      ctx.fillStyle = `rgba(180, 245, 255, ${lightning.alpha * 0.28})`;
+      ctx.fillRect(-1200, -1200, 2400, 2400);
+
+      ctx.save();
+      ctx.strokeStyle = `rgba(220, 252, 255, ${lightning.alpha})`;
+      ctx.shadowColor = '#00f7ff';
+      ctx.shadowBlur = 28;
+      ctx.lineWidth = 4.5;
+      ctx.beginPath();
+      for (let i = 0; i < lightning.bolt.length; i++) {
+        const pt = lightning.bolt[i];
+        if (i === 0) ctx.moveTo(pt.x, pt.y);
+        else ctx.lineTo(pt.x, pt.y);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    ctx.restore();
+
+    // ------------------------------------------------------------------------
+    // 2. SQUARE 1080x1080 PORTRAIT STAGE (Centered & Framed)
+    // ------------------------------------------------------------------------
+    ctx.save();
+    ctx.translate(width / 2, height / 2);
+    ctx.scale(portraitScale, portraitScale);
+
+    // Giant Harvest Blood-Moon with Arcane Astrolabe Rings behind the AI Sorcerer
+    const moonY = -140;
+    const moonGrad = ctx.createRadialGradient(0, moonY, 40, 0, moonY, 370);
+    moonGrad.addColorStop(0, '#fff7d6');
+    moonGrad.addColorStop(0.35, '#ffbe2e');
+    moonGrad.addColorStop(0.68, '#ff4d00');
+    moonGrad.addColorStop(0.86, 'rgba(255, 0, 110, 0.42)');
+    moonGrad.addColorStop(1, 'rgba(255, 0, 110, 0)');
+    ctx.fillStyle = moonGrad;
+    ctx.beginPath();
+    ctx.arc(0, moonY, 370, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Crisp inner moon disc
+    const innerMoon = ctx.createLinearGradient(0, moonY - 220, 0, moonY + 220);
+    innerMoon.addColorStop(0, '#fff6cc');
+    innerMoon.addColorStop(0.55, '#ff9e1b');
+    innerMoon.addColorStop(1, '#ff2a55');
+    ctx.fillStyle = innerMoon;
+    ctx.beginPath();
+    ctx.arc(0, moonY, 225, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Rotating Celestial Gemini / Antigravity Astrolabe Halo behind head
+    ctx.save();
+    ctx.translate(0, moonY + 15);
+    ctx.rotate(t * 0.22);
+    ctx.strokeStyle = 'rgba(0, 255, 229, 0.72)';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([18, 12, 4, 12]);
+    ctx.beginPath();
+    ctx.arc(0, 0, 265, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.rotate(-t * 0.48);
+    ctx.strokeStyle = 'rgba(255, 196, 0, 0.65)';
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([]);
+    drawStarPolygon(0, 0, 8, 295, 235, 0);
+    ctx.stroke();
+
+    // Orbiting twin star nodes on the astrolabe
+    for (let i = 0; i < 8; i++) {
+      const a = (i * Math.PI) / 4;
+      const nx = Math.cos(a) * 295;
+      const ny = Math.sin(a) * 295;
+      ctx.fillStyle = i % 2 === 0 ? '#00ffe5' : '#ffaa00';
+      ctx.beginPath();
+      ctx.arc(nx, ny, 6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    // Flying Bats across the moon and sky
+    for (let i = 0; i < bats.length; i++) {
+      const b = bats[i];
+      b.x += b.vx * dt;
+      b.y += Math.sin(t * 2.5 + i) * 14 * dt + b.vy * dt;
+      if (b.x > 680) b.x = -680;
+      if (b.x < -680) b.x = 680;
+      if (b.y < -520) b.y = -120;
+      if (b.y > 120) b.y = -480;
+      drawBat(b.x, b.y, b.scale, t * b.flapSpeed + b.flapPhase);
+    }
+
+    // Spooky Gothic Castle & Graveyard Hills in the distance
+    ctx.fillStyle = '#120424';
+    ctx.beginPath();
+    ctx.moveTo(-750, 540);
+    ctx.lineTo(-750, 260);
+    ctx.quadraticCurveTo(-420, 150, -180, 280);
+    ctx.quadraticCurveTo(180, 170, 750, 250);
+    ctx.lineTo(750, 540);
+    ctx.closePath();
+    ctx.fill();
+
+    // Haunted Manor Spire on left hill
+    ctx.fillStyle = '#0b0218';
+    ctx.beginPath();
+    ctx.moveTo(-430, 240);
+    ctx.lineTo(-420, 95);
+    ctx.lineTo(-435, 95);
+    ctx.lineTo(-400, 15);
+    ctx.lineTo(-365, 95);
+    ctx.lineTo(-380, 95);
+    ctx.lineTo(-370, 240);
+    ctx.closePath();
+    ctx.fill();
+
+    // Glowing haunted window in spire
+    ctx.fillStyle = '#ff9900';
+    ctx.beginPath();
+    ctx.arc(-400, 130, 9, Math.PI, 0);
+    ctx.lineTo(-391, 152);
+    ctx.lineTo(-409, 152);
+    ctx.closePath();
+    ctx.fill();
+
+    // Crooked Gravestones on right hill
+    ctx.save();
+    ctx.translate(395, 228);
+    ctx.rotate(0.14);
+    ctx.fillStyle = '#16062c';
+    ctx.beginPath();
+    ctx.arc(0, -32, 22, Math.PI, 0);
+    ctx.lineTo(22, 15);
+    ctx.lineTo(-22, 15);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    // Eerie Drifting Fog Bank (Back Layer)
+    const fogOffset1 = Math.sin(t * 0.55) * 90;
+    const fogGrad1 = ctx.createLinearGradient(0, 160, 0, 440);
+    fogGrad1.addColorStop(0, 'rgba(0, 255, 213, 0)');
+    fogGrad1.addColorStop(0.5, 'rgba(138, 43, 226, 0.32)');
+    fogGrad1.addColorStop(1, 'rgba(0, 255, 213, 0)');
+    ctx.fillStyle = fogGrad1;
+    ctx.beginPath();
+    ctx.ellipse(fogOffset1, 290, 780, 95, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Gnarled Twisted Halloween Trees framing Left & Right
+    const treeSway = Math.sin(t * 1.4) * 18;
+    drawTwistedTree(-470, 540, 1.05, 1.08, treeSway);
+    drawTwistedTree(485, 540, -1.0, 1.02, -treeSway * 0.9);
+
+    // ------------------------------------------------------------------------
+    // 3. ANTIGRAVITY FLOATING ROCKS & HOLOGRAPHIC CODE CRYSTALS (Back Orbit)
+    // ------------------------------------------------------------------------
+    for (let i = 0; i < shards.length; i++) {
+      const sh = shards[i];
+      const orbitA = sh.angle + t * sh.speed;
+      const depth = Math.sin(orbitA);
+      if (depth > 0) continue; // Draw behind character first
+      const sx = Math.cos(orbitA) * sh.radius;
+      const sy = sh.baseY + Math.sin(t * sh.bobSpeed + sh.phase) * 26;
+      drawShard(sx, sy, sh, t, 0.65);
+    }
+
+    // ------------------------------------------------------------------------
+    // 4. SELF-PORTRAIT: THE AI MODEL AS AN ANTIGRAVITY CYBER-ALCHEMIST / SORCERER
+    // ------------------------------------------------------------------------
+    const hoverY = Math.sin(t * 2.1) * 22;
+    const hoverTilt = Math.sin(t * 1.05) * 0.025;
+
+    ctx.save();
+    ctx.translate(0, hoverY);
+    ctx.rotate(hoverTilt);
+
+    // Billowing Outer Cloak (Deep Ultraviolet & Neon Magenta/Cyan Lining)
+    const capeWave1 = Math.sin(t * 3.2) * 28;
+    const capeWave2 = Math.cos(t * 2.7) * 34;
+
+    const outerCapeGrad = ctx.createLinearGradient(0, -40, 0, 520);
+    outerCapeGrad.addColorStop(0, '#1e0842');
+    outerCapeGrad.addColorStop(0.6, '#12032b');
+    outerCapeGrad.addColorStop(1, '#060112');
+
+    ctx.fillStyle = outerCapeGrad;
+    ctx.beginPath();
+    ctx.moveTo(-115, -18);
+    ctx.bezierCurveTo(-260, 90, -340 + capeWave1, 310, -290 + capeWave2, 520);
+    ctx.lineTo(-175 + capeWave1 * 0.6, 465);
+    ctx.lineTo(-95 + capeWave2 * 0.5, 535);
+    ctx.lineTo(0, 480);
+    ctx.lineTo(95 + capeWave1 * 0.5, 535);
+    ctx.lineTo(175 + capeWave2 * 0.6, 465);
+    ctx.lineTo(290 + capeWave1, 520);
+    ctx.bezierCurveTo(340 + capeWave2, 310, 260, 90, 115, -18);
+    ctx.closePath();
+    ctx.fill();
+
+    // Glowing Constellation Circuit Traces on the Cloak
+    ctx.strokeStyle = '#00ffe5';
+    ctx.lineWidth = 2.5;
+    ctx.shadowColor = '#00ffe5';
+    ctx.shadowBlur = 12;
+    ctx.beginPath();
+    // Left cloak circuit
+    ctx.moveTo(-125, 45);
+    ctx.lineTo(-185, 160);
+    ctx.lineTo(-155, 265);
+    ctx.lineTo(-215 + capeWave1 * 0.4, 390);
+    // Right cloak circuit
+    ctx.moveTo(125, 45);
+    ctx.lineTo(185, 160);
+    ctx.lineTo(155, 265);
+    ctx.lineTo(215 + capeWave2 * 0.4, 390);
+    ctx.stroke();
+
+    // Circuit nodes
+    ctx.fillStyle = '#ffbe0b';
+    const nodes = [
+      [-185, 160], [-155, 265], [-215 + capeWave1 * 0.4, 390],
+      [185, 160], [155, 265], [215 + capeWave2 * 0.4, 390]
+    ];
+    for (const [nx, ny] of nodes) {
+      ctx.beginPath();
+      ctx.arc(nx, ny, 5.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.shadowBlur = 0;
+
+    // Dramatic High Vampire/Sorcerer Collar (Vivid Crimson-Magenta Inside)
+    const collarGrad = ctx.createLinearGradient(0, -145, 0, 20);
+    collarGrad.addColorStop(0, '#ff007f');
+    collarGrad.addColorStop(0.5, '#9b0058');
+    collarGrad.addColorStop(1, '#2a043d');
+    ctx.fillStyle = collarGrad;
+    ctx.strokeStyle = '#ffbe0b';
+    ctx.lineWidth = 3.5;
+    ctx.beginPath();
+    ctx.moveTo(-95, 10);
+    ctx.lineTo(-175, -125);
+    ctx.quadraticCurveTo(-85, -90, 0, -65);
+    ctx.quadraticCurveTo(85, -90, 175, -125);
+    ctx.lineTo(95, 10);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Torso / Cyber-Alchemist Vest
+    const torsoGrad = ctx.createLinearGradient(-110, 0, 110, 380);
+    torsoGrad.addColorStop(0, '#2b0954');
+    torsoGrad.addColorStop(0.5, '#190536');
+    torsoGrad.addColorStop(1, '#0b021a');
+    ctx.fillStyle = torsoGrad;
+    ctx.beginPath();
+    ctx.moveTo(-110, -5);
+    ctx.lineTo(110, -5);
+    ctx.lineTo(140, 420);
+    ctx.lineTo(-140, 420);
+    ctx.closePath();
+    ctx.fill();
+
+    // Gold & Cyan Alchemical Lapels
+    ctx.strokeStyle = '#ffbe0b';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(-88, -2);
+    ctx.lineTo(-42, 220);
+    ctx.lineTo(0, 340);
+    ctx.lineTo(42, 220);
+    ctx.lineTo(88, -2);
+    ctx.stroke();
+
+    // Glowing Jack-O'-Lantern Neural Core Amulet on Chest
+    const corePulse = 1 + 0.08 * Math.sin(t * 5);
+    ctx.save();
+    ctx.translate(0, 78);
+    ctx.scale(corePulse, corePulse);
+
+    const amuletGlow = ctx.createRadialGradient(0, 0, 5, 0, 0, 62);
+    amuletGlow.addColorStop(0, '#fff7b0');
+    amuletGlow.addColorStop(0.4, '#ff6d00');
+    amuletGlow.addColorStop(1, 'rgba(255, 0, 128, 0)');
+    ctx.fillStyle = amuletGlow;
+    ctx.beginPath();
+    ctx.arc(0, 0, 62, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Octagonal gold frame
+    ctx.fillStyle = '#ffbe0b';
+    drawStarPolygon(0, 0, 8, 38, 30, t * 0.5);
+    ctx.fill();
+
+    // Inner pumpkin jewel
+    ctx.fillStyle = '#ff5500';
+    ctx.beginPath();
+    ctx.arc(0, 0, 26, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Glowing cyan eyes & smile inside chest amulet
+    ctx.fillStyle = '#00ffe5';
+    ctx.beginPath();
+    ctx.moveTo(-13, -4); ctx.lineTo(-6, -13); ctx.lineTo(-3, -3); ctx.closePath();
+    ctx.moveTo(13, -4); ctx.lineTo(6, -13); ctx.lineTo(3, -3); ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(0, 4, 13, 0.15 * Math.PI, 0.85 * Math.PI);
+    ctx.lineWidth = 3.5;
+    ctx.strokeStyle = '#00ffe5';
+    ctx.stroke();
+    ctx.restore();
+
+    // Neck & Stylized Portrait Head
+    ctx.fillStyle = '#6c4396';
+    ctx.beginPath();
+    ctx.roundRect(-28, -58, 56, 68, 18);
+    ctx.fill();
+
+    // Flowing Bioluminescent Back Hair (drifting upward in antigravity!)
+    const hairWave = Math.sin(t * 2.8) * 18;
+    const hairGrad = ctx.createLinearGradient(0, -260, 0, -40);
+    hairGrad.addColorStop(0, '#00ffe5');
+    hairGrad.addColorStop(0.5, '#7b2cbf');
+    hairGrad.addColorStop(1, '#240046');
+    ctx.fillStyle = hairGrad;
+    ctx.beginPath();
+    ctx.moveTo(-88, -130);
+    ctx.bezierCurveTo(-155 + hairWave, -160, -165 - hairWave, -60, -115 + hairWave, -15);
+    ctx.lineTo(115 + hairWave, -15);
+    ctx.bezierCurveTo(165 - hairWave, -60, 155 + hairWave, -160, 88, -130);
+    ctx.closePath();
+    ctx.fill();
+
+    // Sculpted Face (Warm twilight-lavender luminous skin tone)
+    const faceGrad = ctx.createRadialGradient(-18, -150, 15, 0, -135, 115);
+    faceGrad.addColorStop(0, '#e0b8ff');
+    faceGrad.addColorStop(0.55, '#9d65d4');
+    faceGrad.addColorStop(1, '#532685');
+    ctx.fillStyle = faceGrad;
+    ctx.beginPath();
+    ctx.moveTo(-74, -175);
+    ctx.quadraticCurveTo(-78, -95, -48, -62);
+    ctx.quadraticCurveTo(0, -32, 48, -62);
+    ctx.quadraticCurveTo(78, -95, 74, -175);
+    ctx.quadraticCurveTo(0, -225, -74, -175);
+    ctx.closePath();
+    ctx.fill();
+
+    // Pointed Cyber-Elf / Sorcerer Ears with glowing gold rings
+    ctx.fillStyle = '#8b52c7';
+    // Left ear
+    ctx.beginPath();
+    ctx.moveTo(-72, -148);
+    ctx.lineTo(-118, -172);
+    ctx.quadraticCurveTo(-98, -120, -68, -112);
+    ctx.closePath();
+    ctx.fill();
+    // Right ear
+    ctx.beginPath();
+    ctx.moveTo(72, -148);
+    ctx.lineTo(118, -172);
+    ctx.quadraticCurveTo(98, -120, 68, -112);
+    ctx.closePath();
+    ctx.fill();
+
+    // Gold ear cuffs
+    ctx.strokeStyle = '#ffbe0b';
+    ctx.lineWidth = 3.5;
+    ctx.beginPath();
+    ctx.arc(-100, -154, 7, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(100, -154, 7, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Glowing AI Cheek Circuit Markings
+    ctx.strokeStyle = '#00ffe5';
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.moveTo(-66, -108); ctx.lineTo(-42, -102); ctx.lineTo(-34, -88);
+    ctx.moveTo(66, -108); ctx.lineTo(42, -102); ctx.lineTo(34, -88);
+    ctx.stroke();
+
+    // ------------------------------------------------------------------------
+    // HARLEQUIN / PHANTOM CYBER-MASQUERADE MASK (Costume Centerpiece)
+    // ------------------------------------------------------------------------
+    const maskGrad = ctx.createLinearGradient(-85, -180, 85, -110);
+    maskGrad.addColorStop(0, '#120329');
+    maskGrad.addColorStop(0.5, '#2d0b59');
+    maskGrad.addColorStop(1, '#120329');
+    ctx.fillStyle = maskGrad;
+    ctx.strokeStyle = '#ffbe0b';
+    ctx.lineWidth = 3;
+
+    ctx.beginPath();
+    ctx.moveTo(0, -168);
+    ctx.quadraticCurveTo(52, -195, 92, -168);
+    ctx.quadraticCurveTo(86, -122, 48, -110);
+    ctx.quadraticCurveTo(18, -114, 0, -134);
+    ctx.quadraticCurveTo(-18, -114, -48, -110);
+    ctx.quadraticCurveTo(-86, -122, -92, -168);
+    ctx.quadraticCurveTo(-52, -195, 0, -168);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Blinking & Looking Dual-Star Eyes (Left = Cyan Star, Right = Solar Gold Star)
+    const blinkCycle = t % 4.6;
+    const eyeOpen = (blinkCycle > 4.42 && blinkCycle < 4.56) ? 0.12 : 1.0;
+    const lookX = Math.sin(t * 0.9) * 5.5;
+    const lookY = Math.cos(t * 1.3) * 2.5 + 3;
+
+    ctx.save();
+    // Left Eye Socket
+    ctx.beginPath();
+    ctx.ellipse(-36, -144, 21, 13 * eyeOpen, -0.08, 0, Math.PI * 2);
+    ctx.fillStyle = '#05010d';
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#00ffe5';
+    ctx.stroke();
+
+    if (eyeOpen > 0.2) {
+      ctx.fillStyle = '#00ffe5';
+      ctx.shadowColor = '#00ffe5';
+      ctx.shadowBlur = 14;
+      ctx.beginPath();
+      ctx.arc(-36 + lookX, -144 + lookY, 8.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      drawStarPolygon(-36 + lookX, -144 + lookY, 4, 7, 2.5, t * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+
+    // Right Eye Socket
+    ctx.beginPath();
+    ctx.ellipse(36, -144, 21, 13 * eyeOpen, 0.08, 0, Math.PI * 2);
+    ctx.fillStyle = '#05010d';
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#ffbe0b';
+    ctx.stroke();
+
+    if (eyeOpen > 0.2) {
+      ctx.fillStyle = '#ffbe0b';
+      ctx.shadowColor = '#ffbe0b';
+      ctx.shadowBlur = 14;
+      ctx.beginPath();
+      ctx.arc(36 + lookX, -144 + lookY, 8.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      drawStarPolygon(36 + lookX, -144 + lookY, 4, 7, 2.5, -t * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+    ctx.restore();
+
+    // Glowing Gemini Diamond Third-Eye Jewel on Mask Brow
+    ctx.fillStyle = '#ff007f';
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.8;
+    drawStarPolygon(0, -166, 4, 13, 6, 0);
+    ctx.fill();
+    ctx.stroke();
+
+    // Subtle Nose & Confident Vampire/Sorcerer Smirk with tiny fangs
+    ctx.strokeStyle = '#431970';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(-2, -130);
+    ctx.lineTo(-6, -106);
+    ctx.lineTo(4, -103);
+    ctx.stroke();
+
+    // Smirk & glowing lip tint
+    ctx.strokeStyle = '#2b0642';
+    ctx.lineWidth = 3.2;
+    ctx.beginPath();
+    ctx.moveTo(-24, -82);
+    ctx.quadraticCurveTo(0, -70, 26, -84);
+    ctx.stroke();
+
+    // Little vampire fangs
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(-15, -80); ctx.lineTo(-11, -71); ctx.lineTo(-7, -78); ctx.closePath();
+    ctx.moveTo(15, -81); ctx.lineTo(11, -72); ctx.lineTo(7, -79); ctx.closePath();
+    ctx.fill();
+
+    // Sweeping Neon-Tipped Front Hair Locks under the Hat
+    const frontHairGrad = ctx.createLinearGradient(-80, -210, 80, -120);
+    frontHairGrad.addColorStop(0, '#3c096c');
+    frontHairGrad.addColorStop(0.6, '#7b2cbf');
+    frontHairGrad.addColorStop(1, '#00ffe5');
+    ctx.fillStyle = frontHairGrad;
+    ctx.beginPath();
+    ctx.moveTo(-78, -185);
+    ctx.quadraticCurveTo(-45, -150, -68 + hairWave * 0.3, -112);
+    ctx.quadraticCurveTo(-88, -145, -82, -188);
+    ctx.moveTo(78, -185);
+    ctx.quadraticCurveTo(45, -150, 68 + hairWave * 0.3, -112);
+    ctx.quadraticCurveTo(88, -145, 82, -188);
+    ctx.fill();
+
+    // ------------------------------------------------------------------------
+    // GRAND ASTRAL WITCH / SORCERER HAT WITH ORBITING RINGS & LANTERN TIP
+    // ------------------------------------------------------------------------
+    ctx.save();
+    ctx.translate(0, -192);
+    const hatTipSway = Math.sin(t * 2.4) * 14;
+
+    // Hat Brim Back/Underneath (Glowing Nebula Gradient)
+    const underBrimGrad = ctx.createRadialGradient(0, 8, 20, 0, 8, 195);
+    underBrimGrad.addColorStop(0, '#ff007f');
+    underBrimGrad.addColorStop(0.55, '#5a189a');
+    underBrimGrad.addColorStop(1, '#10002b');
+    ctx.fillStyle = underBrimGrad;
+    ctx.strokeStyle = '#00ffe5';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.ellipse(0, 8, 195, 42, -0.04, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Tall Crooked Cone of the Hat
+    const coneGrad = ctx.createLinearGradient(-90, 0, 90, -250);
+    coneGrad.addColorStop(0, '#190538');
+    coneGrad.addColorStop(0.55, '#310d66');
+    coneGrad.addColorStop(1, '#5a189a');
+    ctx.fillStyle = coneGrad;
+    ctx.beginPath();
+    ctx.moveTo(-102, 2);
+    ctx.bezierCurveTo(-70, -110, -35, -210, 85 + hatTipSway, -245);
+    ctx.bezierCurveTo(135 + hatTipSway, -230, 125 + hatTipSway, -170, 108 + hatTipSway * 0.8, -145);
+    ctx.bezierCurveTo(75, -185, 55, -105, 102, 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = '#ffbe0b';
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+
+    // Glowing Gold & Magenta Hatband with Twin-Star Buckle
+    ctx.fillStyle = '#ff007f';
+    ctx.beginPath();
+    ctx.moveTo(-101, 2);
+    ctx.quadraticCurveTo(0, 22, 101, 2);
+    ctx.lineTo(94, -22);
+    ctx.quadraticCurveTo(0, -4, -94, -22);
+    ctx.closePath();
+    ctx.fill();
+
+    // Gold Twin-Star Hat Buckle
+    ctx.fillStyle = '#ffbe0b';
+    drawStarPolygon(0, -6, 8, 26, 12, t * 0.3);
+    ctx.fill();
+    ctx.fillStyle = '#00ffe5';
+    ctx.beginPath();
+    ctx.arc(0, -6, 7, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Dangling glowing chain & star charm from the crooked tip of the hat
+    const tipX = 108 + hatTipSway * 0.8;
+    const tipY = -145;
+    const charmSwing = Math.sin(t * 3.8) * 12;
+    ctx.strokeStyle = '#ffbe0b';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(tipX, tipY);
+    ctx.lineTo(tipX + charmSwing, tipY + 52);
+    ctx.stroke();
+
+    ctx.fillStyle = '#00ffe5';
+    ctx.shadowColor = '#00ffe5';
+    ctx.shadowBlur = 15;
+    drawStarPolygon(tipX + charmSwing, tipY + 58, 4, 16, 6, t * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    ctx.restore(); // End Hat
+
+    // ------------------------------------------------------------------------
+    // 5. CONJURING HANDS & HOLOGRAPHIC SPELL ENGINE (Foreground of Character)
+    // ------------------------------------------------------------------------
+    const handBobL = Math.sin(t * 3.1) * 14;
+    const handBobR = Math.cos(t * 3.1) * 14;
+
+    // Left & Right Sleeves / Forearms raised in spellcasting pose
+    ctx.fillStyle = '#1b053b';
+    ctx.strokeStyle = '#00ffe5';
+    ctx.lineWidth = 3;
+    // Left forearm
+    ctx.beginPath();
+    ctx.moveTo(-125, 110);
+    ctx.quadraticCurveTo(-225, 220, -155, 265 + handBobL);
+    ctx.lineTo(-115, 230 + handBobL);
+    ctx.quadraticCurveTo(-165, 180, -95, 95);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Right forearm
+    ctx.beginPath();
+    ctx.moveTo(125, 110);
+    ctx.quadraticCurveTo(225, 220, 155, 265 + handBobR);
+    ctx.lineTo(115, 230 + handBobR);
+    ctx.quadraticCurveTo(165, 180, 95, 95);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Expressive Spellcasting Hands (Finger-plated Cyber-Gauntlets)
+    function drawSpellHand(hx, hy, flip) {
+      ctx.save();
+      ctx.translate(hx, hy);
+      ctx.scale(flip, 1);
+
+      // Magic aura around palm
+      const palmGlow = ctx.createRadialGradient(10, -15, 4, 10, -15, 58);
+      palmGlow.addColorStop(0, 'rgba(0, 255, 229, 0.75)');
+      palmGlow.addColorStop(1, 'rgba(0, 255, 229, 0)');
+      ctx.fillStyle = palmGlow;
+      ctx.beginPath();
+      ctx.arc(10, -15, 58, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#b983ff';
+      ctx.strokeStyle = '#ffbe0b';
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      ctx.moveTo(-18, 18);
+      ctx.lineTo(-24, -18);
+      ctx.lineTo(-12, -46); // Pinky
+      ctx.lineTo(-4, -22);
+      ctx.lineTo(4, -54);  // Ring
+      ctx.lineTo(10, -24);
+      ctx.lineTo(20, -56); // Middle
+      ctx.lineTo(24, -22);
+      ctx.lineTo(36, -44); // Index
+      ctx.lineTo(28, -4);
+      ctx.lineTo(46, -12); // Thumb
+      ctx.quadraticCurveTo(26, 22, -18, 18);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    drawSpellHand(-135, 240 + handBobL, 1);
+    drawSpellHand(135, 240 + handBobR, -1);
+
+    // ------------------------------------------------------------------------
+    // FLOATING HOLOGRAPHIC JACK-O'-LANTERN & GEMINI TESSERACT SPELL BETWEEN HANDS
+    // ------------------------------------------------------------------------
+    ctx.save();
+    ctx.translate(0, 215 + Math.sin(t * 3.5) * 12);
+
+    // Intense volumetric spell glow
+    const spellGlow = ctx.createRadialGradient(0, 0, 10, 0, 0, 145);
+    spellGlow.addColorStop(0, 'rgba(255, 255, 255, 0.95)');
+    spellGlow.addColorStop(0.28, 'rgba(0, 255, 229, 0.75)');
+    spellGlow.addColorStop(0.62, 'rgba(255, 102, 0, 0.5)');
+    spellGlow.addColorStop(1, 'rgba(255, 0, 128, 0)');
+    ctx.fillStyle = spellGlow;
+    ctx.beginPath();
+    ctx.arc(0, 0, 145, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Spinning Arcane Runic Circles
+    ctx.save();
+    ctx.rotate(t * 1.4);
+    ctx.strokeStyle = '#00ffe5';
+    ctx.lineWidth = 2.8;
+    ctx.setLineDash([12, 8]);
+    ctx.beginPath();
+    ctx.arc(0, 0, 86, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    drawStarPolygon(0, 0, 6, 84, 48, 0);
+    ctx.stroke();
+    ctx.restore();
+
+    // Counter-rotating Gold Geometric Hexagram
+    ctx.save();
+    ctx.rotate(-t * 1.9);
+    ctx.strokeStyle = '#ffbe0b';
+    ctx.lineWidth = 2.5;
+    drawStarPolygon(0, 0, 4, 68, 32, 0);
+    ctx.stroke();
+    ctx.restore();
+
+    // Wireframe Holographic Jack-O'-Lantern Core
+    const pumpkinPulse = 1 + Math.sin(t * 6) * 0.06;
+    ctx.save();
+    ctx.scale(pumpkinPulse, pumpkinPulse);
+
+    const holoGrad = ctx.createRadialGradient(0, -10, 5, 0, 0, 52);
+    holoGrad.addColorStop(0, '#fff275');
+    holoGrad.addColorStop(0.55, '#ff5400');
+    holoGrad.addColorStop(1, '#ff006e');
+    ctx.fillStyle = holoGrad;
+    ctx.beginPath();
+    ctx.ellipse(0, 4, 52, 42, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Holographic wireframe ribs on the pumpkin
+    ctx.strokeStyle = 'rgba(255, 255, 200, 0.65)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(0, 4, 28, 42, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Glowing Cyan Cyber-Carved Eyes & Laughing Mouth
+    ctx.fillStyle = '#070214';
+    ctx.beginPath();
+    ctx.moveTo(-28, -4); ctx.lineTo(-14, -22); ctx.lineTo(-6, -4); ctx.closePath();
+    ctx.moveTo(28, -4); ctx.lineTo(14, -22); ctx.lineTo(6, -4); ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = '#00ffe5';
+    ctx.beginPath();
+    ctx.moveTo(-24, -6); ctx.lineTo(-14, -18); ctx.lineTo(-8, -6); ctx.closePath();
+    ctx.moveTo(24, -6); ctx.lineTo(14, -18); ctx.lineTo(8, -6); ctx.closePath();
+    ctx.fill();
+
+    // Jagged glowing smile
+    ctx.fillStyle = '#00ffe5';
+    ctx.beginPath();
+    ctx.moveTo(-32, 10);
+    ctx.lineTo(-18, 22);
+    ctx.lineTo(-8, 14);
+    ctx.lineTo(0, 24);
+    ctx.lineTo(8, 14);
+    ctx.lineTo(18, 22);
+    ctx.lineTo(32, 10);
+    ctx.lineTo(22, 30);
+    ctx.lineTo(0, 34);
+    ctx.lineTo(-22, 30);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    // Energy Arcs connecting Hands to the Conjured Pumpkin Core
+    ctx.strokeStyle = '#00ffe5';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(-110, 22);
+    ctx.quadraticCurveTo(-55, -25 + Math.sin(t * 14) * 20, -48, 0);
+    ctx.moveTo(110, 22);
+    ctx.quadraticCurveTo(55, -25 + Math.cos(t * 14) * 20, 48, 0);
+    ctx.stroke();
+
+    ctx.restore(); // End Conjured Spell
+
+    ctx.restore(); // End Character Transform
+
+    // ------------------------------------------------------------------------
+    // 6. TWIN FAMILIAR ORBS (Solar & Lunar Gemini Spirits Flanking the Portrait)
+    // ------------------------------------------------------------------------
+    const famLeftX = -310 + Math.cos(t * 1.7) * 26;
+    const famLeftY = -45 + Math.sin(t * 2.3) * 32;
+    drawFamiliarOrb(famLeftX, famLeftY, 44, '#00ffe5', 'rgba(0, 255, 229, 0.35)', t, false);
+
+    const famRightX = 310 + Math.sin(t * 1.7) * 26;
+    const famRightY = -45 + Math.cos(t * 2.3) * 32;
+    drawFamiliarOrb(famRightX, famRightY, 44, '#ff9e00', 'rgba(255, 90, 0, 0.38)', t, true);
+
+    // ------------------------------------------------------------------------
+    // 7. FOREGROUND ANTIGRAVITY SHARDS, EMBERS & SPOOKY VIGNETTE FRAME
+    // ------------------------------------------------------------------------
+    for (let i = 0; i < shards.length; i++) {
+      const sh = shards[i];
+      const orbitA = sh.angle + t * sh.speed;
+      const depth = Math.sin(orbitA);
+      if (depth <= 0) continue; // Front half of orbit
+      const sx = Math.cos(orbitA) * sh.radius;
+      const sy = sh.baseY + Math.sin(t * sh.bobSpeed + sh.phase) * 26;
+      drawShard(sx, sy, sh, t, 1.0);
+    }
+
+    // Rising Glowing Embers & Code Sparks
+    for (let i = 0; i < embers.length; i++) {
+      const e = embers[i];
+      e.y += e.vy * dt;
+      e.x += (e.vx + Math.sin(t * 2 + e.phase) * 18) * dt;
+      if (e.y < -560) {
+        e.y = 560;
+        e.x = (Math.random() - 0.5) * 1080;
+      }
+      const alpha = 0.5 + 0.5 * Math.sin(t * 5 + e.phase);
+      ctx.fillStyle = e.color;
+      ctx.globalAlpha = alpha;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // Foreground Luminous Halloween Mist at Bottom
+    const frontFogGrad = ctx.createLinearGradient(0, 340, 0, 560);
+    frontFogGrad.addColorStop(0, 'rgba(18, 2, 38, 0)');
+    frontFogGrad.addColorStop(0.55, 'rgba(90, 24, 154, 0.45)');
+    frontFogGrad.addColorStop(1, '#090117');
+    ctx.fillStyle = frontFogGrad;
+    ctx.fillRect(-900, 340, 1800, 240);
+
+    ctx.restore(); // End 1080x1080 Stage
+
+    // Subtle Dark Vignette at Screen Edges for rich phone/desktop contrast
+    const vignette = ctx.createRadialGradient(
+      width / 2, height / 2, Math.min(width, height) * 0.36,
+      width / 2, height / 2, Math.max(width, height) * 0.75
+    );
+    vignette.addColorStop(0, 'rgba(0,0,0,0)');
+    vignette.addColorStop(1, 'rgba(4, 1, 10, 0.68)');
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, width, height);
+
+    ctx.restore();
+    requestAnimationFrame(render);
+  }
+
+  function drawShard(x, y, sh, t, opacity) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(t * sh.speed * 1.8 + sh.phase);
+    ctx.globalAlpha = opacity;
+
+    if (sh.isCrystal) {
+      // Glowing multifaceted data-crystal
+      ctx.fillStyle = `hsla(${sh.hue}, 100%, 62%, 0.88)`;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(0, -sh.size * 1.4);
+      ctx.lineTo(sh.size * 0.85, 0);
+      ctx.lineTo(0, sh.size * 1.4);
+      ctx.lineTo(-sh.size * 0.85, 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      // Levitating dark obsidian stone with glowing rune line
+      ctx.fillStyle = '#1b0936';
+      ctx.strokeStyle = `hsla(${sh.hue}, 100%, 60%, 0.9)`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-sh.size, -sh.size * 0.4);
+      ctx.lineTo(0, -sh.size);
+      ctx.lineTo(sh.size, -sh.size * 0.2);
+      ctx.lineTo(sh.size * 0.6, sh.size * 0.9);
+      ctx.lineTo(-sh.size * 0.7, sh.size * 0.7);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>

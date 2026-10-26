@@ -387,3 +387,27 @@ Note: Rebuilt on Oct 23, 2026 with the current prompt, which adds the vivid-colo
 | Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:07 | [open](https://darindeters.github.io/same-prompt/rubiks-sound/codex/) |
 | Gemini (4 Argon) | Antigravity CLI 1.4.7 | 3:21 | [open](https://darindeters.github.io/same-prompt/rubiks-sound/gemini/) |
 | Grok (4.7) | Grok Build 1.0.62 | 17:17 | [open](https://darindeters.github.io/same-prompt/rubiks-sound/grok/) |
+
+## Pumpkin Carving Contest
+
+> Build your entry in a jack-o'-lantern carving contest: a pumpkin being carved in real time, the knife cutting out a face of your own design and the pieces popping out, then a candle lighting it from inside so it glows in the dark, all within about twenty seconds, then the glowing jack-o'-lantern holds before the carving starts again, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it sound effects that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 8:11 | [open](https://darindeters.github.io/same-prompt/pumpkin/claude/) |
+| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 3:14 | [open](https://darindeters.github.io/same-prompt/pumpkin/codex/) |
+| Gemini (4 Argon) | Antigravity CLI 1.4.7 | 3:49 | [open](https://darindeters.github.io/same-prompt/pumpkin/gemini/) |
+| Grok (4.7) | Grok Build 1.0.62 | 24:40 | [open](https://darindeters.github.io/same-prompt/pumpkin/grok/) |
+
+Note: Gemini's page throws an error on load (a firefly's radius goes negative) and freezes on its first frame. It is published unedited.
+
+## AI Halloween Costumes
+
+> Build an animated portrait of yourself, the AI model writing this file, as a person wearing your Halloween costume, as one self-contained file named index.html in this folder. Pick the costume yourself, make it something that fits who you are, and show it off in a spooky Halloween night scene with movement. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it Halloween sound effects that fit your costume, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 4:36 | [open](https://darindeters.github.io/same-prompt/costume/claude/) |
+| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 3:48 | [open](https://darindeters.github.io/same-prompt/costume/codex/) |
+| Gemini (4 Argon) | Antigravity CLI 1.4.7 | 3:12 | [open](https://darindeters.github.io/same-prompt/costume/gemini/) |
+| Grok (4.7) | Grok Build 1.0.62 | 20:47 | [open](https://darindeters.github.io/same-prompt/costume/grok/) |
