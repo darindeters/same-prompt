@@ -1,0 +1,1167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Singing Tesla Coil — Flight of the Bumblebee</title>
+<style>
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background-color: #030108;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('stage');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  // Reference coordinate system: 1080x1080 square stage
+  const STAGE_SIZE = 1080;
+  let width = window.innerWidth;
+  let height = window.innerHeight;
+  let dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.floor(width * dpr);
+    canvas.height = Math.floor(height * dpr);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ============================================================================
+  // FLIGHT OF THE BUMBLEBEE — SCORE GENERATOR (Rimsky-Korsakov)
+  // ============================================================================
+  // MIDI note numbers: A4 = 69 (440 Hz), C4 = 60, E5 = 76, A5 = 81
+  function midiToFreq(m) {
+    return 440 * Math.pow(2, (m - 69) / 12);
+  }
+
+  // Build a rich, authentic multi-phrase sequence of Flight of the Bumblebee
+  // Each step is a 16th note at ~172 BPM (~0.0872s per 16th note)
+  const SIXTEENTH_DUR = 0.084;
+  const score = [];
+
+  function addRun(notes, bassMap = {}) {
+    for (let i = 0; i < notes.length; i++) {
+      const m = notes[i];
+      const bass = bassMap[i] !== undefined ? bassMap[i] : null;
+      const accent = (i % 4 === 0) ? 1.0 : (i % 2 === 0 ? 0.82 : 0.72);
+      score.push({
+        midi: m,
+        freq: midiToFreq(m),
+        bassMidi: bass,
+        bassFreq: bass ? midiToFreq(bass) : null,
+        accent,
+        stepIndex: score.length
+      });
+    }
+  }
+
+  // Opening dramatic descending chromatic runs:
+  // E5 -> Eb5 -> D5 -> Db5 -> C5 -> B4 -> Bb4 -> A4 ...
+  const introRun1 = [
+    88, 87, 86, 85,  84, 83, 82, 81,  80, 79, 78, 77,  76, 75, 74, 73,
+    72, 71, 70, 69,  68, 67, 66, 65,  64, 63, 62, 61,  60, 59, 58, 57
+  ];
+  addRun(introRun1, { 0: 45, 8: 52, 16: 45, 24: 52 });
+
+  // Main Theme A: Chromatic circling around A4 - E5
+  const patternA1 = [
+    69, 70, 71, 72,  73, 72, 71, 70,  69, 70, 71, 72,  73, 74, 75, 76,
+    76, 75, 74, 73,  72, 73, 74, 75,  76, 75, 74, 73,  72, 71, 70, 69
+  ];
+  addRun(patternA1, { 0: 45, 4: 52, 8: 45, 12: 52, 16: 45, 20: 53, 24: 45, 28: 52 });
+  addRun(patternA1, { 0: 45, 4: 57, 8: 45, 12: 52, 16: 45, 20: 53, 24: 45, 28: 52 });
+
+  // Theme A2: Higher register D5 - A5 chromatic whirlwind
+  const patternA2 = [
+    74, 75, 76, 77,  78, 77, 76, 75,  74, 75, 76, 77,  78, 79, 80, 81,
+    81, 80, 79, 78,  77, 78, 79, 80,  81, 80, 79, 78,  77, 76, 75, 74
+  ];
+  addRun(patternA2, { 0: 50, 4: 57, 8: 50, 12: 57, 16: 50, 20: 58, 24: 50, 28: 57 });
+
+  // Bumblebee motif with punctuated staccato horn/Violin leaps (Bb4 / A4 / G#4 / A4)
+  const patternB = [
+    81, 80, 79, 78,  77, 76, 75, 74,  73, 74, 75, 76,  77, 76, 75, 74,
+    73, 74, 75, 76,  77, 78, 79, 80,  81, 82, 81, 80,  79, 78, 77, 76
+  ];
+  addRun(patternB, { 0: 45, 4: 46, 8: 45, 12: 49, 16: 50, 20: 46, 24: 45, 28: 52 });
+
+  // Rapid alternating neighbor-tone trill + chromatic climb
+  const patternC = [
+    69, 70, 69, 68,  69, 70, 71, 72,  73, 74, 73, 72,  73, 74, 75, 76,
+    77, 78, 77, 76,  77, 78, 79, 80,  81, 82, 83, 84,  85, 86, 87, 88
+  ];
+  addRun(patternC, { 0: 45, 8: 49, 16: 50, 24: 52, 28: 57 });
+
+  // Climactic high-voltage cascade from E6 down and back up to A5
+  const patternFinale = [
+    88, 87, 86, 85,  84, 85, 86, 87,  88, 87, 86, 85,  84, 83, 82, 81,
+    80, 81, 82, 83,  84, 83, 82, 81,  80, 79, 78, 77,  76, 79, 81, 85
+  ];
+  addRun(patternFinale, { 0: 52, 4: 45, 8: 52, 12: 45, 16: 40, 20: 45, 24: 52, 28: 45, 30: 57, 31: 45 });
+
+  // ============================================================================
+  // WEB AUDIO API — DRSSTC SINGING TESLA COIL SYNTHESIZER
+  // ============================================================================
+  let audioCtx = null;
+  let audioUnlocked = false;
+  let masterGain = null;
+  let noiseBuffer = null;
+
+  function createNoiseBuffer(context) {
+    const len = context.sampleRate * 1.5;
+    const buffer = context.createBuffer(1, len, context.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < len; i++) {
+      // Spiky coronal discharge crackle distribution
+      const r = Math.random() * 2 - 1;
+      data[i] = r * r * r;
+    }
+    return buffer;
+  }
+
+  function makeDistortionCurve(amount = 45) {
+    const n = 8192;
+    const curve = new Float32Array(n);
+    const deg = Math.PI / 180;
+    for (let i = 0; i < n; i++) {
+      const x = (i * 2) / n - 1;
+      curve[i] = ((3 + amount) * x * 20 * deg) / (Math.PI + amount * Math.abs(x));
+    }
+    return curve;
+  }
+
+  let waveshaperCurve = makeDistortionCurve(70);
+
+  function initAudio() {
+    if (!audioCtx) {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return;
+      audioCtx = new AudioContextClass();
+
+      const compressor = audioCtx.createDynamicsCompressor();
+      compressor.threshold.setValueAtTime(-14, audioCtx.currentTime);
+      compressor.knee.setValueAtTime(12, audioCtx.currentTime);
+      compressor.ratio.setValueAtTime(8, audioCtx.currentTime);
+      compressor.attack.setValueAtTime(0.002, audioCtx.currentTime);
+      compressor.release.setValueAtTime(0.09, audioCtx.currentTime);
+
+      masterGain = audioCtx.createGain();
+      masterGain.gain.setValueAtTime(0.42, audioCtx.currentTime);
+
+      // Subtle stage reverb via short feedback delay network
+      const delay1 = audioCtx.createDelay();
+      delay1.delayTime.value = 0.065;
+      const delay2 = audioCtx.createDelay();
+      delay2.delayTime.value = 0.115;
+      const fbGain = audioCtx.createGain();
+      fbGain.gain.value = 0.18;
+      const wetGain = audioCtx.createGain();
+      wetGain.gain.value = 0.16;
+
+      masterGain.connect(compressor);
+      masterGain.connect(delay1);
+      delay1.connect(delay2);
+      delay2.connect(fbGain);
+      fbGain.connect(delay1);
+      delay1.connect(wetGain);
+      delay2.connect(wetGain);
+      wetGain.connect(compressor);
+
+      compressor.connect(audioCtx.destination);
+      noiseBuffer = createNoiseBuffer(audioCtx);
+    }
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume().then(() => {
+        audioUnlocked = (audioCtx.state === 'running');
+      }).catch(() => {});
+    } else if (audioCtx.state === 'running') {
+      audioUnlocked = true;
+    }
+  }
+
+  // Trigger a single Tesla Coil interrupted plasma arc note
+  function playTeslaNote(note, duration) {
+    if (!audioCtx || audioCtx.state !== 'running') return;
+
+    const now = audioCtx.currentTime;
+    const freq = note.freq;
+    const stopTime = now + duration * 0.96;
+
+    // 1. Primary Plasma Interrupter Oscillator (Sawtooth + Square hybrid for harsh harmonic buzz)
+    const oscSaw = audioCtx.createOscillator();
+    const oscSq = audioCtx.createOscillator();
+    oscSaw.type = 'sawtooth';
+    oscSq.type = 'square';
+
+    // Slight pitch glide / plasma instability
+    oscSaw.frequency.setValueAtTime(freq * 0.996, now);
+    oscSaw.frequency.exponentialRampToValueAtTime(freq, now + 0.012);
+    oscSq.frequency.setValueAtTime(freq * 1.003, now);
+    oscSq.frequency.exponentialRampToValueAtTime(freq, now + 0.012);
+
+    // 120Hz Mains Supply Hum Modulation (authentic transformer ripple on the arc)
+    const humOsc = audioCtx.createOscillator();
+    humOsc.type = 'sine';
+    humOsc.frequency.setValueAtTime(120, now);
+    const humGain = audioCtx.createGain();
+    humGain.gain.setValueAtTime(freq * 0.015, now);
+    humOsc.connect(humGain);
+    humGain.connect(oscSaw.frequency);
+
+    // High-voltage Waveshaper + Formant Bandpass Filter (gives that raw "singing arc" rasp)
+    const shaper = audioCtx.createWaveShaper();
+    shaper.curve = waveshaperCurve;
+    shaper.oversample = '2x';
+
+    const formant1 = audioCtx.createBiquadFilter();
+    formant1.type = 'bandpass';
+    formant1.frequency.setValueAtTime(Math.min(4800, freq * 3.2), now);
+    formant1.Q.setValueAtTime(2.4, now);
+
+    const highShelf = audioCtx.createBiquadFilter();
+    highShelf.type = 'peaking';
+    highShelf.frequency.setValueAtTime(2600, now);
+    highShelf.Q.setValueAtTime(1.5, now);
+    highShelf.gain.setValueAtTime(8, now);
+
+    const noteGain = audioCtx.createGain();
+    const peakGain = 0.28 * note.accent;
+    noteGain.gain.setValueAtTime(0.001, now);
+    noteGain.gain.linearRampToValueAtTime(peakGain, now + 0.004);
+    noteGain.gain.exponentialRampToValueAtTime(peakGain * 0.68, now + duration * 0.72);
+    noteGain.gain.exponentialRampToValueAtTime(0.0001, stopTime + 0.015);
+
+    oscSaw.connect(shaper);
+    oscSq.connect(shaper);
+    shaper.connect(formant1);
+    shaper.connect(highShelf);
+    formant1.connect(noteGain);
+    highShelf.connect(noteGain);
+    noteGain.connect(masterGain);
+
+    // 2. High-Frequency Arc Snap / Corona Crackle burst on every note strike
+    if (noiseBuffer) {
+      const noise = audioCtx.createBufferSource();
+      noise.buffer = noiseBuffer;
+      noise.loop = true;
+      const randOffset = Math.random() * 1.0;
+
+      const noiseFilter = audioCtx.createBiquadFilter();
+      noiseFilter.type = 'bandpass';
+      noiseFilter.frequency.setValueAtTime(3400 + (note.midi - 60) * 95, now);
+      noiseFilter.Q.setValueAtTime(1.8, now);
+
+      const noiseGain = audioCtx.createGain();
+      const snapAmp = 0.26 * note.accent;
+      noiseGain.gain.setValueAtTime(snapAmp, now);
+      noiseGain.gain.exponentialRampToValueAtTime(snapAmp * 0.28, now + 0.018);
+      noiseGain.gain.exponentialRampToValueAtTime(0.001, stopTime);
+
+      noise.connect(noiseFilter);
+      noiseFilter.connect(noiseGain);
+      noiseGain.connect(masterGain);
+
+      noise.start(now, randOffset);
+      noise.stop(stopTime + 0.01);
+    }
+
+    // 3. Secondary Secondary-Breakout Bass Arc (when bassMidi is present on accents)
+    if (note.bassFreq) {
+      const bassOsc = audioCtx.createOscillator();
+      bassOsc.type = 'sawtooth';
+      bassOsc.frequency.setValueAtTime(note.bassFreq, now);
+
+      const bassFilter = audioCtx.createBiquadFilter();
+      bassFilter.type = 'lowpass';
+      bassFilter.frequency.setValueAtTime(950, now);
+      bassFilter.Q.setValueAtTime(4.0, now);
+
+      const bassGain = audioCtx.createGain();
+      bassGain.gain.setValueAtTime(0.001, now);
+      bassGain.gain.linearRampToValueAtTime(0.24, now + 0.005);
+      bassGain.gain.exponentialRampToValueAtTime(0.001, now + duration * 2.8);
+
+      bassOsc.connect(bassFilter);
+      bassFilter.connect(bassGain);
+      bassGain.connect(masterGain);
+
+      bassOsc.start(now);
+      bassOsc.stop(now + duration * 2.9);
+    }
+
+    oscSaw.start(now);
+    oscSq.start(now);
+    humOsc.start(now);
+
+    oscSaw.stop(stopTime + 0.02);
+    oscSq.stop(stopTime + 0.02);
+    humOsc.stop(stopTime + 0.02);
+  }
+
+  // Try to start sound immediately on page load, plus unlock on first click/key/touch
+  initAudio();
+  const unlockEvents = ['pointerdown', 'mousedown', 'touchstart', 'keydown', 'click'];
+  function handleUserGesture() {
+    initAudio();
+    if (audioCtx && audioCtx.state === 'running') {
+      audioUnlocked = true;
+    }
+  }
+  unlockEvents.forEach(ev => window.addEventListener(ev, handleUserGesture, { passive: true }));
+
+  // ============================================================================
+  // STAGE GEOMETRY & VISUAL ELEMENTS (Normalized to 1080x1080 space)
+  // ============================================================================
+  const COIL = {
+    centerX: 540,
+    toroidY: 315,
+    toroidRx: 148,
+    toroidRy: 46,
+    breakoutY: 288,
+    coilTopY: 345,
+    coilBottomY: 790,
+    coilTopRadius: 56,
+    coilBottomRadius: 72,
+    primaryBottomY: 810,
+    baseBottomY: 915,
+    floorY: 915
+  };
+
+  // Grounding targets arranged in a 3D semicircle around the stage
+  // Mapped by pitch range (low notes strike left/lower rods, mid notes strike upper/side targets, high notes strike right/ceiling/cage)
+  const TARGET_NODES = [
+    { id: 0, x: 105, y: 690, rodTopY: 690, rodBotY: 925, label: 'far-left', hue: 190 },
+    { id: 1, x: 155, y: 500, rodTopY: 500, rodBotY: 900, label: 'mid-left', hue: 205 },
+    { id: 2, x: 195, y: 310, rodTopY: 80,  rodBotY: 310, ceiling: true, hue: 265 },
+    { id: 3, x: 335, y: 125, rodTopY: 40,  rodBotY: 125, ceiling: true, hue: 280 },
+    { id: 4, x: 540, y: 88,  rodTopY: 20,  rodBotY: 88,  ceiling: true, hue: 295 },
+    { id: 5, x: 745, y: 125, rodTopY: 40,  rodBotY: 125, ceiling: true, hue: 310 },
+    { id: 6, x: 885, y: 310, rodTopY: 80,  rodBotY: 310, ceiling: true, hue: 185 },
+    { id: 7, x: 925, y: 500, rodTopY: 500, rodBotY: 900, label: 'mid-right', hue: 48 },
+    { id: 8, x: 975, y: 690, rodTopY: 690, rodBotY: 925, label: 'far-right', hue: 330 },
+    // Floor strike rings
+    { id: 9,  x: 265, y: 908, floor: true, hue: 195 },
+    { id: 10, x: 815, y: 908, floor: true, hue: 285 }
+  ];
+
+  // Track glow intensity on each target node when struck
+  const targetCharge = new Float32Array(TARGET_NODES.length);
+
+  // Active lightning arcs, plasma sparks, and rising ion rings
+  const activeArcs = [];
+  const sparks = [];
+  let coilEnergy = 0.5;
+  let currentNote = score[0];
+  let currentStep = 0;
+  let stepTimer = 0;
+  let stageFlash = 0;
+  let beeOrbitalAngle = 0;
+
+  // Palette selector based on pitch & chromatic degree:
+  // Vivid saturated electric cyan, neon violet, hot magenta, and bumblebee gold
+  function getNoteColor(midi, isBass = false) {
+    if (isBass) {
+      return {
+        core: '#ffffff',
+        inner: '#ff2a85',
+        outer: '#b800ff',
+        hue: 315
+      };
+    }
+    const mod = ((midi % 12) + 12) % 12;
+    // Map pitch + chromaticism to vivid saturated plasma colors
+    if (mod === 1 || mod === 6 || mod === 10) {
+      // Chromatic "Bumblebee" tension notes -> Vivid Electric Gold / Amber-White / Neon Magenta
+      return {
+        core: '#ffffff',
+        inner: '#ffe600',
+        outer: '#ff5500',
+        hue: 48
+      };
+    } else if (midi >= 80) {
+      // High register -> Hyper Cyan-White & Electric Blue
+      return {
+        core: '#ffffff',
+        inner: '#00f7ff',
+        outer: '#0066ff',
+        hue: 188
+      };
+    } else if (midi >= 73) {
+      // Upper-mid register -> Neon Violet & Ultraviolet Cyan
+      return {
+        core: '#ffffff',
+        inner: '#d455ff',
+        outer: '#7000ff',
+        hue: 278
+      };
+    } else {
+      // Mid-low register -> Saturated Magenta-Violet
+      return {
+        core: '#ffffff',
+        inner: '#ff33cc',
+        outer: '#9900ff',
+        hue: 308
+      };
+    }
+  }
+
+  // Generate recursive midpoint-displacement 3D-feel lightning bolt path
+  function buildLightningPoints(x1, y1, x2, y2, displace, roughness = 0.52, depth = 6) {
+    let pts = [{ x: x1, y: y1 }, { x: x2, y: y2 }];
+    let curDisp = displace;
+
+    // Add initial arch bow (magnetic field curve upward from toroid)
+    const midX = (x1 + x2) * 0.5 + (Math.random() - 0.5) * 45;
+    const midY = (y1 + y2) * 0.5 - Math.abs(x2 - x1) * 0.16 - 20;
+    pts = [{ x: x1, y: y1 }, { x: midX, y: midY }, { x: x2, y: y2 }];
+
+    for (let d = 0; d < depth; d++) {
+      const nextPts = [pts[0]];
+      for (let i = 0; i < pts.length - 1; i++) {
+        const a = pts[i];
+        const b = pts[i + 1];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const len = Math.hypot(dx, dy) || 1;
+        // Normal vector
+        const nx = -dy / len;
+        const ny = dx / len;
+        const offset = (Math.random() * 2 - 1) * curDisp;
+        const jitterAlong = (Math.random() - 0.5) * curDisp * 0.25;
+        const mx = (a.x + b.x) * 0.5 + nx * offset + (dx / len) * jitterAlong;
+        const my = (a.y + b.y) * 0.5 + ny * offset + (dy / len) * jitterAlong;
+        nextPts.push({ x: mx, y: my }, b);
+      }
+      pts = nextPts;
+      curDisp *= roughness;
+    }
+    return pts;
+  }
+
+  function spawnSparks(x, y, color, count = 12, speedScale = 1) {
+    for (let i = 0; i < count; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = (60 + Math.random() * 290) * speedScale;
+      sparks.push({
+        x,
+        y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed - 40,
+        life: 1.0,
+        decay: 1.8 + Math.random() * 2.4,
+        size: 2.2 + Math.random() * 3.8,
+        color
+      });
+    }
+  }
+
+  function triggerNoteVisuals(note) {
+    currentNote = note;
+    coilEnergy = 1.0;
+    stageFlash = 0.35 * note.accent;
+
+    // Pick origin point on the toroid rim based on note pitch
+    const normalizedPitch = Math.max(0, Math.min(1, (note.midi - 57) / (88 - 57)));
+    // Map pitch across the target nodes
+    const primaryTargetIdx = Math.min(
+      8,
+      Math.max(0, Math.round(normalizedPitch * 8))
+    );
+    const target = TARGET_NODES[primaryTargetIdx];
+    targetCharge[primaryTargetIdx] = 1.0;
+
+    // Origin on the Tesla toroid rim facing the target
+    const angleToTarget = Math.atan2(
+      target.y - COIL.toroidY,
+      target.x - COIL.centerX
+    );
+    const startX = COIL.centerX + Math.cos(angleToTarget) * (COIL.toroidRx * 0.88);
+    const startY = COIL.toroidY + Math.sin(angleToTarget) * (COIL.toroidRy * 0.75);
+
+    const palette = getNoteColor(note.midi, false);
+
+    // Main melody bolt + forks
+    const mainPts = buildLightningPoints(startX, startY, target.x, target.y, 68, 0.54, 6);
+    const branches = [];
+
+    // Generate 4 to 7 dramatic branching forks off the main bolt
+    const numBranches = 4 + Math.floor(Math.random() * 4);
+    for (let b = 0; b < numBranches; b++) {
+      const idx = Math.floor((0.15 + Math.random() * 0.7) * (mainPts.length - 1));
+      const root = mainPts[idx];
+      const branchAngle = angleToTarget + (Math.random() - 0.5) * 1.45;
+      const branchLen = 85 + Math.random() * 170;
+      const bx = root.x + Math.cos(branchAngle) * branchLen;
+      const by = root.y + Math.sin(branchAngle) * branchLen;
+      const bPts = buildLightningPoints(root.x, root.y, bx, by, 34, 0.55, 4);
+      branches.push({
+        pts: bPts,
+        weight: 0.45 + Math.random() * 0.35
+      });
+
+      // Sub-branch twig
+      if (Math.random() < 0.65 && bPts.length > 4) {
+        const subRoot = bPts[Math.floor(bPts.length * 0.5)];
+        const subAngle = branchAngle + (Math.random() - 0.5) * 1.2;
+        const subLen = 45 + Math.random() * 75;
+        branches.push({
+          pts: buildLightningPoints(
+            subRoot.x,
+            subRoot.y,
+            subRoot.x + Math.cos(subAngle) * subLen,
+            subRoot.y + Math.sin(subAngle) * subLen,
+            18,
+            0.55,
+            3
+          ),
+          weight: 0.25
+        });
+      }
+    }
+
+    activeArcs.push({
+      pts: mainPts,
+      branches,
+      palette,
+      life: 1.0,
+      decay: 6.2,
+      thickness: 4.8 * note.accent,
+      targetX: target.x,
+      targetY: target.y
+    });
+
+    spawnSparks(target.x, target.y, palette.inner, 14, 1.05);
+    spawnSparks(startX, startY, '#00f7ff', 6, 0.7);
+
+    // Unbound wild air-breakout corona streamers shooting from top breakout tip
+    const coronaCount = note.accent > 0.9 ? 3 : 2;
+    for (let c = 0; c < coronaCount; c++) {
+      const cAngle = -Math.PI * 0.5 + (Math.random() - 0.5) * 2.2;
+      const cLen = 110 + Math.random() * 190;
+      const cStartX = COIL.centerX + (Math.random() - 0.5) * COIL.toroidRx * 1.4;
+      const cStartY = COIL.toroidY + (Math.random() - 0.5) * COIL.toroidRy;
+      const cEndX = cStartX + Math.cos(cAngle) * cLen;
+      const cEndY = cStartY + Math.sin(cAngle) * cLen;
+      const cPts = buildLightningPoints(cStartX, cStartY, cEndX, cEndY, 42, 0.56, 5);
+      activeArcs.push({
+        pts: cPts,
+        branches: [],
+        palette: getNoteColor(note.midi + 4, false),
+        life: 0.85,
+        decay: 8.5,
+        thickness: 2.6,
+        targetX: cEndX,
+        targetY: cEndY,
+        freeAir: true
+      });
+    }
+
+    // Secondary Bass Arc (strikes floor grounding rings or opposite side rod)
+    if (note.bassMidi) {
+      const bassRight = (note.stepIndex % 8) >= 4;
+      const floorTargetIdx = bassRight ? 10 : 9;
+      const floorTarget = TARGET_NODES[floorTargetIdx];
+      targetCharge[floorTargetIdx] = 1.0;
+
+      const bStartX = COIL.centerX + (bassRight ? 1 : -1) * (COIL.toroidRx * 0.85);
+      const bStartY = COIL.toroidY + 12;
+      const bassPalette = getNoteColor(note.bassMidi, true);
+      const bassPts = buildLightningPoints(bStartX, bStartY, floorTarget.x, floorTarget.y, 75, 0.53, 6);
+      const bassBranches = [];
+      for (let i = 0; i < 3; i++) {
+        const rNode = bassPts[Math.floor((0.25 + Math.random() * 0.5) * bassPts.length)];
+        bassBranches.push({
+          pts: buildLightningPoints(
+            rNode.x,
+            rNode.y,
+            rNode.x + (Math.random() - 0.5) * 180,
+            rNode.y + Math.random() * 140,
+            30,
+            0.55,
+            4
+          ),
+          weight: 0.45
+        });
+      }
+
+      activeArcs.push({
+        pts: bassPts,
+        branches: bassBranches,
+        palette: bassPalette,
+        life: 1.0,
+        decay: 4.2,
+        thickness: 5.5,
+        targetX: floorTarget.x,
+        targetY: floorTarget.y
+      });
+      spawnSparks(floorTarget.x, floorTarget.y, '#ff2a85', 18, 1.25);
+    }
+  }
+
+  // ============================================================================
+  // RENDERING ROUTINES
+  // ============================================================================
+  function drawPolyline(pts) {
+    if (pts.length < 2) return;
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) {
+      ctx.lineTo(pts[i].x, pts[i].y);
+    }
+    ctx.stroke();
+  }
+
+  function renderStageBackground(time) {
+    // Deep dark atmospheric stage background
+    const bgGrad = ctx.createRadialGradient(
+      COIL.centerX,
+      COIL.toroidY + 80,
+      40,
+      COIL.centerX,
+      540,
+      780
+    );
+    const flashBoost = stageFlash * 0.25;
+    bgGrad.addColorStop(0, `rgb(${Math.floor(28 + flashBoost * 160)}, ${Math.floor(10 + flashBoost * 90)}, ${Math.floor(64 + flashBoost * 220)})`);
+    bgGrad.addColorStop(0.55, `rgb(${Math.floor(10 + flashBoost * 45)}, ${Math.floor(4 + flashBoost * 25)}, ${Math.floor(26 + flashBoost * 90)})`);
+    bgGrad.addColorStop(1, '#020106');
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(-500, -500, STAGE_SIZE + 1000, STAGE_SIZE + 1000);
+
+    // Subtle Faraday Cage hexagonal grid in upper background
+    ctx.save();
+    ctx.strokeStyle = `rgba(90, 50, 180, ${0.09 + stageFlash * 0.14})`;
+    ctx.lineWidth = 1.5;
+    // Perspective radial arch ribs behind the coil
+    for (let r = 220; r <= 660; r += 110) {
+      ctx.beginPath();
+      ctx.arc(COIL.centerX, COIL.toroidY + 120, r, Math.PI * 1.05, Math.PI * 1.95);
+      ctx.stroke();
+    }
+    for (let a = 0; a <= 8; a++) {
+      const ang = Math.PI * 1.05 + (a / 8) * Math.PI * 0.9;
+      ctx.beginPath();
+      ctx.moveTo(COIL.centerX + Math.cos(ang) * 180, COIL.toroidY + 120 + Math.sin(ang) * 180);
+      ctx.lineTo(COIL.centerX + Math.cos(ang) * 660, COIL.toroidY + 120 + Math.sin(ang) * 660);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Dark Reflective Stage Floor with Perspective Grid & Plasma Reflections
+    const floorGrad = ctx.createLinearGradient(0, COIL.floorY - 30, 0, STAGE_SIZE + 200);
+    floorGrad.addColorStop(0, '#0a0418');
+    floorGrad.addColorStop(0.18, '#120728');
+    floorGrad.addColorStop(1, '#030108');
+    ctx.fillStyle = floorGrad;
+    ctx.fillRect(-500, COIL.floorY - 20, STAGE_SIZE + 1000, 400);
+
+    // Stage floor reflection glow under coil and active arcs
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const reflGrad = ctx.createRadialGradient(
+      COIL.centerX,
+      COIL.floorY + 25,
+      20,
+      COIL.centerX,
+      COIL.floorY + 25,
+      460
+    );
+    reflGrad.addColorStop(0, `rgba(0, 240, 255, ${0.14 + stageFlash * 0.3})`);
+    reflGrad.addColorStop(0.45, `rgba(180, 0, 255, ${0.09 + stageFlash * 0.2})`);
+    reflGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = reflGrad;
+    ctx.fillRect(0, COIL.floorY - 25, STAGE_SIZE, 220);
+
+    // Perspective stage grid lines
+    ctx.strokeStyle = `rgba(0, 230, 255, ${0.14 + stageFlash * 0.16})`;
+    ctx.lineWidth = 1.5;
+    for (let i = -8; i <= 8; i++) {
+      ctx.beginPath();
+      ctx.moveTo(COIL.centerX + i * 48, COIL.floorY - 20);
+      ctx.lineTo(COIL.centerX + i * 165, STAGE_SIZE + 120);
+      ctx.stroke();
+    }
+    for (let yOff = 0; yOff < 170; yOff += 34) {
+      const y = COIL.floorY - 12 + yOff;
+      ctx.beginPath();
+      ctx.moveTo(-200, y);
+      ctx.lineTo(STAGE_SIZE + 200, y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function renderGroundingRods(time) {
+    for (let i = 0; i < TARGET_NODES.length; i++) {
+      const node = TARGET_NODES[i];
+      const charge = targetCharge[i];
+
+      ctx.save();
+      if (node.floor) {
+        // Floor grounding brass ring pad
+        ctx.beginPath();
+        ctx.ellipse(node.x, node.y, 44, 14, 0, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(40, 20, 75, 0.9)`;
+        ctx.fill();
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = charge > 0.05 ? `hsl(${node.hue}, 100%, 65%)` : '#4a3570';
+        ctx.stroke();
+      } else {
+        // Steel/copper grounding pylon shaft
+        const rodGrad = ctx.createLinearGradient(node.x - 8, 0, node.x + 8, 0);
+        rodGrad.addColorStop(0, '#161128');
+        rodGrad.addColorStop(0.5, '#594885');
+        rodGrad.addColorStop(1, '#120d22');
+        ctx.fillStyle = rodGrad;
+        ctx.fillRect(node.x - 6, node.rodTopY, 12, node.rodBotY - node.rodTopY);
+
+        // Insulator rings on the pylon
+        const dir = node.ceiling ? -1 : 1;
+        for (let r = 1; r <= 3; r++) {
+          const ry = node.y + dir * r * 18;
+          ctx.beginPath();
+          ctx.ellipse(node.x, ry, 14, 5, 0, 0, Math.PI * 2);
+          ctx.fillStyle = charge > 0.1
+            ? `hsla(${node.hue}, 100%, 60%, ${0.4 + charge * 0.5})`
+            : '#2c2248';
+          ctx.fill();
+        }
+
+        // Conducting sphere orb at tip
+        const sphereGrad = ctx.createRadialGradient(
+          node.x - 5,
+          node.y - 5,
+          2,
+          node.x,
+          node.y,
+          18
+        );
+        sphereGrad.addColorStop(0, '#ffffff');
+        sphereGrad.addColorStop(0.35, `hsl(${node.hue}, 100%, ${55 + charge * 35}%)`);
+        sphereGrad.addColorStop(1, '#120829');
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, 16, 0, Math.PI * 2);
+        ctx.fillStyle = sphereGrad;
+        ctx.fill();
+      }
+
+      // Vivid plasma halo when struck by an arc
+      if (charge > 0.02) {
+        ctx.globalCompositeOperation = 'lighter';
+        const halo = ctx.createRadialGradient(node.x, node.y, 2, node.x, node.y, 28 + charge * 65);
+        halo.addColorStop(0, `rgba(255, 255, 255, ${charge * 0.95})`);
+        halo.addColorStop(0.35, `hsla(${node.hue}, 100%, 60%, ${charge * 0.75})`);
+        halo.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = halo;
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, 28 + charge * 65, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+
+  function renderTeslaCoil(time) {
+    const cx = COIL.centerX;
+
+    // 1. Heavy Octagonal Pedestal Base
+    ctx.save();
+    const baseGrad = ctx.createLinearGradient(cx - 175, 0, cx + 175, 0);
+    baseGrad.addColorStop(0, '#090514');
+    baseGrad.addColorStop(0.25, '#251842');
+    baseGrad.addColorStop(0.5, '#3b2866');
+    baseGrad.addColorStop(0.75, '#1d1236');
+    baseGrad.addColorStop(1, '#080412');
+
+    ctx.beginPath();
+    ctx.moveTo(cx - 135, COIL.coilBottomY);
+    ctx.lineTo(cx + 135, COIL.coilBottomY);
+    ctx.lineTo(cx + 175, COIL.baseBottomY);
+    ctx.lineTo(cx - 175, COIL.baseBottomY);
+    ctx.closePath();
+    ctx.fillStyle = baseGrad;
+    ctx.fill();
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = `rgba(0, 240, 255, ${0.35 + coilEnergy * 0.4})`;
+    ctx.stroke();
+
+    // Glowing status vents on pedestal
+    ctx.globalCompositeOperation = 'lighter';
+    for (let v = -2; v <= 2; v++) {
+      const vx = cx + v * 48;
+      ctx.fillStyle = v === 0 ? '#ffe600' : '#00f7ff';
+      ctx.fillRect(vx - 12, COIL.coilBottomY + 42, 24, 8);
+    }
+    ctx.restore();
+
+    // 2. Primary Coil (Thick Flat Copper Spiral Tubing around bottom of secondary)
+    ctx.save();
+    for (let turn = 0; turn < 5; turn++) {
+      const ty = COIL.coilBottomY - 10 - turn * 15;
+      const rx = 132 - turn * 9;
+      const ry = 22 - turn * 1.5;
+      ctx.beginPath();
+      ctx.ellipse(cx, ty, rx, ry, 0, 0, Math.PI * 2);
+      ctx.lineWidth = 7;
+      ctx.strokeStyle = turn % 2 === 0 ? '#ff7b00' : '#d94b00';
+      ctx.stroke();
+
+      // Specular highlight on primary copper turn
+      ctx.beginPath();
+      ctx.ellipse(cx, ty, rx, ry, 0, Math.PI * 0.15, Math.PI * 0.85);
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = `rgba(255, 230, 120, ${0.5 + coilEnergy * 0.45})`;
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // 3. Secondary Resonator Column (Enameled Copper Windings + Internal Electromagnetic Pulse Waves)
+    ctx.save();
+    const colTop = COIL.coilTopY;
+    const colBot = COIL.coilBottomY;
+    const rTop = COIL.coilTopRadius;
+    const rBot = COIL.coilBottomRadius;
+
+    // Column silhouette path
+    ctx.beginPath();
+    ctx.moveTo(cx - rTop, colTop);
+    ctx.lineTo(cx + rTop, colTop);
+    ctx.lineTo(cx + rBot, colBot);
+    ctx.lineTo(cx - rBot, colBot);
+    ctx.closePath();
+
+    const secGrad = ctx.createLinearGradient(cx - rBot, 0, cx + rBot, 0);
+    secGrad.addColorStop(0, '#240b18');
+    secGrad.addColorStop(0.22, '#7a250c');
+    secGrad.addColorStop(0.46, '#ff8811');
+    secGrad.addColorStop(0.65, '#b83c08');
+    secGrad.addColorStop(1, '#1d0714');
+    ctx.fillStyle = secGrad;
+    ctx.fill();
+    ctx.clip();
+
+    // Fine copper wire striations + Bumblebee Golden/Violet Resonant Standing Waves
+    const numStripes = 44;
+    const pitchNorm = (currentNote.midi - 57) / 31;
+    for (let s = 0; s < numStripes; s++) {
+      const frac = s / numStripes;
+      const y = colTop + frac * (colBot - colTop);
+      const wave = Math.sin(frac * 14 - time * 26) * 0.5 + 0.5;
+      const isBand = (s % 4 < 2);
+      ctx.beginPath();
+      ctx.moveTo(cx - rBot, y);
+      ctx.lineTo(cx + rBot, y);
+      ctx.lineWidth = 4.5;
+      if (isBand) {
+        // Dark metallic band (gives subtle bumblebee high-voltage warning stripe aesthetic)
+        ctx.strokeStyle = `rgba(15, 5, 30, 0.52)`;
+      } else {
+        ctx.strokeStyle = `rgba(255, 220, 40, ${0.18 + wave * coilEnergy * 0.65})`;
+      }
+      ctx.stroke();
+    }
+
+    // Travelling plasma ion ring surging up the secondary coil on each note
+    ctx.globalCompositeOperation = 'lighter';
+    const pulseY = colBot - ((time * 12) % 1) * (colBot - colTop);
+    const ringGlow = ctx.createLinearGradient(0, pulseY - 45, 0, pulseY + 45);
+    ringGlow.addColorStop(0, 'rgba(0, 247, 255, 0)');
+    ringGlow.addColorStop(0.5, `rgba(0, 247, 255, ${0.45 + coilEnergy * 0.45})`);
+    ringGlow.addColorStop(1, 'rgba(180, 0, 255, 0)');
+    ctx.fillStyle = ringGlow;
+    ctx.fillRect(cx - rBot, colTop, rBot * 2, colBot - colTop);
+    ctx.restore();
+
+    // Outer neon rim glow on secondary resonator
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.strokeStyle = `rgba(0, 247, 255, ${0.3 + coilEnergy * 0.5})`;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(cx - rTop, colTop);
+    ctx.lineTo(cx - rBot, colBot);
+    ctx.moveTo(cx + rTop, colTop);
+    ctx.lineTo(cx + rBot, colBot);
+    ctx.stroke();
+    ctx.restore();
+
+    // 4. High-Voltage Aluminum Toroid Top-Load
+    ctx.save();
+    // Intense corona aura behind toroid
+    ctx.globalCompositeOperation = 'lighter';
+    const toroidAura = ctx.createRadialGradient(
+      cx,
+      COIL.toroidY,
+      20,
+      cx,
+      COIL.toroidY,
+      240 + coilEnergy * 70
+    );
+    const palette = getNoteColor(currentNote.midi, false);
+    toroidAura.addColorStop(0, 'rgba(255, 255, 255, 0.85)');
+    toroidAura.addColorStop(0.25, palette.inner);
+    toroidAura.addColorStop(0.55, 'rgba(130, 0, 255, 0.32)');
+    toroidAura.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = toroidAura;
+    ctx.beginPath();
+    ctx.arc(cx, COIL.toroidY, 240 + coilEnergy * 70, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // Metallic 3D Toroid Body
+    ctx.save();
+    const torGrad = ctx.createLinearGradient(
+      cx - COIL.toroidRx,
+      COIL.toroidY - COIL.toroidRy,
+      cx + COIL.toroidRx,
+      COIL.toroidY + COIL.toroidRy
+    );
+    torGrad.addColorStop(0, '#1c1538');
+    torGrad.addColorStop(0.22, '#8b7ec4');
+    torGrad.addColorStop(0.45, '#ffffff');
+    torGrad.addColorStop(0.68, '#53468a');
+    torGrad.addColorStop(1, '#140c2b');
+
+    ctx.beginPath();
+    ctx.ellipse(cx, COIL.toroidY, COIL.toroidRx, COIL.toroidRy, 0, 0, Math.PI * 2);
+    ctx.fillStyle = torGrad;
+    ctx.fill();
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = palette.inner;
+    ctx.stroke();
+
+    // Inner recess of the toroid donut
+    ctx.beginPath();
+    ctx.ellipse(cx, COIL.toroidY - 4, COIL.toroidRx * 0.48, COIL.toroidRy * 0.38, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#110926';
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#00f7ff';
+    ctx.stroke();
+
+    // Top Breakout Spike & Glowing Ion Orb
+    ctx.beginPath();
+    ctx.moveTo(cx - 10, COIL.toroidY - 6);
+    ctx.lineTo(cx, COIL.breakoutY - 24);
+    ctx.lineTo(cx + 10, COIL.toroidY - 6);
+    ctx.closePath();
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+
+    // Orbiting Plasma "Bumblebee" Ion Bead whizzing around the toroid in sync with the melody
+    beeOrbitalAngle += 0.22;
+    const beeX = cx + Math.cos(beeOrbitalAngle) * (COIL.toroidRx * 1.08);
+    const beeY = COIL.toroidY + Math.sin(beeOrbitalAngle) * (COIL.toroidRy * 1.15) - 8;
+    ctx.globalCompositeOperation = 'lighter';
+    const beeGlow = ctx.createRadialGradient(beeX, beeY, 1, beeX, beeY, 34);
+    beeGlow.addColorStop(0, '#ffffff');
+    beeGlow.addColorStop(0.35, '#ffe600');
+    beeGlow.addColorStop(0.75, '#ff5500');
+    beeGlow.addColorStop(1, 'rgba(255, 85, 0, 0)');
+    ctx.fillStyle = beeGlow;
+    ctx.beginPath();
+    ctx.arc(beeX, beeY, 34, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function renderLightningArcs() {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    for (let i = 0; i < activeArcs.length; i++) {
+      const arc = activeArcs[i];
+      const alpha = Math.max(0, Math.min(1, arc.life));
+      const { core, inner, outer } = arc.palette;
+
+      // Slight high-frequency plasma jitter while the arc is alive
+      if (arc.pts.length > 4) {
+        for (let p = 1; p < arc.pts.length - 1; p++) {
+          arc.pts[p].x += (Math.random() - 0.5) * 3.8;
+          arc.pts[p].y += (Math.random() - 0.5) * 3.8;
+        }
+      }
+
+      // Layer 1: Wide outer plasma bloom
+      ctx.strokeStyle = outer;
+      ctx.globalAlpha = alpha * 0.42;
+      ctx.lineWidth = arc.thickness * 6.0;
+      drawPolyline(arc.pts);
+
+      // Layer 2: Vivid saturated inner plasma sheath
+      ctx.strokeStyle = inner;
+      ctx.globalAlpha = alpha * 0.85;
+      ctx.lineWidth = arc.thickness * 2.5;
+      drawPolyline(arc.pts);
+
+      // Layer 3: Brilliant white-hot core channel
+      ctx.strokeStyle = core;
+      ctx.globalAlpha = alpha;
+      ctx.lineWidth = Math.max(1.4, arc.thickness * 0.85);
+      drawPolyline(arc.pts);
+
+      // Render branching forks
+      for (let b = 0; b < arc.branches.length; b++) {
+        const br = arc.branches[b];
+        const bAlpha = alpha * br.weight;
+
+        ctx.strokeStyle = outer;
+        ctx.globalAlpha = bAlpha * 0.45;
+        ctx.lineWidth = arc.thickness * 3.2 * br.weight;
+        drawPolyline(br.pts);
+
+        ctx.strokeStyle = inner;
+        ctx.globalAlpha = bAlpha * 0.85;
+        ctx.lineWidth = arc.thickness * 1.5 * br.weight;
+        drawPolyline(br.pts);
+
+        ctx.strokeStyle = '#ffffff';
+        ctx.globalAlpha = bAlpha * 0.9;
+        ctx.lineWidth = Math.max(1.0, arc.thickness * 0.55 * br.weight);
+        drawPolyline(br.pts);
+      }
+
+      // Mirror faint reflection of the arc on the glossy stage floor
+      if (!arc.freeAir) {
+        ctx.save();
+        ctx.globalAlpha = alpha * 0.16;
+        ctx.strokeStyle = inner;
+        ctx.lineWidth = arc.thickness * 3.5;
+        ctx.beginPath();
+        for (let p = 0; p < arc.pts.length; p++) {
+          const pt = arc.pts[p];
+          const rx = pt.x;
+          const ry = COIL.floorY + (COIL.floorY - pt.y) * 0.18;
+          if (p === 0) ctx.moveTo(rx, ry);
+          else ctx.lineTo(rx, ry);
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+    ctx.restore();
+  }
+
+  function renderSparks() {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < sparks.length; i++) {
+      const s = sparks[i];
+      const alpha = Math.max(0, s.life);
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = s.color;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.size * (0.4 + alpha * 0.6), 0, Math.PI * 2);
+      ctx.fill();
+
+      // White hot center
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.size * 0.45, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // ============================================================================
+  // MAIN ANIMATION & SEQUENCER LOOP
+  // ============================================================================
+  let lastTime = performance.now();
+
+  // Trigger the very first note immediately as the page loads
+  triggerNoteVisuals(score[0]);
+  playTeslaNote(score[0], SIXTEENTH_DUR);
+
+  function frame(now) {
+    const dt = Math.min(0.05, (now - lastTime) / 1000);
+    lastTime = now;
+    const elapsedSec = now / 1000;
+
+    // Advance musical sequencer
+    stepTimer += dt;
+    while (stepTimer >= SIXTEENTH_DUR) {
+      stepTimer -= SIXTEENTH_DUR;
+      currentStep = (currentStep + 1) % score.length;
+      const note = score[currentStep];
+      triggerNoteVisuals(note);
+      playTeslaNote(note, SIXTEENTH_DUR);
+    }
+
+    // Update physics & decay
+    coilEnergy = Math.max(0.25, coilEnergy - dt * 3.8);
+    stageFlash = Math.max(0, stageFlash - dt * 2.8);
+
+    for (let i = 0; i < targetCharge.length; i++) {
+      targetCharge[i] = Math.max(0, targetCharge[i] - dt * 3.2);
+    }
+
+    for (let i = activeArcs.length - 1; i >= 0; i--) {
+      activeArcs[i].life -= activeArcs[i].decay * dt;
+      if (activeArcs[i].life <= 0) {
+        activeArcs.splice(i, 1);
+      }
+    }
+
+    for (let i = sparks.length - 1; i >= 0; i--) {
+      const s = sparks[i];
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+      s.vy += 420 * dt; // Gravity
+      s.life -= s.decay * dt;
+      if (s.life <= 0) {
+        sparks.splice(i, 1);
+      }
+    }
+
+    // Compute responsive transform so 1080x1080 stage is centered and fills window cleanly
+    ctx.save();
+    ctx.scale(dpr, dpr);
+
+    const scale = Math.min(width / STAGE_SIZE, height / STAGE_SIZE);
+    const offsetX = (width - STAGE_SIZE * scale) * 0.5;
+    const offsetY = (height - STAGE_SIZE * scale) * 0.5;
+
+    ctx.translate(offsetX, offsetY);
+    ctx.scale(scale, scale);
+
+    renderStageBackground(elapsedSec);
+    renderGroundingRods(elapsedSec);
+    renderTeslaCoil(elapsedSec);
+    renderLightningArcs();
+    renderSparks();
+
+    ctx.restore();
+
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Singing Tesla Coil</title>
+<style>
+  html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#04020b}
+  canvas{display:block;width:100vw;height:100vh;cursor:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function(){
+'use strict';
+
+/* ---------------------------------------------------------------- canvas */
+const canvas=document.getElementById('c');
+const ctx=canvas.getContext('2d');
+let W=1,H=1,S=1,DPR=1;
+let cx=0,baseY=0,coilW=0,coilH=0,torW=0,torH=0,topX=0,topY=0,rodL=null,rodR=null;
+
+function resize(){
+  DPR=Math.min(window.devicePixelRatio||1,2);
+  W=window.innerWidth; H=window.innerHeight; S=Math.min(W,H);
+  canvas.width=Math.round(W*DPR); canvas.height=Math.round(H*DPR);
+  canvas.style.width=W+'px'; canvas.style.height=H+'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  cx=W/2;
+  baseY=H*0.86;
+  coilW=S*0.085;
+  coilH=S*0.30;
+  torW=S*0.24;
+  torH=S*0.075;
+  topX=cx;
+  topY=baseY-coilH-torH*0.55;
+  rodL={x:cx-S*0.40,y:baseY-S*0.26};
+  rodR={x:cx+S*0.40,y:baseY-S*0.26};
+}
+window.addEventListener('resize',resize);
+resize();
+
+/* ---------------------------------------------------------------- melody */
+const SIX=0.105; // seconds per sixteenth note
+const NAMES={C:0,'C#':1,D:2,'D#':3,E:4,F:5,'F#':6,G:7,'G#':8,A:9,'A#':10,B:11};
+function semi(tok){const m=/^([A-G]#?)(\d)$/.exec(tok);return (parseInt(m[2],10)-4)*12+NAMES[m[1]]-9;}
+
+const MEL=(
+  // bar 1  descending chromatic turn figure
+  'E5 D#5 D5 C#5 D5 C#5 C5 B4 C5 B4 A#4 A4 A#4 A4 G#4 G4 '+
+  // bar 2  climb back up
+  'A4 G#4 A4 A#4 B4 C5 C#5 D5 D#5 E5 F5 E5 D#5 D5 C#5 D5 '+
+  // bar 3
+  'E5 D#5 D5 C#5 D5 C#5 C5 B4 C5 B4 A#4 A4 A#4 A4 G#4 G4 '+
+  // bar 4  climb to the top
+  'A4 G#4 A4 A#4 B4 C5 C#5 D5 D#5 E5 F5 F#5 G5 G#5 A5 G#5 '+
+  // bar 5  high descending figure
+  'A5 G#5 G5 F#5 G5 F#5 F5 E5 F5 E5 D#5 D5 D#5 D5 C#5 C5 '+
+  // bar 6
+  'B4 C5 C#5 D5 D#5 E5 F5 F#5 G5 G#5 A5 G#5 G5 F#5 F5 E5 '+
+  // bar 7
+  'E5 D#5 D5 C#5 D5 C#5 C5 B4 C5 B4 A#4 A4 A#4 A4 G#4 G4 '+
+  // bar 8  final run and held top note
+  'A4 A#4 B4 C5 C#5 D5 D#5 E5 F5 F#5 G5 G#5 A5*3 R R R R '+
+  // bars 9-12  second strain
+  'E5 D#5 D5 C#5 D5 C#5 C5 B4 C5 B4 A#4 A4 A#4 A4 G#4 G4 '+
+  'F#4 G4 G#4 A4 A#4 B4 C5 C#5 D5 D#5 E5 F5 F#5 G5 G#5 A5 '+
+  'A5 G#5 G5 F#5 G5 F#5 F5 E5 F5 E5 D#5 D5 D#5 D5 C#5 C5 '+
+  'C#5 D5 D#5 E5 F5 F#5 G5 G#5 A5 G#5 G5 F#5 F5 E5 D#5 D5 '+
+  // bars 13-16  return
+  'E5 D#5 D5 C#5 D5 C#5 C5 B4 C5 B4 A#4 A4 A#4 A4 G#4 G4 '+
+  'A4 G#4 A4 A#4 B4 C5 C#5 D5 D#5 E5 F5 E5 D#5 D5 C#5 D5 '+
+  'E5 F5 F#5 G5 G#5 A5 A#5 B5 A#5 A5 G#5 G5 F#5 F5 E5 D#5 '+
+  'E5 R E5 R E5*2 R R E5 R E5 R E5*4 R R R R R R'
+).trim().split(/\s+/);
+
+const notes=[];
+let tt=0;
+for(const tok of MEL){
+  const parts=tok.split('*');
+  const d=parts[1]?parseInt(parts[1],10):1;
+  if(parts[0]!=='R'){
+    const beat=Math.round(tt/SIX);
+    notes.push({t:tt,s:semi(parts[0]),dur:d*SIX,acc:(beat%4===0),len:d});
+  }
+  tt+=d*SIX;
+}
+const LOOP=tt;
+
+function noteAt(i){
+  const n=notes[i%notes.length];
+  return {time:T0+Math.floor(i/notes.length)*LOOP+n.t,n:n};
+}
+
+/* ---------------------------------------------------------------- audio */
+let AC=null,master=null,hissG=null,noiseBuf=null,curve=null,audioOK=false;
+
+function initAudio(){
+  if(AC) return;
+  const Ctor=window.AudioContext||window.webkitAudioContext;
+  if(!Ctor) return;
+  try{AC=new Ctor();}catch(e){AC=null;return;}
+
+  curve=new Float32Array(512);
+  for(let i=0;i<512;i++){const x=i/255.5-1;curve[i]=Math.tanh(x*3.2)/Math.tanh(3.2);}
+
+  const comp=AC.createDynamicsCompressor();
+  comp.threshold.value=-16;comp.knee.value=12;comp.ratio.value=6;comp.attack.value=0.002;comp.release.value=0.12;
+  comp.connect(AC.destination);
+
+  master=AC.createGain();master.gain.value=0.42;master.connect(comp);
+
+  // stage echo
+  const dly=AC.createDelay(1);dly.delayTime.value=0.21;
+  const fb=AC.createGain();fb.gain.value=0.3;
+  const dlp=AC.createBiquadFilter();dlp.type='lowpass';dlp.frequency.value=1600;
+  const wet=AC.createGain();wet.gain.value=0.3;
+  master.connect(dly);dly.connect(dlp);dlp.connect(fb);fb.connect(dly);dlp.connect(wet);wet.connect(comp);
+
+  // noise buffer
+  const len=AC.sampleRate*2;
+  noiseBuf=AC.createBuffer(1,len,AC.sampleRate);
+  const data=noiseBuf.getChannelData(0);
+  for(let i=0;i<len;i++) data[i]=Math.random()*2-1;
+
+  // mains hum
+  const hum=AC.createOscillator();hum.type='sawtooth';hum.frequency.value=55;
+  const humF=AC.createBiquadFilter();humF.type='lowpass';humF.frequency.value=180;
+  const humG=AC.createGain();humG.gain.value=0.05;
+  hum.connect(humF);humF.connect(humG);humG.connect(master);hum.start();
+
+  // corona hiss, level follows arc activity
+  const hiss=AC.createBufferSource();hiss.buffer=noiseBuf;hiss.loop=true;
+  const hissF=AC.createBiquadFilter();hissF.type='bandpass';hissF.frequency.value=5200;hissF.Q.value=0.6;
+  hissG=AC.createGain();hissG.gain.value=0.008;
+  hiss.connect(hissF);hissF.connect(hissG);hissG.connect(master);hiss.start();
+
+  audioOK=true;
+}
+
+function tryStart(){
+  initAudio();
+  if(AC&&AC.state!=='running'){
+    AC.resume().catch(function(){});
+  }
+}
+
+function playNote(n,at){
+  const f=440*Math.pow(2,n.s/12);
+  const dur=n.dur;
+  const peak=n.acc?0.95:0.7;
+
+  const vg=AC.createGain();
+  vg.gain.setValueAtTime(0.0001,at);
+  vg.gain.exponentialRampToValueAtTime(peak,at+0.005);
+  vg.gain.setValueAtTime(peak,at+Math.max(0.006,dur-0.015));
+  vg.gain.exponentialRampToValueAtTime(0.0001,at+dur+0.045);
+
+  const sh=AC.createWaveShaper();sh.curve=curve;
+
+  const flt=AC.createBiquadFilter();flt.type='lowpass';flt.Q.value=2.5;
+  flt.frequency.setValueAtTime(Math.min(14000,f*10),at);
+  flt.frequency.exponentialRampToValueAtTime(Math.min(14000,f*3.2),at+dur+0.03);
+
+  const o1=AC.createOscillator();o1.type='square';o1.frequency.value=f;
+  const o2=AC.createOscillator();o2.type='sawtooth';o2.frequency.value=f;o2.detune.value=9;
+  const o3=AC.createOscillator();o3.type='square';o3.frequency.value=f*0.5;
+  const g3=AC.createGain();g3.gain.value=0.4;
+
+  // interrupter buzz: amplitude chop at ~120 Hz, the classic coil rasp
+  const chop=AC.createOscillator();chop.type='square';chop.frequency.value=118;
+  const chopG=AC.createGain();chopG.gain.value=0.35;
+  const chopBias=AC.createGain();chopBias.gain.value=1;
+  chop.connect(chopG);chopG.connect(chopBias.gain);
+
+  o1.connect(chopBias);o2.connect(chopBias);o3.connect(g3);g3.connect(chopBias);
+  chopBias.connect(vg);vg.connect(sh);sh.connect(flt);flt.connect(master);
+
+  const st=at+dur+0.08;
+  o1.start(at);o2.start(at);o3.start(at);chop.start(at);
+  o1.stop(st);o2.stop(st);o3.stop(st);chop.stop(st);
+
+  // strike crackle
+  const nb=AC.createBufferSource();nb.buffer=noiseBuf;
+  const nf=AC.createBiquadFilter();nf.type='bandpass';nf.frequency.value=3800;nf.Q.value=0.8;
+  const ng=AC.createGain();
+  ng.gain.setValueAtTime(n.acc?0.6:0.32,at);
+  ng.gain.exponentialRampToValueAtTime(0.001,at+0.035);
+  nb.connect(nf);nf.connect(ng);ng.connect(master);
+  nb.start(at,Math.random()*1.5);nb.stop(at+0.06);
+}
+
+/* ---------------------------------------------------------------- sequencer */
+const T0=performance.now()/1000+0.7;
+let audIdx=0;
+
+setInterval(function(){
+  const now=performance.now()/1000;
+  if(!AC||AC.state!=='running'){
+    while(noteAt(audIdx).time<now) audIdx++;
+    return;
+  }
+  for(;;){
+    const e=noteAt(audIdx);
+    if(e.time>now+0.22) break;
+    const at=AC.currentTime+(e.time-now);
+    if(at>AC.currentTime-0.03) playNote(e.n,Math.max(at,AC.currentTime+0.001));
+    audIdx++;
+  }
+},30);
+
+tryStart();
+['pointerdown','touchend','keydown','mousedown'].forEach(function(ev){
+  window.addEventListener(ev,tryStart,{passive:true});
+});
+document.addEventListener('visibilitychange',function(){if(!document.hidden) tryStart();});
+
+/* ---------------------------------------------------------------- visuals */
+const arcs=[];
+const sparks=[];
+let flash=0,flashHue=260,visIdx=0,glowLevel=0;
+
+function bolt(ax,ay,bx,by,depth,width,out,jit){
+  let pts=[ax,ay,bx,by];
+  for(let i=0;i<depth;i++){
+    const np=[];
+    const n=pts.length/2;
+    for(let j=0;j<n-1;j++){
+      const x1=pts[2*j],y1=pts[2*j+1],x2=pts[2*j+2],y2=pts[2*j+3];
+      np.push(x1,y1);
+      const dx=x2-x1,dy=y2-y1;
+      const len=Math.hypot(dx,dy)||1;
+      const off=(Math.random()-0.5)*len*jit;
+      const mx=(x1+x2)/2-dy/len*off;
+      const my=(y1+y2)/2+dx/len*off;
+      np.push(mx,my);
+      if(i>=1&&i<=3&&width>0.45&&Math.random()<0.2){
+        const ang=Math.atan2(dy,dx)+(Math.random()<0.5?-1:1)*(0.35+Math.random()*0.7);
+        const bl=Math.hypot(bx-mx,by-my)*(0.25+Math.random()*0.4)+S*0.01;
+        bolt(mx,my,mx+Math.cos(ang)*bl,my+Math.sin(ang)*bl,depth-i-1,width*0.5,out,jit*1.1);
+      }
+    }
+    np.push(pts[2*n-2],pts[2*n-1]);
+    pts=np;
+  }
+  out.push({pts:pts,width:width});
+}
+
+function spawnArc(n,now){
+  const p=Math.max(0,Math.min(1,(n.s+9)/23));
+  const hue=290-p*115;        // violet for low notes, cyan for high
+  const power=n.acc?1.45:1;
+  let ang=(p-0.5)*2.5+(Math.random()-0.5)*0.55;
+  let L=S*(0.19+0.32*p)*power*(0.85+Math.random()*0.3);
+  if(n.len>1) L*=1.25;
+
+  // origin on the toroid rim
+  const rim=Math.max(-1,Math.min(1,Math.sin(ang)*1.3));
+  const sx=topX+rim*torW*0.46;
+  const sy=topY+Math.abs(rim)*torH*0.15-torH*0.25;
+
+  let ex=sx+Math.sin(ang)*L;
+  let ey=sy-Math.cos(ang)*L*0.85;
+  let hit=null;
+
+  // accented low or high notes strike the ground rods
+  if(n.acc&&p<0.3&&Math.random()<0.65) hit=rodL;
+  if(n.acc&&p>0.7&&Math.random()<0.65) hit=rodR;
+  if(hit){ex=hit.x+(Math.random()-0.5)*4;ey=hit.y;}
+
+  ex=Math.max(S*0.02,Math.min(W-S*0.02,ex));
+  ey=Math.max(S*0.03,ey);
+
+  const dur=n.dur+(n.len>1?0.08:0.04);
+  arcs.push({sx:sx,sy:sy,ex:ex,ey:ey,born:now,end:now+dur,hue:hue,power:power,geo:null,tick:0,hit:!!hit});
+
+  if(n.acc){
+    // a second smaller streamer off the other side
+    const a2=-ang*0.6+(Math.random()-0.5)*1.2;
+    const L2=L*0.45;
+    arcs.push({sx:topX-rim*torW*0.3,sy:topY-torH*0.3,ex:topX-rim*torW*0.3+Math.sin(a2)*L2,ey:topY-torH*0.3-Math.cos(a2)*L2*0.9,
+      born:now,end:now+dur*0.8,hue:hue+25,power:0.55,geo:null,tick:0,hit:false});
+  }
+
+  flash=Math.min(1.4,flash+0.45*power);
+  flashHue=hue;
+
+  const cnt=n.acc?16:8;
+  for(let i=0;i<cnt;i++){
+    const a=Math.random()*Math.PI*2,v=S*(0.15+Math.random()*0.45);
+    sparks.push({x:ex,y:ey,vx:Math.cos(a)*v,vy:Math.sin(a)*v-S*0.1,life:0.25+Math.random()*0.4,age:0,hue:hue});
+  }
+}
+
+function update(dt,now){
+  for(let i=arcs.length-1;i>=0;i--){
+    const a=arcs[i];
+    if(now>a.end) arcs.splice(i,1);
+  }
+  for(let i=sparks.length-1;i>=0;i--){
+    const s=sparks[i];
+    s.age+=dt;
+    if(s.age>s.life){sparks.splice(i,1);continue;}
+    s.vy+=S*1.2*dt;
+    s.x+=s.vx*dt;s.y+=s.vy*dt;
+    s.vx*=0.97;
+  }
+  if(sparks.length>400) sparks.splice(0,sparks.length-400);
+  flash*=Math.pow(0.0005,dt);
+  const target=Math.min(1,arcs.length*0.5);
+  glowLevel+=(target-glowLevel)*Math.min(1,dt*14);
+  if(audioOK&&AC.state==='running'){
+    hissG.gain.setTargetAtTime(0.008+glowLevel*0.05,AC.currentTime,0.03);
+  }
+}
+
+function hsl(h,s,l,a){return 'hsla('+h+','+s+'%,'+l+'%,'+a+')';}
+
+function drawStage(){
+  // backdrop
+  const bg=ctx.createLinearGradient(0,0,0,H);
+  bg.addColorStop(0,'#07031a');
+  bg.addColorStop(0.6,'#05020e');
+  bg.addColorStop(1,'#020108');
+  ctx.fillStyle=bg;
+  ctx.fillRect(0,0,W,H);
+
+  // faint spotlight cone from above
+  const cone=ctx.createRadialGradient(cx,-S*0.2,0,cx,-S*0.2,S*1.2);
+  cone.addColorStop(0,'rgba(70,40,140,0.22)');
+  cone.addColorStop(1,'rgba(70,40,140,0)');
+  ctx.fillStyle=cone;
+  ctx.fillRect(0,0,W,H);
+
+  // floor
+  const fl=ctx.createLinearGradient(0,baseY,0,H);
+  fl.addColorStop(0,'#120a24');
+  fl.addColorStop(1,'#050210');
+  ctx.fillStyle=fl;
+  ctx.fillRect(0,baseY,W,H-baseY);
+  ctx.fillStyle='rgba(120,80,220,0.35)';
+  ctx.fillRect(0,baseY-1,W,2);
+
+  // floor planks
+  ctx.strokeStyle='rgba(90,60,170,0.12)';
+  ctx.lineWidth=1;
+  for(let i=1;i<7;i++){
+    const y=baseY+(H-baseY)*Math.pow(i/7,1.6);
+    ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();
+  }
+
+  // light pool on floor, colored by the last arc
+  const f=Math.min(1,flash);
+  const pool=ctx.createRadialGradient(cx,baseY+S*0.02,0,cx,baseY+S*0.02,S*0.6);
+  pool.addColorStop(0,hsl(flashHue,100,65,0.12+f*0.45));
+  pool.addColorStop(0.5,hsl(flashHue,100,55,0.05+f*0.12));
+  pool.addColorStop(1,hsl(flashHue,100,50,0));
+  ctx.fillStyle=pool;
+  ctx.save();ctx.scale(1,0.32);ctx.beginPath();
+  ctx.ellipse(cx,(baseY+S*0.02)/0.32,S*0.7,S*0.7,0,0,Math.PI*2);ctx.fill();ctx.restore();
+}
+
+function drawRod(r){
+  ctx.strokeStyle='#2a2236';ctx.lineWidth=S*0.008;
+  ctx.beginPath();ctx.moveTo(r.x,baseY);ctx.lineTo(r.x,r.y+S*0.012);ctx.stroke();
+  ctx.fillStyle='#1b1626';
+  ctx.beginPath();ctx.ellipse(r.x,baseY,S*0.04,S*0.012,0,0,Math.PI*2);ctx.fill();
+  const g=ctx.createRadialGradient(r.x-S*0.006,r.y-S*0.006,S*0.002,r.x,r.y,S*0.02);
+  g.addColorStop(0,'#cfd4ff');g.addColorStop(0.5,'#6f7aa8');g.addColorStop(1,'#1d1a33');
+  ctx.fillStyle=g;
+  ctx.beginPath();ctx.arc(r.x,r.y,S*0.018,0,Math.PI*2);ctx.fill();
+}
+
+function drawCoil(){
+  const f=Math.min(1,flash);
+  // base cabinet
+  const bw=S*0.26,bh=S*0.07;
+  const bg=ctx.createLinearGradient(cx-bw/2,0,cx+bw/2,0);
+  bg.addColorStop(0,'#15101f');bg.addColorStop(0.5,'#2a2040');bg.addColorStop(1,'#15101f');
+  ctx.fillStyle=bg;
+  ctx.fillRect(cx-bw/2,baseY-bh,bw,bh);
+  ctx.fillStyle='rgba(255,255,255,0.08)';
+  ctx.fillRect(cx-bw/2,baseY-bh,bw,2);
+
+  // primary coil: flat copper spiral
+  ctx.lineWidth=Math.max(1.5,S*0.004);
+  for(let i=0;i<5;i++){
+    const rw=S*(0.08+i*0.025),rh=rw*0.28;
+    ctx.strokeStyle=hsl(28,95,50+f*20,0.9);
+    ctx.beginPath();ctx.ellipse(cx,baseY-bh-S*0.006,rw,rh,0,0,Math.PI*2);ctx.stroke();
+  }
+
+  // secondary winding
+  const x0=cx-coilW/2,y0=baseY-bh-coilH;
+  const cg=ctx.createLinearGradient(x0,0,x0+coilW,0);
+  cg.addColorStop(0,'#3a1c08');cg.addColorStop(0.35,'#c2641a');cg.addColorStop(0.5,'#f0a04a');cg.addColorStop(0.7,'#b85a16');cg.addColorStop(1,'#2e1506');
+  ctx.fillStyle=cg;
+  ctx.fillRect(x0,y0,coilW,coilH);
+  ctx.strokeStyle='rgba(0,0,0,0.35)';ctx.lineWidth=1;
+  const step=Math.max(2,S*0.0045);
+  ctx.beginPath();
+  for(let y=y0+step;y<y0+coilH;y+=step){ctx.moveTo(x0,y);ctx.lineTo(x0+coilW,y);}
+  ctx.stroke();
+  // glow wash on secondary while arcing
+  if(f>0.02){
+    ctx.fillStyle=hsl(flashHue,100,70,f*0.28);
+    ctx.fillRect(x0,y0,coilW,coilH);
+  }
+
+  // top plate under toroid
+  ctx.fillStyle='#2b2238';
+  ctx.beginPath();ctx.ellipse(cx,y0,coilW*0.7,coilW*0.22,0,0,Math.PI*2);ctx.fill();
+
+  // toroid
+  const ty=topY;
+  const tg=ctx.createLinearGradient(0,ty-torH/2,0,ty+torH/2);
+  tg.addColorStop(0,'#eef2ff');tg.addColorStop(0.3,'#aab4d8');tg.addColorStop(0.65,'#4a5278');tg.addColorStop(1,'#161a2e');
+  ctx.fillStyle=tg;
+  ctx.beginPath();ctx.ellipse(cx,ty,torW/2,torH/2,0,0,Math.PI*2);ctx.fill();
+  // donut hole shading
+  const hg=ctx.createRadialGradient(cx,ty-torH*0.1,0,cx,ty,torW*0.2);
+  hg.addColorStop(0,'rgba(10,8,24,0.95)');hg.addColorStop(1,'rgba(10,8,24,0)');
+  ctx.fillStyle=hg;
+  ctx.beginPath();ctx.ellipse(cx,ty-torH*0.05,torW*0.2,torH*0.22,0,0,Math.PI*2);ctx.fill();
+  // rim highlight
+  ctx.strokeStyle='rgba(255,255,255,0.55)';ctx.lineWidth=1.2;
+  ctx.beginPath();ctx.ellipse(cx,ty-torH*0.08,torW*0.46,torH*0.36,0,Math.PI*1.05,Math.PI*1.95);ctx.stroke();
+}
+
+function strokeBolts(geo,hue,alpha,wscale){
+  for(const b of geo){
+    const pts=b.pts;
+    ctx.beginPath();
+    ctx.moveTo(pts[0],pts[1]);
+    for(let i=2;i<pts.length;i+=2) ctx.lineTo(pts[i],pts[i+1]);
+    const w=b.width*wscale;
+    // wide halo
+    ctx.lineWidth=w*11;ctx.strokeStyle=hsl(hue,100,60,0.09*alpha);ctx.stroke();
+    // mid glow
+    ctx.lineWidth=w*4;ctx.strokeStyle=hsl(hue,100,68,0.5*alpha);ctx.stroke();
+    // hot core
+    ctx.lineWidth=Math.max(0.8,w*1.3);ctx.strokeStyle='rgba(255,255,255,'+(0.95*alpha)+')';ctx.stroke();
+  }
+}
+
+function drawArcs(now){
+  ctx.globalCompositeOperation='lighter';
+  ctx.lineCap='round';ctx.lineJoin='round';
+  const baseW=Math.max(1.2,S*0.0028);
+
+  for(const a of arcs){
+    const life=a.end-a.born;
+    const t=(now-a.born)/life;
+    let alpha=1;
+    if(t>0.75) alpha=1-(t-0.75)/0.25;
+    alpha*=0.85+0.15*Math.random();
+    a.tick++;
+    if(!a.geo||a.tick%2===0){
+      a.geo=[];
+      bolt(a.sx,a.sy,a.ex,a.ey,6,1,a.geo,0.5);
+    }
+    strokeBolts(a.geo,a.hue,alpha,baseW*a.power);
+
+    // strike point bloom
+    const r=S*(0.03+0.05*a.power)*alpha;
+    const g=ctx.createRadialGradient(a.ex,a.ey,0,a.ex,a.ey,r);
+    g.addColorStop(0,hsl(a.hue,100,85,0.9*alpha));
+    g.addColorStop(0.3,hsl(a.hue,100,65,0.35*alpha));
+    g.addColorStop(1,hsl(a.hue,100,60,0));
+    ctx.fillStyle=g;ctx.beginPath();ctx.arc(a.ex,a.ey,r,0,Math.PI*2);ctx.fill();
+  }
+
+  // corona streamers that always dance around the toroid rim
+  const cor=[];
+  const cnt=2+Math.floor(glowLevel*6);
+  for(let i=0;i<cnt;i++){
+    const ang=Math.random()*Math.PI*2;
+    const sx=topX+Math.cos(ang)*torW*0.48,sy=topY+Math.sin(ang)*torH*0.45;
+    const dir=ang+(Math.random()-0.5)*0.8;
+    const L=S*(0.015+Math.random()*0.03*(1+glowLevel*2));
+    bolt(sx,sy,sx+Math.cos(dir)*L,sy+Math.sin(dir)*L*0.6-L*0.3,3,0.5,cor,0.6);
+  }
+  strokeBolts(cor,270,0.6,baseW);
+
+  // toroid glow
+  const tgl=0.15+Math.min(1,flash)*0.7;
+  const tr=torW*(0.4+tgl*0.5);
+  const tg=ctx.createRadialGradient(topX,topY,torH*0.2,topX,topY,tr);
+  tg.addColorStop(0,hsl(flashHue,100,75,0.45*tgl));
+  tg.addColorStop(0.4,hsl(flashHue,100,60,0.15*tgl));
+  tg.addColorStop(1,hsl(flashHue,100,60,0));
+  ctx.fillStyle=tg;ctx.beginPath();ctx.arc(topX,topY,tr,0,Math.PI*2);ctx.fill();
+
+  // sparks
+  ctx.lineWidth=Math.max(1,S*0.0018);
+  for(const s of sparks){
+    const k=1-s.age/s.life;
+    ctx.strokeStyle=hsl(s.hue,100,75,k);
+    ctx.beginPath();ctx.moveTo(s.x,s.y);ctx.lineTo(s.x-s.vx*0.025,s.y-s.vy*0.025);ctx.stroke();
+  }
+
+  // whole-stage flash
+  if(flash>0.02){
+    const f=Math.min(1,flash);
+    ctx.fillStyle=hsl(flashHue,100,70,f*0.07);
+    ctx.fillRect(0,0,W,H);
+  }
+  ctx.globalCompositeOperation='source-over';
+}
+
+function drawVignette(){
+  const v=ctx.createRadialGradient(cx,H*0.5,S*0.3,cx,H*0.5,Math.max(W,H)*0.78);
+  v.addColorStop(0,'rgba(0,0,0,0)');
+  v.addColorStop(1,'rgba(0,0,0,0.72)');
+  ctx.fillStyle=v;
+  ctx.fillRect(0,0,W,H);
+}
+
+/* ---------------------------------------------------------------- loop */
+let last=performance.now();
+function frame(ts){
+  requestAnimationFrame(frame);
+  const dt=Math.min(0.05,(ts-last)/1000);
+  last=ts;
+  const now=ts/1000;
+  const latency=(AC&&AC.state==='running'&&AC.outputLatency)?Math.min(0.12,AC.outputLatency):0.02;
+  const vnow=now-latency;
+
+  if(noteAt(visIdx).time<vnow-0.6){while(noteAt(visIdx).time<vnow) visIdx++;}
+  while(noteAt(visIdx).time<=vnow){spawnArc(noteAt(visIdx).n,now);visIdx++;}
+
+  update(dt,now);
+  drawStage();
+  drawRod(rodL);drawRod(rodR);
+  drawCoil();
+  drawArcs(now);
+  drawVignette();
+}
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

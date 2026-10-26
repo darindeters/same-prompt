@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#03040d">
+<title>Singing Tesla Coil</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#03040d}canvas{display:block;width:100%;height:100%;touch-action:none}
+</style>
+</head>
+<body>
+<canvas aria-label="A singing Tesla coil performs Flight of the Bumblebee with branching violet and cyan lightning on a dark stage."></canvas>
+<script>
+'use strict';
+(() => {
+const canvas=document.querySelector('canvas'),ctx=canvas.getContext('2d',{alpha:false});
+let W,H,DPR,S,ox,oy;
+function resize(){W=innerWidth;H=innerHeight;DPR=Math.min(devicePixelRatio||1,2);canvas.width=Math.round(W*DPR);canvas.height=Math.round(H*DPR);S=Math.min(W,H);ox=(W-S)/2;oy=(H-S)/2;}
+addEventListener('resize',resize);resize();
+const TAU=Math.PI*2, start=performance.now(),step=60/184/4;
+// Semiquaver chromatic runs, falling turns and rising sequences of the Bumblebee.
+const phrases=[
+[76,75,74,73,74,73,72,71,72,71,70,69,70,69,68,67],
+[68,69,70,71,72,73,74,75,76,75,74,73,74,73,72,71],
+[72,71,70,69,70,69,68,67,68,67,66,65,66,65,64,63],
+[64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79],
+[80,79,78,77,78,77,76,75,76,75,74,73,74,73,72,71],
+[72,73,74,75,76,77,78,79,80,79,78,77,78,77,76,75],
+[76,75,74,73,74,73,72,71,72,71,70,69,70,69,68,67],
+[68,67,66,65,64,65,66,67,68,69,70,71,72,73,74,75],
+[76,75,74,73,72,71,70,69,68,67,66,65,64,65,66,67],
+[68,69,70,71,72,73,74,75,76,75,74,73,72,71,70,69],
+[71,72,73,74,75,76,77,78,79,78,77,76,75,74,73,72],
+[71,70,69,68,67,66,65,64,63,64,65,66,67,68,69,70],
+[71,72,73,74,75,76,77,78,79,80,81,82,83,82,81,80],
+[79,78,77,76,75,74,73,72,71,70,69,68,67,68,69,70],
+[71,72,73,74,75,76,77,78,79,78,77,76,75,74,73,72],
+[71,70,69,68,67,66,65,64,63,64,66,68,71,72,74,75]
+];
+const melody=phrases.flat();
+function noteAt(n){return melody[((n%melody.length)+melody.length)%melody.length];}
+function elapsed(){return (performance.now()-start)/1000;}
+function random(seed){let a=seed|0;return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+let audio=null,building=false;
+async function enableAudio(){
+ if(building)return;building=true;
+ try{
+  if(!audio){
+   const AC=window.AudioContext||window.webkitAudioContext;if(!AC)return;
+   const ac=new AC(),master=ac.createGain(),comp=ac.createDynamicsCompressor();
+   master.gain.value=.26;comp.threshold.value=-16;comp.knee.value=15;comp.ratio.value=5;master.connect(comp);comp.connect(ac.destination);
+   const dry=ac.createGain();dry.connect(master);
+   const delay=ac.createDelay(.5),feedback=ac.createGain(),wet=ac.createGain(),filter=ac.createBiquadFilter();
+   delay.delayTime.value=step*3;feedback.gain.value=.25;wet.gain.value=.17;filter.type='lowpass';filter.frequency.value=3400;
+   dry.connect(delay);delay.connect(filter);filter.connect(feedback);feedback.connect(delay);filter.connect(wet);wet.connect(master);
+   const noise=ac.createBuffer(1,ac.sampleRate,ac.sampleRate),data=noise.getChannelData(0),rng=random(9);for(let i=0;i<data.length;i++)data[i]=rng()*2-1;
+   const real=new Float32Array(33),imag=new Float32Array(33);for(let k=1;k<33;k++)imag[k]=(k%2?1:.65)/Math.pow(k,.85);
+   const wave=ac.createPeriodicWave(real,imag);
+   audio={ac,dry,noise,wave,next:Math.floor(elapsed()/step)+1};
+  }
+  await audio.ac.resume();
+  audio.next=Math.floor(elapsed()/step)+1;
+ }catch(e){}finally{building=false;}
+}
+function sound(n,when){
+ const {ac,dry,noise,wave}=audio, frequency=440*Math.pow(2,(noteAt(n)-69)/12),dur=step*.86;
+ const osc=ac.createOscillator(),gain=ac.createGain(),filter=ac.createBiquadFilter();
+ osc.setPeriodicWave(wave);osc.frequency.setValueAtTime(frequency,when);filter.type='lowpass';filter.frequency.setValueAtTime(7200,when);filter.frequency.exponentialRampToValueAtTime(2000,when+dur);
+ gain.gain.setValueAtTime(0,when);gain.gain.linearRampToValueAtTime(n%4===0?.40:.31,when+.002);gain.gain.exponentialRampToValueAtTime(.055,when+dur*.7);gain.gain.exponentialRampToValueAtTime(.001,when+dur);
+ osc.connect(filter);filter.connect(gain);gain.connect(dry);osc.start(when);osc.stop(when+dur+.005);
+ const hiss=ac.createBufferSource(),hg=ac.createGain(),hp=ac.createBiquadFilter();hiss.buffer=noise;hp.type='highpass';hp.frequency.value=3800;hg.gain.setValueAtTime(.075,when);hg.gain.exponentialRampToValueAtTime(.001,when+.025);hiss.connect(hp);hp.connect(hg);hg.connect(dry);hiss.start(when,(n*.173)% .8);hiss.stop(when+.03);
+ if(n%8===0){const bass=ac.createOscillator(),bg=ac.createGain();bass.type='triangle';bass.frequency.value=440*Math.pow(2,([40,47,40,47,45,52,43,50][Math.floor(n/8)%8]-69)/12);bg.gain.setValueAtTime(.23,when);bg.gain.exponentialRampToValueAtTime(.001,when+step*3);bass.connect(bg);bg.connect(dry);bass.start(when);bass.stop(when+step*3);}
+}
+setInterval(()=>{if(!audio||audio.ac.state!=='running')return;const t=elapsed();if(audio.next*step<t-.03)audio.next=Math.floor(t/step)+1;while(audio.next*step<t+.12){sound(audio.next,audio.ac.currentTime+Math.max(.001,audio.next*step-t));audio.next++;}},25);
+addEventListener('pointerdown',enableAudio,{passive:true});addEventListener('keydown',enableAudio);enableAudio();
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)enableAudio();});
+function line(x1,y1,x2,y2,color,width=1){ctx.strokeStyle=color;ctx.lineWidth=width;ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();}
+function ellipse(x,y,rx,ry,fill,stroke,width=1){ctx.beginPath();ctx.ellipse(x,y,rx,ry,0,0,TAU);if(fill){ctx.fillStyle=fill;ctx.fill();}if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=width;ctx.stroke();}}
+function glow(x,y,r,color){const g=ctx.createRadialGradient(x,y,0,x,y,r);g.addColorStop(0,color);g.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=g;ctx.fillRect(x-r,y-r,r*2,r*2);}
+function path(points,color,width,blur=0){ctx.beginPath();ctx.moveTo(points[0][0],points[0][1]);for(let i=1;i<points.length;i++)ctx.lineTo(points[i][0],points[i][1]);ctx.strokeStyle=color;ctx.lineWidth=width;ctx.lineJoin='round';ctx.lineCap='round';ctx.shadowColor=color;ctx.shadowBlur=blur;ctx.stroke();ctx.shadowBlur=0;}
+function bolt(x,y,ex,ey,rng,power,hue,depth=0){
+ const dist=Math.hypot(ex-x,ey-y),count=Math.max(5,Math.ceil(dist/14)),nx=-(ey-y)/dist,ny=(ex-x)/dist,pts=[[x,y]];
+ for(let i=1;i<count;i++){const f=i/count,off=(rng()-.5)*dist*.19*Math.sin(Math.PI*f);pts.push([x+(ex-x)*f+nx*off,y+(ey-y)*f+ny*off]);}pts.push([ex,ey]);
+ path(pts,`hsla(${hue},100%,56%,${.15*power})`,depth?7:15,15);
+ path(pts,`hsla(${hue},100%,65%,${.85*power})`,depth?.85:2.5,depth?4:9);
+ path(pts,`rgba(236,250,255,${power})`,depth?.45:1.05);
+ if(depth<2){for(let j=0;j<(depth?1:3);j++){const idx=2+Math.floor(rng()*(pts.length-4)),p=pts[idx];const f=.2+rng()*.33;bolt(p[0],p[1],p[0]+(ex-x)*f+(rng()-.5)*130,p[1]+(ey-y)*f+(rng()-.5)*100,rng,power*.65,hue,depth+1);}}
+}
+const stars=Array.from({length:100},(_,i)=>{const r=random(i*19+8);return[r()*1080,r()*900,r()*1.5+.3,r()*TAU];});
+function draw(){
+ const t=elapsed(),n=Math.floor(t/step),phase=t/step-n,pitch=noteAt(n),pulse=Math.pow(1-phase,1.7),rng=random(n*729+Math.floor(phase*3)*47),hue=n%16<8?185:277;
+ ctx.setTransform(DPR,0,0,DPR,0,0);ctx.fillStyle='#02030a';ctx.fillRect(0,0,W,H);ctx.translate(ox,oy);ctx.scale(S/1080,S/1080);
+ const bg=ctx.createRadialGradient(540,490,30,540,490,720);bg.addColorStop(0,'#101334');bg.addColorStop(.5,'#080a1b');bg.addColorStop(1,'#02030a');ctx.fillStyle=bg;ctx.fillRect(-ox*1080/S,-oy*1080/S,W*1080/S,H*1080/S);
+ // Haze hanging in the beams above the stage.
+ for(let side of [-1,1]){const x=540+side*425;const beam=ctx.createLinearGradient(x,40,540,880);beam.addColorStop(0,'rgba(80,56,173,.01)');beam.addColorStop(.7,'rgba(64,55,147,.055)');beam.addColorStop(1,'rgba(17,221,255,.025)');ctx.fillStyle=beam;ctx.beginPath();ctx.moveTo(x,15);ctx.lineTo(540+side*140,875);ctx.lineTo(540+side*490,875);ctx.closePath();ctx.fill();}
+ glow(540,450,430,`rgba(74,25,187,${.10+pulse*.035})`);
+ for(const s of stars){const y=(s[1]-t*(4+s[2]*5)+10800)%900;ctx.globalAlpha=.12+.16*Math.sin(t+s[3])**2;ctx.fillStyle=s[0]>540?'#b870ff':'#53e6ff';ctx.fillRect(s[0],y,s[2],s[2]);}ctx.globalAlpha=1;
+ // Perspective stage and a pool of reflected light.
+ const floor=ctx.createLinearGradient(0,810,0,1080);floor.addColorStop(0,'rgba(8,14,29,0)');floor.addColorStop(1,'#080e1d');ctx.fillStyle=floor;ctx.fillRect(0,790,1080,290);
+ for(let i=-8;i<=8;i++)line(540+i*37,818,540+i*150,1080,'rgba(27,89,117,.13)');
+ for(let i=0;i<7;i++){let y=825+i*i*6;line(0,y,1080,y,'rgba(42,91,122,.12)');}
+ glow(540,925,340,`rgba(29,71,171,${.13+pulse*.07})`);ellipse(540,928,280,42,'#030710');
+ ellipse(540,929,236,35,null,'#15304d',2);ellipse(540,921,222,28,null,'rgba(32,209,245,.38)',1.4);
+ // Heavy pedestal.
+ const base=ctx.createLinearGradient(0,868,0,936);base.addColorStop(0,'#314056');base.addColorStop(.15,'#111a2a');base.addColorStop(.8,'#080c16');base.addColorStop(1,'#1b2940');ctx.fillStyle=base;ctx.beginPath();ctx.roundRect(372,864,336,66,15);ctx.fill();ellipse(540,868,168,24,'#172239','#40516a',1.5);
+ for(let i=0;i<13;i++){const x=401+i*23;line(x,894,x,917,'#03060d',5);line(x+2,894,x+2,917,'#29354a',1);}
+ ellipse(540,870,137,17,null,`rgba(0,231,255,${.3+pulse*.5})`,3);
+ // Ceramic foot and copper secondary windings.
+ const stem=ctx.createLinearGradient(475,0,605,0);stem.addColorStop(0,'#090d19');stem.addColorStop(.3,'#344360');stem.addColorStop(.5,'#0b1324');stem.addColorStop(.9,'#1b2841');stem.addColorStop(1,'#060a13');ctx.fillStyle=stem;ctx.fillRect(478,580,124,280);
+ const copper=ctx.createLinearGradient(470,0,610,0);copper.addColorStop(0,'#30101c');copper.addColorStop(.12,'#a23e3b');copper.addColorStop(.35,'#ffb06a');copper.addColorStop(.47,'#a44d48');copper.addColorStop(.7,'#4c1931');copper.addColorStop(.9,'#ae534d');copper.addColorStop(1,'#230d21');
+ for(let i=0;i<51;i++){let y=600+i*4.7;ellipse(540,y,63,8,null,'#120d1c',4.3);ellipse(540,y-1,63,8,null,copper,2.8);}
+ glow(499,725,123,`rgba(14,130,255,${.035+pulse*.035})`);
+ for(let y of [838,853])ellipse(540,y,83,14,'#141f31','#49506b',2);
+ ellipse(540,859,95,15,null,'#20b9d2',2);
+ // Terminal support.
+ ctx.fillStyle='#182238';ctx.fillRect(526,512,28,86);line(533,522,533,589,'#7b8fa9',3);ellipse(540,589,70,13,'#273149','#586078',2);
+ // Lathed toroid: layered ellipses make a broad, reflective metal doughnut.
+ ellipse(540,559,171,37,'#050813');
+ for(let j=22;j>=-22;j--){const f=j/22,rx=132+39*Math.sqrt(Math.max(0,1-f*f)),yy=537+j;const light=Math.max(8,38+25*(-f)+17*Math.exp(-(((f+.35)*5)**2)));ellipse(540,yy,rx,30,`hsl(${218+f*12},${15+Math.abs(f)*13}%,${light}%)`);}
+ ellipse(540,520,143,28,null,'rgba(193,216,240,.55)',1.3);ellipse(540,530,169,33,null,`rgba(40,223,255,${.2+pulse*.4})`,1.5);
+ ellipse(540,514,56,12,'#11182b','#5b6985',2);ellipse(540,511,30,6,'#060a15','#8a96ad',1);
+ ctx.fillStyle='#8390a6';ctx.fillRect(537,477,6,36);ellipse(540,477,7,4,'#d9faff');
+ // Arcs dance between the terminal and shifting points in the surrounding air.
+ ctx.save();ctx.globalCompositeOperation='lighter';
+ const energy=.58+pulse*.42;
+ glow(540,495,145,`rgba(39,119,255,${.09+pulse*.12})`);glow(540,478,38,`rgba(112,173,255,${.4*energy})`);
+ const count=3+(n%4===0?1:0);
+ for(let i=0;i<count;i++){
+  const angle=-Math.PI+(.14+rng()*.72)*Math.PI;
+  const len=190+rng()*185+(pitch-64)*3;
+  let ex=540+Math.cos(angle)*len,ey=482+Math.sin(angle)*len;
+  if(i===0){ex=540+Math.sin(n*2.399)* (280+(pitch-64)*5);ey=140+rng()*140;}
+  const sx=540+(rng()-.5)*85,sy=490+rng()*23;
+  bolt(sx,sy,ex,ey,rng,energy,i%2?hue:265);
+  glow(ex,ey,14,'rgba(114,179,255,.18)');
+ }
+ // Pinpoint corona and hot sparks, with short ballistic trails.
+ for(let i=0;i<29;i++){
+  const r=random(n*113+i*79),a=r()*TAU,v=50+r()*190,age=phase*step+r()*.13;
+  const x=540+Math.cos(a)*v*age*4,y=487+Math.sin(a)*v*age*4+age*age*250;
+  line(x,y,x-Math.cos(a)*(2+r()*8),y-Math.sin(a)*5,`rgba(${i%3?'93,209,255':'255,140,231'},${(1-phase)*.75})`,1.2);
+ }
+ ellipse(540,478,5+pulse*2,4,'#e9fcff');
+ // A softened mirror of the electric glow on the polished floor.
+ glow(540,959,200,`rgba(28,102,255,${.045+pulse*.045})`);
+ ctx.restore();
+ // Vignette keeps the electric whites bright without lifting the black stage.
+ const vignette=ctx.createRadialGradient(540,520,310,540,520,730);vignette.addColorStop(0,'rgba(0,0,0,0)');vignette.addColorStop(1,'rgba(0,0,6,.7)');ctx.fillStyle=vignette;ctx.fillRect(0,0,1080,1080);
+ requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+})();
+</script>
+</body>
+</html>

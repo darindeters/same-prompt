@@ -411,3 +411,14 @@ Note: Gemini's page throws an error on load (a firefly's radius goes negative) a
 | Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 3:48 | [open](https://darindeters.github.io/same-prompt/costume/codex/) |
 | Gemini (4 Argon) | Antigravity CLI 1.4.7 | 3:12 | [open](https://darindeters.github.io/same-prompt/costume/gemini/) |
 | Grok (4.7) | Grok Build 1.0.62 | 20:47 | [open](https://darindeters.github.io/same-prompt/costume/grok/) |
+
+## Singing Tesla Coil
+
+> Build a singing Tesla coil on a dark stage whose lightning arcs play Flight of the Bumblebee: every note is a buzzing electric arc, timed to the melody, with the arcs flashing and branching in time with the music, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it sound effects that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+
+| Model | Tool | Built in | Play it |
+|---|---|---|---|
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 5:42 | [open](https://darindeters.github.io/same-prompt/tesla-coil/claude/) |
+| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:52 | [open](https://darindeters.github.io/same-prompt/tesla-coil/codex/) |
+| Gemini (4 Argon) | Antigravity CLI 1.4.7 | 2:54 | [open](https://darindeters.github.io/same-prompt/tesla-coil/gemini/) |
+| Grok (4.7) | Grok Build 1.0.62 | 24:12 | [open](https://darindeters.github.io/same-prompt/tesla-coil/grok/) |
