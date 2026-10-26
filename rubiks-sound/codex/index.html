@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#100e29">
+<title>Cube</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #100e29; }
+  body { overscroll-behavior: none; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas aria-label="A three-dimensional Rubik’s cube continuously scrambling and solving itself"></canvas>
+<script>
+(() => {
+  'use strict';
+  const canvas = document.querySelector('canvas');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const TAU = Math.PI * 2, HALF = .493, PITCH = 1.025, DISTANCE = 11;
+  let width = 0, height = 0, unit = 0, backdrop;
+  let audio, noise, compressor;
+
+  function startAudio() {
+    try {
+      if (!audio) {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContext) return;
+        audio = new AudioContext();
+        compressor = audio.createDynamicsCompressor();
+        compressor.threshold.value = -12;
+        compressor.ratio.value = 4;
+        compressor.connect(audio.destination);
+        noise = audio.createBuffer(1, Math.ceil(audio.sampleRate * .065), audio.sampleRate);
+        const data = noise.getChannelData(0);
+        for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+      }
+      if (audio.state === 'suspended') audio.resume().catch(() => {});
+    } catch (_) { /* Animation also works on browsers without Web Audio. */ }
+  }
+  startAudio();
+  window.addEventListener('pointerdown', startAudio, { passive: true });
+  window.addEventListener('click', startAudio, { passive: true });
+  window.addEventListener('keydown', startAudio);
+
+  function clickSound(move) {
+    if (!audio || audio.state !== 'running') return;
+    const t = audio.currentTime;
+    const source = audio.createBufferSource();
+    source.buffer = noise;
+    const filter = audio.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 2450 + move.axis * 290;
+    filter.Q.value = .75;
+    const gain = audio.createGain();
+    gain.gain.setValueAtTime(.001, t);
+    gain.gain.exponentialRampToValueAtTime(.34, t + .0015);
+    gain.gain.exponentialRampToValueAtTime(.001, t + .038);
+    source.connect(filter).connect(gain).connect(compressor);
+    source.start(t);
+    source.stop(t + .05);
+
+    const body = audio.createOscillator();
+    const bodyGain = audio.createGain();
+    body.type = 'triangle';
+    body.frequency.setValueAtTime(690 + move.layer * 45, t);
+    body.frequency.exponentialRampToValueAtTime(190, t + .027);
+    bodyGain.gain.setValueAtTime(.16, t);
+    bodyGain.gain.exponentialRampToValueAtTime(.001, t + .043);
+    body.connect(bodyGain).connect(compressor);
+    body.start(t);
+    body.stop(t + .05);
+
+    // A quieter second contact gives the locking mechanism its double click.
+    const latch = audio.createBufferSource();
+    const latchGain = audio.createGain();
+    latch.buffer = noise;
+    latchGain.gain.setValueAtTime(.065, t + .014);
+    latchGain.gain.exponentialRampToValueAtTime(.001, t + .033);
+    latch.connect(latchGain).connect(compressor);
+    latch.start(t + .014);
+    latch.stop(t + .036);
+  }
+
+  const add = (a, b) => a.map((v, i) => v + b[i]);
+  const mul = (a, s) => a.map(v => v * s);
+  const dot = (a, b) => a.reduce((sum, v, i) => sum + v * b[i], 0);
+  function rotate(v, axis, angle) {
+    const c = Math.cos(angle), s = Math.sin(angle), [x, y, z] = v;
+    if (axis === 0) return [x, c * y - s * z, s * y + c * z];
+    if (axis === 1) return [c * x + s * z, y, -s * x + c * z];
+    return [c * x - s * y, s * x + c * y, z];
+  }
+
+  const sides = [
+    { n: [1,0,0], u: [0,0,-1], v: [0,1,0], color: [20,105,255] },
+    { n: [-1,0,0], u: [0,0,1], v: [0,1,0], color: [0,225,107] },
+    { n: [0,1,0], u: [1,0,0], v: [0,0,-1], color: [255,220,10] },
+    { n: [0,-1,0], u: [1,0,0], v: [0,0,1], color: [240,248,255] },
+    { n: [0,0,1], u: [1,0,0], v: [0,1,0], color: [255,39,67] },
+    { n: [0,0,-1], u: [-1,0,0], v: [0,1,0], color: [255,117,12] }
+  ];
+  const cubies = [];
+  for (let x = -1; x <= 1; x++) for (let y = -1; y <= 1; y++) for (let z = -1; z <= 1; z++) {
+    if (x === 0 && y === 0 && z === 0) continue;
+    const p = [x,y,z];
+    cubies.push({ p, faces: sides.map(f => ({
+      n: f.n.slice(), u: f.u.slice(), v: f.v.slice(),
+      color: dot(p, f.n) === 1 ? f.color : null
+    })) });
+  }
+
+  function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    unit = Math.min(width, height) * .202;
+    backdrop = ctx.createRadialGradient(width * .46, height * .36, 0, width * .5, height * .45, Math.max(width, height) * .8);
+    backdrop.addColorStop(0, '#30205b');
+    backdrop.addColorStop(.46, '#17152f');
+    backdrop.addColorStop(1, '#070c1a');
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  function roundPolygon(points, rounding) {
+    ctx.beginPath();
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i], prev = points[(i + points.length - 1) % points.length], next = points[(i + 1) % points.length];
+      const a = [p[0] + (prev[0] - p[0]) * rounding, p[1] + (prev[1] - p[1]) * rounding];
+      const b = [p[0] + (next[0] - p[0]) * rounding, p[1] + (next[1] - p[1]) * rounding];
+      if (i === 0) ctx.moveTo(...a); else ctx.lineTo(...a);
+      ctx.quadraticCurveTo(...p, ...b);
+    }
+    ctx.closePath();
+  }
+
+  let sequence = [], step = 0, active = null, nextAt = 650, stage = 'scramble';
+  function newScramble() {
+    const result = [];
+    for (let i = 0; i < 20; i++) {
+      let axis;
+      do { axis = Math.floor(Math.random() * 3); } while (i && axis === result[i - 1].axis);
+      result.push({ axis, layer: Math.random() < .5 ? -1 : 1, direction: Math.random() < .5 ? -1 : 1 });
+    }
+    return result;
+  }
+  sequence = newScramble();
+  function commit(move) {
+    const angle = move.direction * Math.PI / 2;
+    for (const cube of cubies) {
+      if (cube.p[move.axis] !== move.layer) continue;
+      cube.p = rotate(cube.p, move.axis, angle).map(Math.round);
+      for (const face of cube.faces) {
+        for (const key of ['n', 'u', 'v']) face[key] = rotate(face[key], move.axis, angle).map(Math.round);
+      }
+    }
+  }
+  const startedAt = performance.now();
+  function frame(now) {
+    const time = now - startedAt;
+    if (!active && time >= nextAt) {
+      active = { ...sequence[step], start: time, duration: stage === 'scramble' ? 285 : 385 };
+    }
+    if (active && time >= active.start + active.duration) {
+      commit(active);
+      clickSound(active);
+      active = null;
+      step++;
+      nextAt = time + (stage === 'scramble' ? 105 : 155);
+      if (step === sequence.length) {
+        step = 0;
+        if (stage === 'scramble') {
+          stage = 'solve';
+          sequence = sequence.slice().reverse().map(m => ({ ...m, direction: -m.direction }));
+          nextAt = time + 1100;
+        } else {
+          stage = 'scramble';
+          sequence = newScramble();
+          nextAt = time + 1900;
+        }
+      }
+    }
+
+    ctx.fillStyle = backdrop;
+    ctx.fillRect(0, 0, width, height);
+    const cx = width * .5, cy = height * .465 + Math.sin(time * .00075) * unit * .025;
+    const glow = ctx.createRadialGradient(cx, height * .73, 0, cx, height * .73, unit * 2.7);
+    glow.addColorStop(0, '#146f8824');
+    glow.addColorStop(1, '#146f8800');
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, width, height);
+    ctx.save();
+    ctx.translate(cx, cy + unit * 2.12);
+    ctx.scale(1, .23);
+    const shadow = ctx.createRadialGradient(0, 0, 0, 0, 0, unit * 2.1);
+    shadow.addColorStop(0, '#020510b3');
+    shadow.addColorStop(.5, '#02051066');
+    shadow.addColorStop(1, '#02051000');
+    ctx.fillStyle = shadow;
+    ctx.fillRect(-unit * 2.2, -unit * 2.2, unit * 4.4, unit * 4.4);
+    ctx.restore();
+
+    const yaw = -.61 + Math.sin(time * .00013) * .075;
+    const pitch = .48 + Math.sin(time * .00019) * .025;
+    const view = v => rotate(rotate(v, 1, yaw), 0, pitch);
+    const project = p => {
+      const perspective = DISTANCE / (DISTANCE - p[2]);
+      return [cx + p[0] * unit * perspective, cy - p[1] * unit * perspective];
+    };
+    let angle = 0;
+    if (active) {
+      const p = Math.min(1, (time - active.start) / active.duration);
+      // Smooth acceleration and a decisive, exactly aligned landing.
+      const eased = p * p * p * (p * (p * 6 - 15) + 10);
+      angle = active.direction * Math.PI * .5 * eased;
+    }
+    const faces = [];
+    for (const cube of cubies) {
+      const moving = active && cube.p[active.axis] === active.layer;
+      const turn = v => moving ? rotate(v, active.axis, angle) : v;
+      const position = turn(mul(cube.p, PITCH));
+      for (const face of cube.faces) {
+        const n = view(turn(face.n));
+        const u = view(turn(face.u));
+        const v = view(turn(face.v));
+        const center = view(add(position, mul(turn(face.n), HALF)));
+        if (dot(n, [-center[0], -center[1], DISTANCE - center[2]]) <= 0) continue;
+        const corners = size => [[-1,-1],[1,-1],[1,1],[-1,1]].map(([a,b]) =>
+          project(add(center, add(mul(u, a * size), mul(v, b * size)))));
+        faces.push({ center, n, color: face.color, corners });
+      }
+    }
+    faces.sort((a,b) => a.center[2] - b.center[2]);
+    const light = [-.35, .75, .56];
+    for (const face of faces) {
+      const brightness = Math.max(0, dot(face.n, light));
+      const shell = Math.round(15 + brightness * 15);
+      roundPolygon(face.corners(HALF), .035);
+      ctx.fillStyle = `rgb(${shell - 3},${shell},${shell + 9})`;
+      ctx.fill();
+      ctx.lineWidth = Math.max(.5, unit * .003);
+      ctx.strokeStyle = 'rgba(2,4,12,.85)';
+      ctx.stroke();
+      if (!face.color) continue;
+      const points = face.corners(HALF * .87);
+      roundPolygon(points, .13);
+      const intensity = .77 + brightness * .23;
+      const rgb = face.color.map(c => Math.round(c * intensity));
+      const gradient = ctx.createLinearGradient(points[3][0], points[3][1], points[1][0], points[1][1]);
+      gradient.addColorStop(0, `rgb(${rgb.join(',')})`);
+      gradient.addColorStop(1, `rgb(${rgb.map(c => Math.min(255, c + 17)).join(',')})`);
+      ctx.fillStyle = gradient;
+      ctx.fill();
+      ctx.strokeStyle = `rgba(255,255,255,${.10 + brightness * .18})`;
+      ctx.lineWidth = Math.max(.65, unit * .004);
+      ctx.stroke();
+      // A fine lower rim gives each inset tile a tactile edge.
+      ctx.beginPath();
+      const a = points[0], b = points[1];
+      ctx.moveTo(a[0] + (b[0] - a[0]) * .15, a[1] + (b[1] - a[1]) * .15);
+      ctx.lineTo(a[0] + (b[0] - a[0]) * .85, a[1] + (b[1] - a[1]) * .85);
+      ctx.strokeStyle = 'rgba(0,0,0,.22)';
+      ctx.lineWidth = Math.max(.8, unit * .006);
+      ctx.stroke();
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

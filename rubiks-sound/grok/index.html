@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cube</title>
+<style>
+  :root {
+    --persp: 1800px;
+    --cubie: 160px;
+    --half: 80px;
+    --sticker: 136px;
+    --core: 150px;
+    --core-half: 75px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #070912;
+    overflow: hidden;
+    touch-action: none;
+    overscroll-behavior: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  body {
+    background:
+      radial-gradient(ellipse 62% 48% at 50% 108%, rgba(0, 0, 0, 0.55), transparent 46%),
+      radial-gradient(ellipse 46% 38% at 50% 46%, #1a2448 0%, #0c1224 50%, #070912 100%);
+  }
+
+  .scene {
+    position: fixed;
+    inset: 0;
+    perspective: var(--persp);
+    -webkit-perspective: var(--persp);
+    perspective-origin: 50% 50%;
+  }
+
+  .shadow {
+    position: absolute;
+    left: 50%;
+    top: 74%;
+    width: 54vmin;
+    height: 18vmin;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(ellipse closest-side, rgba(0, 0, 0, 0.72), rgba(0, 0, 0, 0) 72%);
+    filter: blur(8px);
+    pointer-events: none;
+  }
+
+  .rig {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 0;
+    height: 0;
+    transform-style: preserve-3d;
+    -webkit-transform-style: preserve-3d;
+    transform: rotateX(-28deg) rotateY(-40deg);
+  }
+
+  .cube, .cubie, .core {
+    position: absolute;
+    transform-style: preserve-3d;
+    -webkit-transform-style: preserve-3d;
+  }
+
+  .cube {
+    left: 0;
+    top: 0;
+    width: 0;
+    height: 0;
+  }
+
+  .cubie {
+    width: var(--cubie);
+    height: var(--cubie);
+    left: 0;
+    top: 0;
+    margin-left: calc(var(--cubie) / -2);
+    margin-top: calc(var(--cubie) / -2);
+  }
+
+  .core {
+    --half: var(--core-half);
+    width: var(--core);
+    height: var(--core);
+    left: 0;
+    top: 0;
+    margin-left: calc(var(--core) / -2);
+    margin-top: calc(var(--core) / -2);
+  }
+
+  .face {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  .plastic {
+    border-radius: 5%;
+    background:
+      linear-gradient(155deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0) 34%, rgba(0, 0, 0, 0.55)),
+      #12131a;
+  }
+
+  .sticker {
+    width: var(--sticker);
+    height: var(--sticker);
+    left: calc((var(--cubie) - var(--sticker)) / 2);
+    top: calc((var(--cubie) - var(--sticker)) / 2);
+    border-radius: 16%;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+    background-image:
+      radial-gradient(circle at 30% 26%, rgba(255, 255, 255, 0.78), rgba(255, 255, 255, 0) 36%),
+      linear-gradient(168deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 40%, rgba(0, 0, 0, 0.24));
+    background-repeat: no-repeat;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.28);
+  }
+
+  .sticker.cU { background-color: #ffffff; background-color: color(display-p3 1 1 1); }
+  .sticker.cD { background-color: #ffd000; background-color: color(display-p3 1 0.84 0); }
+  .sticker.cF { background-color: #00e040; background-color: color(display-p3 0.02 0.9 0.18); }
+  .sticker.cB { background-color: #2a5bff; background-color: color(display-p3 0.12 0.34 1); }
+  .sticker.cR { background-color: #ff1a38; background-color: color(display-p3 1 0.07 0.18); }
+  .sticker.cL { background-color: #ff8600; background-color: color(display-p3 1 0.46 0); }
+
+  .px { transform: rotateY(90deg) translateZ(calc(var(--half) - 0.8px)); }
+  .nx { transform: rotateY(-90deg) translateZ(calc(var(--half) - 0.8px)); }
+  .py { transform: rotateX(90deg) translateZ(calc(var(--half) - 0.8px)); }
+  .ny { transform: rotateX(-90deg) translateZ(calc(var(--half) - 0.8px)); }
+  .pz { transform: translateZ(calc(var(--half) - 0.8px)); }
+  .nz { transform: rotateY(180deg) translateZ(calc(var(--half) - 0.8px)); }
+
+  .sticker.px { transform: rotateY(90deg) translateZ(calc(var(--half) + 1.4px)); }
+  .sticker.nx { transform: rotateY(-90deg) translateZ(calc(var(--half) + 1.4px)); }
+  .sticker.py { transform: rotateX(90deg) translateZ(calc(var(--half) + 1.4px)); }
+  .sticker.ny { transform: rotateX(-90deg) translateZ(calc(var(--half) + 1.4px)); }
+  .sticker.pz { transform: translateZ(calc(var(--half) + 1.4px)); }
+  .sticker.nz { transform: rotateY(180deg) translateZ(calc(var(--half) + 1.4px)); }
+
+  .vignette {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    box-shadow: inset 0 0 22vmin rgba(0, 0, 0, 0.42);
+  }
+</style>
+</head>
+<body>
+  <div class="scene">
+    <div class="shadow"></div>
+    <div class="rig"><div class="cube" id="cube"></div></div>
+  </div>
+  <div class="vignette"></div>
+  <script>
+(function () {
+  "use strict";
+
+  // Math space is x right, y up, z toward the viewer. CSS y points down, so
+  // translations negate y and orientation matrices are conjugated by diag(1,-1,1).
+  // Clockwise means clockwise while looking straight at that face.
+  var FACE = {
+    R: { axis: "x", layer: 1, cw: 90, prop: "rotateX" },
+    L: { axis: "x", layer: -1, cw: -90, prop: "rotateX" },
+    U: { axis: "y", layer: 1, cw: -90, prop: "rotateY" },
+    D: { axis: "y", layer: -1, cw: 90, prop: "rotateY" },
+    F: { axis: "z", layer: 1, cw: 90, prop: "rotateZ" },
+    B: { axis: "z", layer: -1, cw: -90, prop: "rotateZ" }
+  };
+
+  var P = {
+    R: [1, 0, 0, 0, 0, 1, 0, -1, 0],
+    L: [1, 0, 0, 0, 0, -1, 0, 1, 0],
+    U: [0, 0, -1, 0, 1, 0, 1, 0, 0],
+    D: [0, 0, 1, 0, 1, 0, -1, 0, 0],
+    F: [0, 1, 0, -1, 0, 0, 0, 0, 1],
+    B: [0, -1, 0, 1, 0, 0, 0, 0, 1]
+  };
+
+  var AXIS = { U: "y", D: "y", F: "z", B: "z", L: "x", R: "x" };
+  var FACES = ["U", "D", "F", "B", "L", "R"];
+  var LOCAL = ["px", "nx", "py", "ny", "pz", "nz"];
+
+  var GAP = 180;
+  var cubies = [];
+  var cubeEl = null;
+  var animating = false;
+  var audioCtx = null;
+  var master = null;
+  var noiseBuf = null;
+
+  function ident() {
+    return [1, 0, 0, 0, 1, 0, 0, 0, 1];
+  }
+
+  function matMul(A, B) {
+    var C = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+    var r, c;
+    for (r = 0; r < 3; r++) {
+      for (c = 0; c < 3; c++) {
+        C[r * 3 + c] =
+          A[r * 3] * B[c] +
+          A[r * 3 + 1] * B[3 + c] +
+          A[r * 3 + 2] * B[6 + c];
+      }
+    }
+    return C;
+  }
+
+  function turnMatrix(face, turns) {
+    var steps = ((turns % 4) + 4) % 4;
+    var M = ident();
+    var i;
+    for (i = 0; i < steps; i++) M = matMul(P[face], M);
+    return M;
+  }
+
+  function applyMatrix(c, M) {
+    var x = M[0] * c.x + M[1] * c.y + M[2] * c.z;
+    var y = M[3] * c.x + M[4] * c.y + M[5] * c.z;
+    var z = M[6] * c.x + M[7] * c.y + M[8] * c.z;
+    c.x = Math.round(x);
+    c.y = Math.round(y);
+    c.z = Math.round(z);
+    var N = matMul(M, c.m);
+    var i;
+    for (i = 0; i < 9; i++) c.m[i] = Math.round(N[i]);
+  }
+
+  function cssMatrix(R) {
+    var a = R[0], b = R[1], c = R[2];
+    var d = R[3], e = R[4], f = R[5];
+    var g = R[6], h = R[7], i = R[8];
+    var r00 = a, r01 = -b, r02 = c;
+    var r10 = -d, r11 = e, r12 = -f;
+    var r20 = g, r21 = -h, r22 = i;
+    return "matrix3d(" +
+      r00 + "," + r10 + "," + r20 + ",0," +
+      r01 + "," + r11 + "," + r21 + ",0," +
+      r02 + "," + r12 + "," + r22 + ",0,0,0,0,1)";
+  }
+
+  function cssMatrixValues(R) {
+    var a = R[0], b = R[1], c = R[2];
+    var d = R[3], e = R[4], f = R[5];
+    var g = R[6], h = R[7], i = R[8];
+    return [a, -b, c, -d, e, -f, g, -h, i];
+  }
+
+  function createCubies() {
+    var list = [];
+    var x, y, z;
+    for (x = -1; x <= 1; x++) {
+      for (y = -1; y <= 1; y++) {
+        for (z = -1; z <= 1; z++) {
+          if (x === 0 && y === 0 && z === 0) continue;
+          list.push({
+            x: x, y: y, z: z,
+            ox: x, oy: y, oz: z,
+            m: ident(),
+            col: {
+              px: x === 1 ? "R" : null,
+              nx: x === -1 ? "L" : null,
+              py: y === 1 ? "U" : null,
+              ny: y === -1 ? "D" : null,
+              pz: z === 1 ? "F" : null,
+              nz: z === -1 ? "B" : null
+            }
+          });
+        }
+      }
+    }
+    return list;
+  }
+
+  function worldColor(c, wx, wy, wz) {
+    var R = c.m;
+    var lx = Math.round(R[0] * wx + R[3] * wy + R[6] * wz);
+    var ly = Math.round(R[1] * wx + R[4] * wy + R[7] * wz);
+    var lz = Math.round(R[2] * wx + R[5] * wy + R[8] * wz);
+    if (lx === 1) return c.col.px;
+    if (lx === -1) return c.col.nx;
+    if (ly === 1) return c.col.py;
+    if (ly === -1) return c.col.ny;
+    if (lz === 1) return c.col.pz;
+    if (lz === -1) return c.col.nz;
+    return null;
+  }
+
+  function isSolved(list) {
+    var i, k, c;
+    for (i = 0; i < list.length; i++) {
+      c = list[i];
+      if (c.x !== c.ox || c.y !== c.oy || c.z !== c.oz) return false;
+      for (k = 0; k < 9; k++) {
+        if (c.m[k] !== (k % 4 === 0 ? 1 : 0)) return false;
+      }
+    }
+    return true;
+  }
+
+  function scramble(n) {
+    var moves = [];
+    var prev = null;
+    var guard = 0;
+    while (moves.length < n && guard < 10000) {
+      guard++;
+      var face = FACES[(Math.random() * 6) | 0];
+      if (prev && AXIS[face] === AXIS[prev]) continue;
+      var roll = (Math.random() * 3) | 0;
+      var turns = roll === 0 ? -1 : roll === 1 ? 1 : 2;
+      moves.push({ face: face, turns: turns });
+      prev = face;
+    }
+    return moves;
+  }
+
+  function invert(moves) {
+    var out = [];
+    var i;
+    for (i = moves.length - 1; i >= 0; i--) {
+      var t = moves[i].turns;
+      out.push({ face: moves[i].face, turns: t === 2 ? 2 : -t });
+    }
+    return out;
+  }
+
+  function baseTransform(c) {
+    var x = c.x * GAP;
+    var y = -c.y * GAP;
+    var z = c.z * GAP;
+    return "translate3d(" + x + "px," + y + "px," + z + "px) " + cssMatrix(c.m);
+  }
+
+  function renderAll() {
+    var i;
+    for (i = 0; i < cubies.length; i++) {
+      if (!cubies[i].moving) cubies[i].el.style.transform = baseTransform(cubies[i]);
+    }
+  }
+
+  function metrics() {
+    var v = Math.min(window.innerWidth, window.innerHeight);
+    GAP = v * 0.17;
+    var cubie = GAP * 0.94;
+    var sticker = cubie * 0.86;
+    var core = (GAP - cubie / 2) * 2 - 4;
+    var s = document.documentElement.style;
+    s.setProperty("--persp", (v * 2.1) + "px");
+    s.setProperty("--cubie", cubie + "px");
+    s.setProperty("--half", (cubie / 2) + "px");
+    s.setProperty("--sticker", sticker + "px");
+    s.setProperty("--core", core + "px");
+    s.setProperty("--core-half", (core / 2) + "px");
+  }
+
+  function addFace(parent, cls, stickerColor) {
+    var plastic = document.createElement("div");
+    plastic.className = "face plastic " + cls;
+    parent.appendChild(plastic);
+    if (!stickerColor) return;
+    var sticker = document.createElement("div");
+    sticker.className = "face sticker " + cls + " c" + stickerColor;
+    parent.appendChild(sticker);
+  }
+
+  function build() {
+    cubeEl = document.getElementById("cube");
+    var core = document.createElement("div");
+    core.className = "core";
+    var i;
+    for (i = 0; i < LOCAL.length; i++) addFace(core, LOCAL[i], null);
+    cubeEl.appendChild(core);
+
+    cubies = createCubies();
+    for (i = 0; i < cubies.length; i++) {
+      var c = cubies[i];
+      var el = document.createElement("div");
+      el.className = "cubie";
+      for (var k = 0; k < LOCAL.length; k++) addFace(el, LOCAL[k], c.col[LOCAL[k]]);
+      c.el = el;
+      c.moving = false;
+      cubeEl.appendChild(el);
+    }
+  }
+
+  function ease(t) {
+    return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  }
+
+  function wait(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+
+  function ensureAudio() {
+    if (audioCtx) return;
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    audioCtx = new AC();
+    master = audioCtx.createGain();
+    master.gain.value = 0.9;
+    master.connect(audioCtx.destination);
+    var n = Math.floor(audioCtx.sampleRate * 0.45);
+    noiseBuf = audioCtx.createBuffer(1, n, audioCtx.sampleRate);
+    var d = noiseBuf.getChannelData(0);
+    var brown = 0;
+    for (var i = 0; i < n; i++) {
+      var white = Math.random() * 2 - 1;
+      brown = brown * 0.82 + white * 0.18;
+      d[i] = brown * 2.4;
+    }
+  }
+
+  function kickAudio() {
+    try {
+      ensureAudio();
+      if (!audioCtx) return;
+      if (audioCtx.state === "suspended") audioCtx.resume();
+      var osc = audioCtx.createOscillator();
+      var g = audioCtx.createGain();
+      g.gain.value = 0.00001;
+      osc.frequency.value = 240;
+      osc.connect(g);
+      g.connect(master);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.03);
+    } catch (err) {}
+  }
+
+  function audible() {
+    if (!audioCtx || !master) return false;
+    if (audioCtx.state !== "running") {
+      try { audioCtx.resume(); } catch (err) {}
+      return false;
+    }
+    return true;
+  }
+
+  function release(nodes, ms) {
+    setTimeout(function () {
+      for (var i = 0; i < nodes.length; i++) {
+        if (!nodes[i] || nodes[i] === master) continue;
+        try { nodes[i].disconnect(); } catch (err) {}
+      }
+    }, ms);
+  }
+
+  function outlet(panValue) {
+    if (!audioCtx.createStereoPanner) return master;
+    var p = audioCtx.createStereoPanner();
+    p.pan.value = panValue;
+    p.connect(master);
+    return p;
+  }
+
+  var PAN = { R: 0.62, L: -0.62, U: 0.08, D: -0.16, F: 0.28, B: -0.38 };
+  var PITCH = { R: 1.05, L: 0.94, U: 1.16, D: 0.84, F: 1, B: 0.9 };
+
+  function playSlide(face, durationMs, solving) {
+    try {
+      if (!audible()) return;
+      var t = audioCtx.currentTime;
+      var dur = durationMs / 1000;
+      var dest = outlet(PAN[face] * 0.8);
+      var src = audioCtx.createBufferSource();
+      src.buffer = noiseBuf;
+      src.loop = true;
+      var bp = audioCtx.createBiquadFilter();
+      bp.type = "bandpass";
+      bp.Q.value = 0.65;
+      bp.frequency.setValueAtTime(solving ? 380 : 640, t);
+      bp.frequency.linearRampToValueAtTime(solving ? 260 : 420, t + dur);
+      var g = audioCtx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(solving ? 0.05 : 0.065, t + dur * 0.46);
+      g.gain.linearRampToValueAtTime(0.0001, t + dur * 0.94);
+      src.connect(bp);
+      bp.connect(g);
+      g.connect(dest);
+      src.start(t);
+      src.stop(t + dur);
+
+      var osc = audioCtx.createOscillator();
+      osc.type = "triangle";
+      var f0 = (solving ? 92 : 118) * PITCH[face];
+      osc.frequency.setValueAtTime(f0, t);
+      osc.frequency.linearRampToValueAtTime(f0 * 0.72, t + dur);
+      var og = audioCtx.createGain();
+      og.gain.setValueAtTime(0.0001, t);
+      og.gain.linearRampToValueAtTime(0.028, t + dur * 0.42);
+      og.gain.linearRampToValueAtTime(0.0001, t + dur * 0.9);
+      osc.connect(og);
+      og.connect(dest);
+      osc.start(t);
+      osc.stop(t + dur);
+      release([src, bp, g, osc, og, dest], durationMs + 80);
+    } catch (err) {}
+  }
+
+  function playClick(face, half, solving) {
+    try {
+      if (!audible()) return;
+      var t = audioCtx.currentTime;
+      var dest = outlet(PAN[face]);
+      var pitch = PITCH[face] * (half ? 0.8 : 1) * (solving ? 0.97 : 1) * (0.985 + Math.random() * 0.03);
+
+      var src = audioCtx.createBufferSource();
+      src.buffer = noiseBuf;
+      var hp = audioCtx.createBiquadFilter();
+      hp.type = "highpass";
+      hp.frequency.value = 1200;
+      var bp = audioCtx.createBiquadFilter();
+      bp.type = "bandpass";
+      bp.frequency.value = 2500 * pitch;
+      bp.Q.value = 0.7;
+      var ng = audioCtx.createGain();
+      ng.gain.setValueAtTime(half ? 0.62 : 0.48, t);
+      ng.gain.exponentialRampToValueAtTime(0.001, t + 0.03);
+      src.connect(hp);
+      hp.connect(bp);
+      bp.connect(ng);
+      ng.connect(dest);
+      src.start(t);
+      src.stop(t + 0.045);
+
+      var body = audioCtx.createOscillator();
+      body.type = "sine";
+      body.frequency.setValueAtTime((half ? 138 : 196) * pitch, t);
+      body.frequency.exponentialRampToValueAtTime(52, t + 0.07);
+      var bg = audioCtx.createGain();
+      bg.gain.setValueAtTime(half ? 0.5 : 0.36, t);
+      bg.gain.exponentialRampToValueAtTime(0.001, t + 0.085);
+      body.connect(bg);
+      bg.connect(dest);
+      body.start(t);
+      body.stop(t + 0.1);
+
+      var tick = audioCtx.createOscillator();
+      tick.type = "triangle";
+      tick.frequency.value = 3100 * pitch;
+      var tg = audioCtx.createGain();
+      tg.gain.setValueAtTime(0.07, t);
+      tg.gain.exponentialRampToValueAtTime(0.001, t + 0.011);
+      tick.connect(tg);
+      tg.connect(dest);
+      tick.start(t);
+      tick.stop(t + 0.016);
+      release([src, hp, bp, ng, body, bg, tick, tg, dest], 180);
+    } catch (err) {}
+  }
+
+  function playSolved() {
+    try {
+      if (!audible()) return;
+      var notes = [523.25, 659.25, 783.99, 1046.5];
+      var t0 = audioCtx.currentTime + 0.04;
+      var nodes = [];
+      for (var i = 0; i < notes.length; i++) {
+        var osc = audioCtx.createOscillator();
+        osc.type = i === 3 ? "sine" : "triangle";
+        osc.frequency.value = notes[i];
+        var g = audioCtx.createGain();
+        var t = t0 + i * 0.072;
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(i === 3 ? 0.07 : 0.11, t + 0.018);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 0.52);
+        osc.connect(g);
+        g.connect(master);
+        osc.start(t);
+        osc.stop(t + 0.56);
+        nodes.push(osc, g);
+      }
+      release(nodes, 900);
+    } catch (err) {}
+  }
+
+  function playMove(move, solving) {
+    var info = FACE[move.face];
+    var turns = move.turns;
+    var duration = (turns === 2 ? 1.38 : 1) * (solving ? 420 : 300);
+    var target = info.cw * turns;
+    var affected = [];
+    var i;
+    for (i = 0; i < cubies.length; i++) {
+      if (cubies[i][info.axis] === info.layer) affected.push(cubies[i]);
+    }
+    for (i = 0; i < affected.length; i++) affected[i].moving = true;
+    animating = true;
+    playSlide(move.face, duration, solving);
+
+    return new Promise(function (resolve) {
+      var t0 = performance.now();
+      function frame(now) {
+        var raw = (now - t0) / duration;
+        if (raw > 1) raw = 1;
+        var ang = target * ease(raw);
+        var rot = info.prop + "(" + ang + "deg)";
+        for (var k = 0; k < affected.length; k++) {
+          affected[k].el.style.transform = rot + " " + baseTransform(affected[k]);
+        }
+        if (raw < 1) {
+          requestAnimationFrame(frame);
+          return;
+        }
+        var M = turnMatrix(move.face, turns);
+        for (var j = 0; j < affected.length; j++) {
+          applyMatrix(affected[j], M);
+          affected[j].moving = false;
+          affected[j].el.style.transform = baseTransform(affected[j]);
+        }
+        animating = false;
+        playClick(move.face, turns === 2, solving);
+        setTimeout(resolve, solving ? 140 : 90);
+      }
+      requestAnimationFrame(frame);
+    });
+  }
+
+  async function main() {
+    var scrambleLen = 20;
+    while (true) {
+      var moves = scramble(scrambleLen);
+      var i;
+      for (i = 0; i < moves.length; i++) await playMove(moves[i], false);
+      await wait(740);
+      var back = invert(moves);
+      for (i = 0; i < back.length; i++) await playMove(back[i], true);
+      playSolved();
+      await wait(1650);
+    }
+  }
+
+  function boot() {
+    metrics();
+    build();
+    renderAll();
+    kickAudio();
+    window.addEventListener("pointerdown", kickAudio, true);
+    window.addEventListener("keydown", kickAudio, true);
+    window.addEventListener("resize", function () {
+      metrics();
+      renderAll();
+    });
+    requestAnimationFrame(function () {
+      requestAnimationFrame(main);
+    });
+  }
+
+  if (typeof document === "undefined") {
+    globalThis.__cubeTest = {
+      FACE: FACE,
+      P: P,
+      createCubies: createCubies,
+      applyMatrix: applyMatrix,
+      turnMatrix: turnMatrix,
+      invert: invert,
+      scramble: scramble,
+      isSolved: isSolved,
+      worldColor: worldColor,
+      cssMatrixValues: cssMatrixValues,
+      ident: ident
+    };
+  } else {
+    boot();
+  }
+})();
+  </script>
+</body>
+</html>

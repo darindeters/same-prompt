@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Cube</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #070812;
+  }
+  body {
+    background: radial-gradient(circle at 50% 42%, #232a52 0%, #11142a 45%, #070812 80%, #030309 100%);
+  }
+  canvas {
+    display: block;
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    touch-action: none;
+    cursor: default;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+  'use strict';
+
+  // ------------------------------------------------------------------
+  // Canvas
+  // ------------------------------------------------------------------
+  const canvas = document.getElementById('c');
+  const g = canvas.getContext('2d');
+  let W = 0, H = 0, DPR = 1;
+
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = Math.round(W * DPR);
+    canvas.height = Math.round(H * DPR);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ------------------------------------------------------------------
+  // Vector / matrix helpers (row-major 3x3)
+  // ------------------------------------------------------------------
+  function rotMat(axis, a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    if (axis === 0) return [1, 0, 0, 0, c, -s, 0, s, c];
+    if (axis === 1) return [c, 0, s, 0, 1, 0, -s, 0, c];
+    return [c, -s, 0, s, c, 0, 0, 0, 1];
+  }
+  function mulMV(m, v) {
+    return [
+      m[0] * v[0] + m[1] * v[1] + m[2] * v[2],
+      m[3] * v[0] + m[4] * v[1] + m[5] * v[2],
+      m[6] * v[0] + m[7] * v[1] + m[8] * v[2]
+    ];
+  }
+  function mulMM(a, b) {
+    const r = new Array(9);
+    for (let i = 0; i < 3; i++)
+      for (let j = 0; j < 3; j++)
+        r[i * 3 + j] = a[i * 3] * b[j] + a[i * 3 + 1] * b[3 + j] + a[i * 3 + 2] * b[6 + j];
+    return r;
+  }
+  function norm(v) {
+    const l = Math.hypot(v[0], v[1], v[2]) || 1;
+    return [v[0] / l, v[1] / l, v[2] / l];
+  }
+  function dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+
+  // ------------------------------------------------------------------
+  // Cube model
+  // Face indices: 0:+x 1:-x 2:+y 3:-y 4:+z 5:-z
+  // ------------------------------------------------------------------
+  const X = [1, 0, 0], Y = [0, 1, 0], Z = [0, 0, 1];
+  const FACE_N = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+  // Tangent pairs (u, v) with u x v = n so corners wind CCW seen from outside
+  const FACE_UV = [[Y, Z], [Z, Y], [Z, X], [X, Z], [X, Y], [Y, X]];
+  const FACE_COLORS = ['#ff2b2b', '#ff8e00', '#fbfbff', '#ffe600', '#1ad83f', '#2270ff'];
+  const BODY = '#1b1c26';
+
+  const cubies = [];
+  for (let x = -1; x <= 1; x++)
+    for (let y = -1; y <= 1; y++)
+      for (let z = -1; z <= 1; z++) {
+        cubies.push({
+          p: [x, y, z],
+          c: [
+            x === 1 ? FACE_COLORS[0] : null,
+            x === -1 ? FACE_COLORS[1] : null,
+            y === 1 ? FACE_COLORS[2] : null,
+            y === -1 ? FACE_COLORS[3] : null,
+            z === 1 ? FACE_COLORS[4] : null,
+            z === -1 ? FACE_COLORS[5] : null
+          ]
+        });
+      }
+
+  // One positive quarter turn of an integer vector about an axis
+  function rotQ(axis, v) {
+    const [x, y, z] = v;
+    if (axis === 0) return [x, -z, y];
+    if (axis === 1) return [z, y, -x];
+    return [-y, x, z];
+  }
+  function rotN(axis, v, n) {
+    n = ((n % 4) + 4) % 4;
+    for (let i = 0; i < n; i++) v = rotQ(axis, v);
+    return v;
+  }
+  function faceIndex(v) {
+    for (let i = 0; i < 6; i++) {
+      const n = FACE_N[i];
+      if (n[0] === v[0] && n[1] === v[1] && n[2] === v[2]) return i;
+    }
+    return -1;
+  }
+  function applyMove(m) {
+    for (const cb of cubies) {
+      if (cb.p[m.axis] !== m.layer) continue;
+      cb.p = rotN(m.axis, cb.p, m.dir);
+      const nc = [null, null, null, null, null, null];
+      for (let f = 0; f < 6; f++) {
+        if (!cb.c[f]) continue;
+        nc[faceIndex(rotN(m.axis, FACE_N[f], m.dir))] = cb.c[f];
+      }
+      cb.c = nc;
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Audio (Web Audio API, all synthesized)
+  // ------------------------------------------------------------------
+  let actx = null, master = null, noiseBuf = null;
+
+  function initAudio() {
+    if (actx) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    try {
+      actx = new AC();
+    } catch (e) { actx = null; return; }
+    master = actx.createGain();
+    master.gain.value = 0.55;
+    const comp = actx.createDynamicsCompressor();
+    comp.threshold.value = -14;
+    comp.knee.value = 12;
+    comp.ratio.value = 6;
+    comp.attack.value = 0.002;
+    comp.release.value = 0.12;
+    master.connect(comp);
+    comp.connect(actx.destination);
+    noiseBuf = actx.createBuffer(1, Math.floor(actx.sampleRate * 0.5), actx.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+  function tryStartAudio() {
+    initAudio();
+    if (actx && actx.state !== 'running') {
+      const p = actx.resume();
+      if (p && p.catch) p.catch(() => {});
+    }
+  }
+  function audioReady() { return !!actx && actx.state === 'running'; }
+
+  // Start immediately; if the browser blocks it, the first gesture unlocks it.
+  tryStartAudio();
+  ['pointerdown', 'keydown', 'touchend', 'click', 'mousedown'].forEach(ev =>
+    window.addEventListener(ev, tryStartAudio, { passive: true }));
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) tryStartAudio();
+  });
+
+  function noiseSource(t, dur) {
+    const src = actx.createBufferSource();
+    src.buffer = noiseBuf;
+    src.loop = true;
+    src.start(t);
+    src.stop(t + dur + 0.02);
+    return src;
+  }
+
+  // Crisp click: noise snap + high tick + short low thump
+  function playClick(strength) {
+    if (!audioReady()) return;
+    const t = actx.currentTime;
+    const s = strength || 1;
+
+    const src = noiseSource(t, 0.05);
+    const bp = actx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 3400 + Math.random() * 1000;
+    bp.Q.value = 1.1;
+    const ng = actx.createGain();
+    ng.gain.setValueAtTime(0.9 * s, t);
+    ng.gain.exponentialRampToValueAtTime(0.001, t + 0.03);
+    src.connect(bp); bp.connect(ng); ng.connect(master);
+
+    const o = actx.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(2700 + Math.random() * 400, t);
+    o.frequency.exponentialRampToValueAtTime(800, t + 0.035);
+    const og = actx.createGain();
+    og.gain.setValueAtTime(0.45 * s, t);
+    og.gain.exponentialRampToValueAtTime(0.001, t + 0.045);
+    o.connect(og); og.connect(master);
+    o.start(t); o.stop(t + 0.06);
+
+    const b = actx.createOscillator();
+    b.type = 'sine';
+    b.frequency.setValueAtTime(210, t);
+    b.frequency.exponentialRampToValueAtTime(75, t + 0.08);
+    const bg = actx.createGain();
+    bg.gain.setValueAtTime(0.0001, t);
+    bg.gain.linearRampToValueAtTime(0.75 * s, t + 0.004);
+    bg.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+    b.connect(bg); bg.connect(master);
+    b.start(t); b.stop(t + 0.12);
+  }
+
+  // Soft swish while a layer is turning
+  function playSwish(dur) {
+    if (!audioReady()) return;
+    const t = actx.currentTime;
+    const src = noiseSource(t, dur);
+    const lp = actx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.Q.value = 0.7;
+    lp.frequency.setValueAtTime(500, t);
+    lp.frequency.exponentialRampToValueAtTime(2600, t + dur * 0.45);
+    lp.frequency.exponentialRampToValueAtTime(600, t + dur);
+    const gn = actx.createGain();
+    gn.gain.setValueAtTime(0.0001, t);
+    gn.gain.exponentialRampToValueAtTime(0.11, t + dur * 0.3);
+    gn.gain.exponentialRampToValueAtTime(0.0005, t + dur);
+    src.connect(lp); lp.connect(gn); gn.connect(master);
+  }
+
+  // Low thunk when the scramble finishes
+  function playThud() {
+    if (!audioReady()) return;
+    const t = actx.currentTime;
+    const o = actx.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(140, t);
+    o.frequency.exponentialRampToValueAtTime(48, t + 0.25);
+    const gn = actx.createGain();
+    gn.gain.setValueAtTime(0.0001, t);
+    gn.gain.linearRampToValueAtTime(0.8, t + 0.008);
+    gn.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+    o.connect(gn); gn.connect(master);
+    o.start(t); o.stop(t + 0.32);
+
+    const src = noiseSource(t, 0.08);
+    const lp = actx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 900;
+    const ng = actx.createGain();
+    ng.gain.setValueAtTime(0.5, t);
+    ng.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+    src.connect(lp); lp.connect(ng); ng.connect(master);
+  }
+
+  // Bright rising chime when the cube is solved
+  function playChime() {
+    if (!audioReady()) return;
+    const t0 = actx.currentTime;
+    const notes = [523.25, 659.25, 783.99, 1046.5, 1318.51];
+    notes.forEach((f, i) => {
+      const t = t0 + i * 0.085;
+      const o = actx.createOscillator();
+      o.type = 'triangle';
+      o.frequency.value = f;
+      const o2 = actx.createOscillator();
+      o2.type = 'sine';
+      o2.frequency.value = f * 2;
+      const gn = actx.createGain();
+      gn.gain.setValueAtTime(0.0001, t);
+      gn.gain.linearRampToValueAtTime(0.22, t + 0.012);
+      gn.gain.exponentialRampToValueAtTime(0.001, t + 1.3);
+      const g2 = actx.createGain();
+      g2.gain.setValueAtTime(0.0001, t);
+      g2.gain.linearRampToValueAtTime(0.06, t + 0.012);
+      g2.gain.exponentialRampToValueAtTime(0.001, t + 0.7);
+      o.connect(gn); gn.connect(master);
+      o2.connect(g2); g2.connect(master);
+      o.start(t); o.stop(t + 1.4);
+      o2.start(t); o2.stop(t + 0.8);
+    });
+    // sparkle
+    const t = t0 + 0.4;
+    const src = noiseSource(t, 0.6);
+    const hp = actx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 6000;
+    const gn = actx.createGain();
+    gn.gain.setValueAtTime(0.0001, t);
+    gn.gain.linearRampToValueAtTime(0.07, t + 0.05);
+    gn.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+    src.connect(hp); hp.connect(gn); gn.connect(master);
+  }
+
+  // ------------------------------------------------------------------
+  // Scramble / solve sequencing
+  // ------------------------------------------------------------------
+  let phase = 'idle';
+  let queue = [];
+  let solveQueue = [];
+  let anim = null;
+  let wait = 1.0;
+  let solveIndex = 0, solveTotal = 1;
+  let spinBoost = 0, pulse = 0;
+
+  function randomScramble() {
+    const n = 18 + Math.floor(Math.random() * 7);
+    const moves = [];
+    let lastAxis = -1;
+    for (let i = 0; i < n; i++) {
+      let axis;
+      do { axis = Math.floor(Math.random() * 3); } while (axis === lastAxis);
+      lastAxis = axis;
+      const layer = Math.floor(Math.random() * 3) - 1;
+      const r = Math.random();
+      const dir = r < 0.42 ? 1 : r < 0.84 ? -1 : 2;
+      moves.push({ axis, layer, dir });
+    }
+    return moves;
+  }
+
+  function startMove(m, dur) {
+    anim = { move: m, axis: m.axis, layer: m.layer, dir: m.dir, dur, t: 0, angle: 0, clicked: false };
+    playSwish(dur * 0.9);
+  }
+
+  // Ease-out with a small overshoot so each turn snaps into place
+  const C1 = 0.3, C3 = C1 + 1;
+  function ease(u) {
+    const p = u - 1;
+    return 1 + C3 * p * p * p + C1 * p * p;
+  }
+  const SNAP_U = 1 - C1 / C3; // first moment the layer crosses its resting angle
+
+  function update(dt) {
+    if (anim) {
+      anim.t += dt;
+      const u = Math.min(1, anim.t / anim.dur);
+      anim.angle = anim.dir * (Math.PI / 2) * ease(u);
+      if (!anim.clicked && u >= SNAP_U) {
+        anim.clicked = true;
+        playClick(0.85 + Math.random() * 0.3);
+      }
+      if (u >= 1) {
+        applyMove(anim.move);
+        anim = null;
+        wait = phase === 'scramble' ? 0.04 : 0.07;
+      }
+      return;
+    }
+    if (wait > 0) { wait -= dt; return; }
+
+    if (phase === 'idle') {
+      queue = randomScramble();
+      solveQueue = queue.slice().reverse().map(m => ({ axis: m.axis, layer: m.layer, dir: -m.dir }));
+      solveTotal = solveQueue.length;
+      solveIndex = 0;
+      phase = 'scramble';
+    } else if (phase === 'scramble') {
+      if (queue.length) {
+        const m = queue.shift();
+        startMove(m, m.dir === 2 ? 0.3 : 0.2);
+      } else {
+        phase = 'solve';
+        wait = 1.1;
+        playThud();
+        pulse = 1;
+      }
+    } else if (phase === 'solve') {
+      if (solveQueue.length) {
+        const m = solveQueue.shift();
+        const k = solveIndex / Math.max(1, solveTotal - 1);
+        solveIndex++;
+        let dur = 0.42 - 0.2 * k; // thinks slowly, then accelerates
+        if (Math.abs(m.dir) === 2) dur *= 1.4;
+        startMove(m, dur);
+      } else {
+        phase = 'celebrate';
+        wait = 2.6;
+        playChime();
+        spinBoost = 5.5;
+        pulse = 1;
+      }
+    } else {
+      phase = 'idle';
+      wait = 0.3;
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Rendering
+  // ------------------------------------------------------------------
+  const colCache = {};
+  function rgb(hex) {
+    let c = colCache[hex];
+    if (!c) {
+      c = [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
+      colCache[hex] = c;
+    }
+    return c;
+  }
+  function shade(hex, k, spec) {
+    const c = rgb(hex);
+    const r = Math.min(255, c[0] * k + 255 * spec) | 0;
+    const gg = Math.min(255, c[1] * k + 255 * spec) | 0;
+    const b = Math.min(255, c[2] * k + 255 * spec) | 0;
+    return 'rgb(' + r + ',' + gg + ',' + b + ')';
+  }
+
+  const LIGHT = norm([-0.5, 0.9, 0.85]);
+  const HALF = norm([LIGHT[0], LIGHT[1], LIGHT[2] + 1]);
+  const CORNER_SIGNS = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+  const D = 9; // camera distance
+
+  let yaw = 0.7, pitch = 0.5, timeAcc = 0;
+
+  function project(v, f, cx, cy) {
+    const s = f / (D - v[2]);
+    return [cx + v[0] * s, cy - v[1] * s];
+  }
+
+  function render() {
+    g.setTransform(DPR, 0, 0, DPR, 0, 0);
+    g.clearRect(0, 0, W, H);
+
+    const minD = Math.min(W, H);
+    const scale = 1 + 0.05 * pulse * Math.sin(pulse * Math.PI * 2);
+    const f = minD * 1.5 * scale;
+    const cx = W / 2;
+    const cy = H / 2 + Math.sin(timeAcc * 1.1) * minD * 0.012;
+
+    const V = mulMM(rotMat(0, pitch), rotMat(1, yaw));
+    const VL = anim ? mulMM(V, rotMat(anim.axis, anim.angle)) : null;
+
+    const items = [];
+    for (const cb of cubies) {
+      const moving = anim && cb.p[anim.axis] === anim.layer;
+      const M = moving ? VL : V;
+      const c = mulMV(M, cb.p);
+      items.push({ cb, M, z: c[2] });
+    }
+    items.sort((a, b) => a.z - b.z);
+
+    g.lineJoin = 'round';
+    const h = 0.5;
+    const corners = new Array(4);
+    const scorn = new Array(4);
+
+    for (const it of items) {
+      const cb = it.cb, M = it.M, p = cb.p;
+      for (let fi = 0; fi < 6; fi++) {
+        const n = FACE_N[fi];
+        const u = FACE_UV[fi][0], v = FACE_UV[fi][1];
+        const bx = p[0] + n[0] * h, by = p[1] + n[1] * h, bz = p[2] + n[2] * h;
+
+        for (let k = 0; k < 4; k++) {
+          const su = CORNER_SIGNS[k][0] * h, sv = CORNER_SIGNS[k][1] * h;
+          const w = mulMV(M, [bx + su * u[0] + sv * v[0], by + su * u[1] + sv * v[1], bz + su * u[2] + sv * v[2]]);
+          corners[k] = project(w, f, cx, cy);
+        }
+        // Backface cull via screen winding (front faces wind negative in y-down coords)
+        let area = 0;
+        for (let k = 0; k < 4; k++) {
+          const a = corners[k], b = corners[(k + 1) & 3];
+          area += a[0] * b[1] - b[0] * a[1];
+        }
+        if (area >= 0) continue;
+
+        const nv = mulMV(M, n);
+        const lam = Math.max(0, dot(nv, LIGHT));
+        const kk = 0.5 + 0.5 * lam;
+        const spec = Math.pow(Math.max(0, dot(nv, HALF)), 26) * 0.3;
+
+        // Plastic body
+        g.fillStyle = shade(BODY, 0.6 + 0.4 * lam, spec * 0.5);
+        g.strokeStyle = g.fillStyle;
+        g.lineWidth = 1;
+        g.beginPath();
+        g.moveTo(corners[0][0], corners[0][1]);
+        for (let k = 1; k < 4; k++) g.lineTo(corners[k][0], corners[k][1]);
+        g.closePath();
+        g.fill();
+        g.stroke();
+
+        // Sticker
+        const col = cb.c[fi];
+        if (!col) continue;
+        const inset = 0.78;
+        for (let k = 0; k < 4; k++) {
+          const su = CORNER_SIGNS[k][0] * h * inset, sv = CORNER_SIGNS[k][1] * h * inset;
+          const w = mulMV(M, [bx + su * u[0] + sv * v[0], by + su * u[1] + sv * v[1], bz + su * u[2] + sv * v[2]]);
+          scorn[k] = project(w, f, cx, cy);
+        }
+        const edgePx = Math.sqrt(Math.abs(area)) ;
+        g.fillStyle = shade(col, kk, spec);
+        g.strokeStyle = g.fillStyle;
+        g.lineWidth = Math.max(1, edgePx * 0.11);
+        g.beginPath();
+        g.moveTo(scorn[0][0], scorn[0][1]);
+        for (let k = 1; k < 4; k++) g.lineTo(scorn[k][0], scorn[k][1]);
+        g.closePath();
+        g.fill();
+        g.stroke();
+      }
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Main loop
+  // ------------------------------------------------------------------
+  let last = performance.now();
+  function frame(now) {
+    let dt = (now - last) / 1000;
+    last = now;
+    if (dt > 0.05) dt = 0.05;
+    if (dt < 0) dt = 0;
+    timeAcc += dt;
+
+    update(dt);
+
+    yaw += dt * (0.32 + spinBoost);
+    spinBoost *= Math.exp(-dt * 2.2);
+    pitch = 0.48 + 0.2 * Math.sin(timeAcc * 0.33);
+    pulse = Math.max(0, pulse - dt * 1.6);
+
+    render();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

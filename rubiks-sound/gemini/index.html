@@ -1,0 +1,1182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>&#8203;</title>
+<style>
+  *, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #080b12;
+    touch-action: none;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<script>
+(() => {
+  'use strict';
+
+  const canvas = document.getElementById('stage');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  // ============================================================================
+  // WEB AUDIO SYNTHESIZER (Mechanical Speedcube + Magnetic Clicks + Harmonics)
+  // ============================================================================
+  class CubeAudio {
+    constructor() {
+      this.ctx = null;
+      this.master = null;
+      this.noiseBuffer = null;
+      this.initAudio();
+      this.bindUnlock();
+    }
+
+    initAudio() {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      try {
+        this.ctx = new AudioCtx();
+        this.master = this.ctx.createGain();
+        this.master.gain.value = 0.85;
+
+        // Subtle stereo room ambience via short delay feedback
+        const wetGain = this.ctx.createGain();
+        wetGain.gain.value = 0.14;
+        const delayL = this.ctx.createDelay();
+        const delayR = this.ctx.createDelay();
+        delayL.delayTime.value = 0.023;
+        delayR.delayTime.value = 0.037;
+        const roomFilter = this.ctx.createBiquadFilter();
+        roomFilter.type = 'lowpass';
+        roomFilter.frequency.value = 2800;
+
+        this.master.connect(this.ctx.destination);
+        this.master.connect(delayL);
+        delayL.connect(delayR);
+        delayR.connect(roomFilter);
+        roomFilter.connect(wetGain);
+        wetGain.connect(this.ctx.destination);
+
+        // Pre-generate 1 second of white noise buffer for crisp transients & friction
+        const sr = this.ctx.sampleRate;
+        this.noiseBuffer = this.ctx.createBuffer(1, sr, sr);
+        const data = this.noiseBuffer.getChannelData(0);
+        for (let i = 0; i < sr; i++) {
+          data[i] = Math.random() * 2 - 1;
+        }
+
+        if (this.ctx.state === 'suspended') {
+          this.ctx.resume().catch(() => {});
+        }
+      } catch (e) {
+        // Ignore if audio context creation fails until user gesture
+      }
+    }
+
+    ensureReady() {
+      if (!this.ctx) {
+        this.initAudio();
+      }
+      if (this.ctx && this.ctx.state === 'suspended') {
+        this.ctx.resume().catch(() => {});
+      }
+      return this.ctx && this.ctx.state === 'running';
+    }
+
+    bindUnlock() {
+      const unlock = () => {
+        if (!this.ctx) this.initAudio();
+        if (this.ctx && this.ctx.state !== 'running') {
+          this.ctx.resume().catch(() => {});
+        }
+      };
+      const events = ['pointerdown', 'mousedown', 'touchstart', 'keydown', 'click'];
+      events.forEach(ev => window.addEventListener(ev, unlock, { passive: true, capture: true }));
+    }
+
+    // Soft plastic rotational whoosh at the start of a slice turn
+    playSlideStart(pitchFactor = 1.0) {
+      if (!this.ensureReady()) return;
+      const now = this.ctx.currentTime;
+
+      const src = this.ctx.createBufferSource();
+      src.buffer = this.noiseBuffer;
+
+      const band = this.ctx.createBiquadFilter();
+      band.type = 'bandpass';
+      band.Q.value = 3.2;
+      band.frequency.setValueAtTime(520 * pitchFactor, now);
+      band.frequency.exponentialRampToValueAtTime(1450 * pitchFactor, now + 0.085);
+
+      const gain = this.ctx.createGain();
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.linearRampToValueAtTime(0.065, now + 0.022);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.095);
+
+      src.connect(band);
+      band.connect(gain);
+      gain.connect(this.master);
+
+      src.start(now, Math.random() * 0.5, 0.11);
+    }
+
+    // Subtle internal corner-cutting tick mid-turn
+    playMidDetent(pitchFactor = 1.0) {
+      if (!this.ensureReady()) return;
+      const now = this.ctx.currentTime;
+
+      const osc = this.ctx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(1650 * pitchFactor, now);
+      osc.frequency.exponentialRampToValueAtTime(620 * pitchFactor, now + 0.012);
+
+      const gain = this.ctx.createGain();
+      gain.gain.setValueAtTime(0.045, now);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.013);
+
+      osc.connect(gain);
+      gain.connect(this.master);
+      osc.start(now);
+      osc.stop(now + 0.015);
+    }
+
+    // Main crisp, satisfying magnetic speedcube click when locking into 90 degrees
+    playTurnClick(options = {}) {
+      if (!this.ensureReady()) return;
+      const now = this.ctx.currentTime;
+      const jitter = 0.97 + Math.random() * 0.06;
+      const solveProgress = options.solveProgress || 0; // 0..1 during solve
+      const isFinalSolve = !!options.isFinalSolve;
+
+      // 1. Razor-sharp high-frequency plastic latch snap (transient noise burst)
+      const noiseSrc = this.ctx.createBufferSource();
+      noiseSrc.buffer = this.noiseBuffer;
+
+      const hp = this.ctx.createBiquadFilter();
+      hp.type = 'bandpass';
+      hp.frequency.setValueAtTime(3600 * jitter, now);
+      hp.Q.value = 1.8;
+
+      const noiseGain = this.ctx.createGain();
+      noiseGain.gain.setValueAtTime(0.55, now);
+      noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.009);
+
+      noiseSrc.connect(hp);
+      hp.connect(noiseGain);
+      noiseGain.connect(this.master);
+      noiseSrc.start(now, Math.random() * 0.6, 0.015);
+
+      // 2. Primary hollow ABS cubie shell resonance ("clack" body)
+      const bodyOsc1 = this.ctx.createOscillator();
+      bodyOsc1.type = 'triangle';
+      const baseF1 = (1040 + solveProgress * 180) * jitter;
+      bodyOsc1.frequency.setValueAtTime(baseF1, now);
+      bodyOsc1.frequency.exponentialRampToValueAtTime(340 * jitter, now + 0.021);
+
+      const bodyGain1 = this.ctx.createGain();
+      bodyGain1.gain.setValueAtTime(0.42, now);
+      bodyGain1.gain.exponentialRampToValueAtTime(0.0008, now + 0.024);
+
+      bodyOsc1.connect(bodyGain1);
+      bodyGain1.connect(this.master);
+      bodyOsc1.start(now);
+      bodyOsc1.stop(now + 0.026);
+
+      // 3. Secondary woody/plastic high harmonic click
+      const bodyOsc2 = this.ctx.createOscillator();
+      bodyOsc2.type = 'sine';
+      const baseF2 = (2380 + solveProgress * 320) * jitter;
+      bodyOsc2.frequency.setValueAtTime(baseF2, now);
+      bodyOsc2.frequency.exponentialRampToValueAtTime(790 * jitter, now + 0.012);
+
+      const bodyGain2 = this.ctx.createGain();
+      bodyGain2.gain.setValueAtTime(0.28, now);
+      bodyGain2.gain.exponentialRampToValueAtTime(0.0008, now + 0.014);
+
+      bodyOsc2.connect(bodyGain2);
+      bodyGain2.connect(this.master);
+      bodyOsc2.start(now);
+      bodyOsc2.stop(now + 0.016);
+
+      // 4. Magnetic capsule thud (low-end weight)
+      const magOsc = this.ctx.createOscillator();
+      magOsc.type = 'sine';
+      magOsc.frequency.setValueAtTime(230 * jitter, now);
+      magOsc.frequency.exponentialRampToValueAtTime(68 * jitter, now + 0.032);
+
+      const magGain = this.ctx.createGain();
+      magGain.gain.setValueAtTime(0.32, now);
+      magGain.gain.exponentialRampToValueAtTime(0.001, now + 0.036);
+
+      magOsc.connect(magGain);
+      magGain.connect(this.master);
+      magOsc.start(now);
+      magOsc.stop(now + 0.038);
+
+      // 5. Micro-rebound secondary settle tick (19ms later when spring settles)
+      const settleDelay = 0.019;
+      const settleOsc = this.ctx.createOscillator();
+      settleOsc.type = 'triangle';
+      settleOsc.frequency.setValueAtTime(1480 * jitter, now + settleDelay);
+      settleOsc.frequency.exponentialRampToValueAtTime(580 * jitter, now + settleDelay + 0.009);
+
+      const settleGain = this.ctx.createGain();
+      settleGain.gain.setValueAtTime(0.0001, now);
+      settleGain.gain.setValueAtTime(0.11, now + settleDelay);
+      settleGain.gain.exponentialRampToValueAtTime(0.0005, now + settleDelay + 0.010);
+
+      settleOsc.connect(settleGain);
+      settleGain.connect(this.master);
+      settleOsc.start(now + settleDelay);
+      settleOsc.stop(now + settleDelay + 0.012);
+
+      // 6. Subtle pitched crystalline resonance during solve phase
+      if (solveProgress > 0) {
+        const scale = [523.25, 587.33, 659.25, 783.99, 880.0, 1046.5, 1174.66, 1318.51, 1567.98, 1760.0, 2093.0];
+        const idx = Math.min(scale.length - 1, Math.floor(solveProgress * scale.length));
+        const freq = scale[idx];
+
+        const ping = this.ctx.createOscillator();
+        ping.type = 'sine';
+        ping.frequency.setValueAtTime(freq, now);
+
+        const pingGain = this.ctx.createGain();
+        const peak = 0.018 + solveProgress * 0.045;
+        pingGain.gain.setValueAtTime(peak, now);
+        pingGain.gain.exponentialRampToValueAtTime(0.0002, now + 0.16);
+
+        ping.connect(pingGain);
+        pingGain.connect(this.master);
+        ping.start(now);
+        ping.stop(now + 0.17);
+      }
+
+      // 7. Final solve completion harmonic lock shimmer
+      if (isFinalSolve) {
+        const chord = [523.25, 659.25, 783.99, 1046.5, 1567.98];
+        chord.forEach((freq, i) => {
+          const osc = this.ctx.createOscillator();
+          osc.type = i % 2 === 0 ? 'sine' : 'triangle';
+          const startT = now + 0.012 + i * 0.018;
+          osc.frequency.setValueAtTime(freq, startT);
+
+          const g = this.ctx.createGain();
+          g.gain.setValueAtTime(0.0001, startT);
+          g.gain.linearRampToValueAtTime(0.055 / (1 + i * 0.25), startT + 0.015);
+          g.gain.exponentialRampToValueAtTime(0.0001, startT + 0.75);
+
+          osc.connect(g);
+          g.connect(this.master);
+          osc.start(startT);
+          osc.stop(startT + 0.78);
+        });
+      }
+    }
+  }
+
+  const audio = new CubeAudio();
+
+  // ============================================================================
+  // VIVID SATURATED COLOR PALETTE (Optimized for Phone Screens & High Contrast)
+  // ============================================================================
+  const FACE_COLORS = {
+    PX: { hex: '#FF1744', r: 255, g: 23,  b: 68  }, // Right (+X): Vivid Crimson Red
+    NX: { hex: '#FF6D00', r: 255, g: 109, b: 0   }, // Left  (-X): Blazing Tangerine Orange
+    PY: { hex: '#F8FAFF', r: 248, g: 250, b: 255 }, // Up    (+Y): Crisp Pearl White
+    NY: { hex: '#FFD600', r: 255, g: 214, b: 0   }, // Down  (-Y): Electric Cyber Yellow
+    PZ: { hex: '#00E676', r: 0,   g: 230, b: 118 }, // Front (+Z): Saturated Emerald Green
+    NZ: { hex: '#2979FF', r: 41,  g: 121, b: 255 }  // Back  (-Z): Vivid Cobalt Blue
+  };
+
+  const PLASTIC_BASE = { r: 20, g: 24, b: 34 };
+  const PLASTIC_BEVEL = { r: 30, g: 36, b: 50 };
+
+  // ============================================================================
+  // 3D MATH UTILITIES
+  // ============================================================================
+  function vec3(x = 0, y = 0, z = 0) {
+    return { x, y, z };
+  }
+
+  function add3(a, b) {
+    return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
+  }
+
+  function sub3(a, b) {
+    return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
+  }
+
+  function scale3(v, s) {
+    return { x: v.x * s, y: v.y * s, z: v.z * s };
+  }
+
+  function dot3(a, b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+  }
+
+  function cross3(a, b) {
+    return {
+      x: a.y * b.z - a.z * b.y,
+      y: a.z * b.x - a.x * b.z,
+      z: a.x * b.y - a.y * b.x
+    };
+  }
+
+  function norm3(v) {
+    const len = Math.hypot(v.x, v.y, v.z) || 1;
+    return { x: v.x / len, y: v.y / len, z: v.z / len };
+  }
+
+  function mat3Identity() {
+    return [
+      1, 0, 0,
+      0, 1, 0,
+      0, 0, 1
+    ];
+  }
+
+  function mat3Mul(A, B) {
+    return [
+      A[0]*B[0] + A[1]*B[3] + A[2]*B[6],
+      A[0]*B[1] + A[1]*B[4] + A[2]*B[7],
+      A[0]*B[2] + A[1]*B[5] + A[2]*B[8],
+
+      A[3]*B[0] + A[4]*B[3] + A[5]*B[6],
+      A[3]*B[1] + A[4]*B[4] + A[5]*B[7],
+      A[3]*B[2] + A[4]*B[5] + A[5]*B[8],
+
+      A[6]*B[0] + A[7]*B[3] + A[8]*B[6],
+      A[6]*B[1] + A[7]*B[4] + A[8]*B[7],
+      A[6]*B[2] + A[7]*B[5] + A[8]*B[8]
+    ];
+  }
+
+  function mat3Transform(M, v) {
+    return {
+      x: M[0]*v.x + M[1]*v.y + M[2]*v.z,
+      y: M[3]*v.x + M[4]*v.y + M[5]*v.z,
+      z: M[6]*v.x + M[7]*v.y + M[8]*v.z
+    };
+  }
+
+  // Continuous rotation matrix around primary axis (0=X, 1=Y, 2=Z)
+  function mat3AxisAngle(axis, angle) {
+    const c = Math.cos(angle);
+    const s = Math.sin(angle);
+    if (axis === 0) {
+      return [
+        1,  0,  0,
+        0,  c, -s,
+        0,  s,  c
+      ];
+    } else if (axis === 1) {
+      return [
+         c, 0,  s,
+         0, 1,  0,
+        -s, 0,  c
+      ];
+    } else {
+      return [
+        c, -s, 0,
+        s,  c, 0,
+        0,  0, 1
+      ];
+    }
+  }
+
+  // Exact integer 90-degree rotation matrix (dir = +1 or -1) for zero drift
+  function mat3Exact90(axis, dir) {
+    const s = dir > 0 ? 1 : -1;
+    if (axis === 0) {
+      return [
+        1,  0,  0,
+        0,  0, -s,
+        0,  s,  0
+      ];
+    } else if (axis === 1) {
+      return [
+         0, 0,  s,
+         0, 1,  0,
+        -s, 0,  0
+      ];
+    } else {
+      return [
+        0, -s, 0,
+        s,  0, 0,
+        0,  0, 1
+      ];
+    }
+  }
+
+  // ============================================================================
+  // CHAMFERED 3D CUBIE & ROUNDED STICKER TEMPLATE GEOMETRY
+  // ============================================================================
+  // A single cubie lives in [-H, H]^3 where H = 0.486 (leaving a crisp mechanical seam)
+  const CUBIE_HALF = 0.488;
+  const BEVEL_INSET = 0.072;
+  const INNER = CUBIE_HALF - BEVEL_INSET;
+
+  // Generate a rounded square in 2D [-size, size]^2 with corner radius r
+  function makeRoundedSquare2D(size, radius, segmentsPerCorner = 3) {
+    const pts = [];
+    const inner = size - radius;
+    const corners = [
+      { cx:  inner, cy:  inner, a0: 0 },
+      { cx: -inner, cy:  inner, a0: Math.PI * 0.5 },
+      { cx: -inner, cy: -inner, a0: Math.PI },
+      { cx:  inner, cy: -inner, a0: Math.PI * 1.5 }
+    ];
+    for (let c = 0; c < 4; c++) {
+      const { cx, cy, a0 } = corners[c];
+      for (let i = 0; i <= segmentsPerCorner; i++) {
+        const ang = a0 + (i / segmentsPerCorner) * (Math.PI * 0.5);
+        pts.push({
+          u: cx + Math.cos(ang) * radius,
+          v: cy + Math.sin(ang) * radius
+        });
+      }
+    }
+    return pts;
+  }
+
+  const STICKER_2D = makeRoundedSquare2D(0.392, 0.068, 3);
+  const STICKER_RIM_2D = makeRoundedSquare2D(0.408, 0.076, 3);
+
+  // Build the 26 faces of a beveled/chamfered cubie (6 main faces, 12 edge chamfers, 8 corner chamfers)
+  function buildCubieTemplate() {
+    const H = CUBIE_HALF;
+    const I = INNER;
+    const faces = [];
+
+    // Helper to map (u, v, w) to 3D given basis (uAxis, vAxis, nAxis)
+    function mapBasis(u, v, w, uA, vA, nA) {
+      return {
+        x: u * uA.x + v * vA.x + w * nA.x,
+        y: u * uA.y + v * vA.y + w * nA.y,
+        z: u * uA.z + v * vA.z + w * nA.z
+      };
+    }
+
+    const mainDefs = [
+      { id: 'PX', gx:  1, gy:  0, gz:  0, n: vec3( 1,  0,  0), u: vec3( 0,  1,  0), v: vec3( 0,  0,  1) },
+      { id: 'NX', gx: -1, gy:  0, gz:  0, n: vec3(-1,  0,  0), u: vec3( 0,  0,  1), v: vec3( 0,  1,  0) },
+      { id: 'PY', gx:  0, gy:  1, gz:  0, n: vec3( 0,  1,  0), u: vec3( 0,  0,  1), v: vec3( 1,  0,  0) },
+      { id: 'NY', gx:  0, gy: -1, gz:  0, n: vec3( 0, -1,  0), u: vec3( 1,  0,  0), v: vec3( 0,  0,  1) },
+      { id: 'PZ', gx:  0, gy:  0, gz:  1, n: vec3( 0,  0,  1), u: vec3( 1,  0,  0), v: vec3( 0,  1,  0) },
+      { id: 'NZ', gx:  0, gy:  0, gz: -1, n: vec3( 0,  0, -1), u: vec3( 0,  1,  0), v: vec3( 1,  0,  0) }
+    ];
+
+    // 6 Main Flat Faces
+    for (const def of mainDefs) {
+      const verts = [
+        mapBasis( I,  I, H, def.u, def.v, def.n),
+        mapBasis(-I,  I, H, def.u, def.v, def.n),
+        mapBasis(-I, -I, H, def.u, def.v, def.n),
+        mapBasis( I, -I, H, def.u, def.v, def.n)
+      ];
+      const stickerVerts = STICKER_2D.map(p => mapBasis(p.u, p.v, H + 0.0025, def.u, def.v, def.n));
+      const stickerRimVerts = STICKER_RIM_2D.map(p => mapBasis(p.u, p.v, H + 0.0012, def.u, def.v, def.n));
+      faces.push({
+        type: 'main',
+        id: def.id,
+        gx: def.gx,
+        gy: def.gy,
+        gz: def.gz,
+        normal: def.n,
+        center: scale3(def.n, H),
+        verts,
+        stickerVerts,
+        stickerRimVerts
+      });
+    }
+
+    // Helper to create chamfer polygon with guaranteed outward winding
+    function addChamfer(verts, rawNormal) {
+      const n = norm3(rawNormal);
+      const center = verts.reduce((acc, v) => add3(acc, v), vec3(0, 0, 0));
+      center.x /= verts.length;
+      center.y /= verts.length;
+      center.z /= verts.length;
+
+      // Ensure CCW winding with respect to outward normal
+      const e1 = sub3(verts[1], verts[0]);
+      const e2 = sub3(verts[2], verts[0]);
+      const cr = cross3(e1, e2);
+      if (dot3(cr, n) < 0) {
+        verts.reverse();
+      }
+      faces.push({
+        type: 'bevel',
+        normal: n,
+        center,
+        verts
+      });
+    }
+
+    // 12 Edge Chamfer Quads
+    // Edges parallel to X, Y, Z axes
+    const signs = [-1, 1];
+    for (const s1 of signs) {
+      for (const s2 of signs) {
+        // Parallel to X (y = s1, z = s2)
+        addChamfer([
+          vec3(-I, s1 * H, s2 * I),
+          vec3( I, s1 * H, s2 * I),
+          vec3( I, s1 * I, s2 * H),
+          vec3(-I, s1 * I, s2 * H)
+        ], vec3(0, s1, s2));
+
+        // Parallel to Y (x = s1, z = s2)
+        addChamfer([
+          vec3(s1 * H, -I, s2 * I),
+          vec3(s1 * H,  I, s2 * I),
+          vec3(s1 * I,  I, s2 * H),
+          vec3(s1 * I, -I, s2 * H)
+        ], vec3(s1, 0, s2));
+
+        // Parallel to Z (x = s1, y = s2)
+        addChamfer([
+          vec3(s1 * H, s2 * I, -I),
+          vec3(s1 * H, s2 * I,  I),
+          vec3(s1 * I, s2 * H,  I),
+          vec3(s1 * I, s2 * H, -I)
+        ], vec3(s1, s2, 0));
+      }
+    }
+
+    // 8 Corner Chamfer Triangles
+    for (const sx of signs) {
+      for (const sy of signs) {
+        for (const sz of signs) {
+          addChamfer([
+            vec3(sx * H, sy * I, sz * I),
+            vec3(sx * I, sy * H, sz * I),
+            vec3(sx * I, sy * I, sz * H)
+          ], vec3(sx, sy, sz));
+        }
+      }
+    }
+
+    return faces;
+  }
+
+  const CUBIE_TEMPLATE = buildCubieTemplate();
+
+  // ============================================================================
+  // RUBIK'S CUBE STATE & CHOREOGRAPHY CONTROLLER
+  // ============================================================================
+  const cubies = [];
+  for (let x = -1; x <= 1; x++) {
+    for (let y = -1; y <= 1; y++) {
+      for (let z = -1; z <= 1; z++) {
+        const stickers = {};
+        if (x ===  1) stickers.PX = FACE_COLORS.PX;
+        if (x === -1) stickers.NX = FACE_COLORS.NX;
+        if (y ===  1) stickers.PY = FACE_COLORS.PY;
+        if (y === -1) stickers.NY = FACE_COLORS.NY;
+        if (z ===  1) stickers.PZ = FACE_COLORS.PZ;
+        if (z === -1) stickers.NZ = FACE_COLORS.NZ;
+
+        cubies.push({
+          pos: { x, y, z },
+          homePos: { x, y, z },
+          rot: mat3Identity(),
+          stickers
+        });
+      }
+    }
+  }
+
+  function applyDiscreteMove(move) {
+    const { axis, layer, dir } = move;
+    const R = mat3Exact90(axis, dir);
+    const axisKey = axis === 0 ? 'x' : (axis === 1 ? 'y' : 'z');
+
+    for (const c of cubies) {
+      if (c.pos[axisKey] === layer) {
+        const np = mat3Transform(R, c.pos);
+        c.pos.x = Math.round(np.x);
+        c.pos.y = Math.round(np.y);
+        c.pos.z = Math.round(np.z);
+        c.rot = mat3Mul(R, c.rot);
+      }
+    }
+  }
+
+  // Generate a clean, non-redundant sequence of scramble moves
+  const SCRAMBLE_LENGTH = 14;
+  function generateScrambleSequence(count) {
+    const moves = [];
+    let lastAxis = -1;
+    let secondLastAxis = -1;
+    let lastLayer = 0;
+
+    for (let i = 0; i < count; i++) {
+      let axis, layer;
+      do {
+        axis = Math.floor(Math.random() * 3);
+        layer = Math.random() < 0.5 ? -1 : 1;
+      } while (
+        (axis === lastAxis && layer === lastLayer) ||
+        (axis === lastAxis && axis === secondLastAxis)
+      );
+
+      const dir = Math.random() < 0.5 ? 1 : -1;
+      moves.push({ axis, layer, dir });
+      secondLastAxis = lastAxis;
+      lastAxis = axis;
+      lastLayer = layer;
+    }
+    return moves;
+  }
+
+  // Animation state machine:
+  // 'SHOWCASE_SOLVED' -> 'SCRAMBLING' -> 'PAUSE_SCRAMBLED' -> 'SOLVING' -> 'SHOWCASE_SOLVED'
+  let phase = 'INITIAL_GLIDE';
+  let phaseTimer = 0;
+  let scrambleHistory = [];
+  let moveQueue = [];
+  let activeMove = null;
+  let totalPhaseMoves = SCRAMBLE_LENGTH;
+  let completedPhaseMoves = 0;
+
+  // Celebration particles & light wave when solved
+  const particles = [];
+  let solveGleamTime = -10;
+  let cameraKick = { x: 0, y: 0, z: 0 };
+
+  function spawnSolveParticles() {
+    const palette = Object.values(FACE_COLORS);
+    for (let i = 0; i < 48; i++) {
+      const col = palette[i % palette.length];
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      const speed = 2.4 + Math.random() * 3.8;
+      const dir = {
+        x: Math.sin(phi) * Math.cos(theta),
+        y: Math.sin(phi) * Math.sin(theta),
+        z: Math.cos(phi)
+      };
+      particles.push({
+        pos: scale3(dir, 1.55),
+        vel: scale3(dir, speed),
+        color: col,
+        size: 0.045 + Math.random() * 0.055,
+        life: 0,
+        maxLife: 0.75 + Math.random() * 0.55
+      });
+    }
+  }
+
+  function startNewScramble() {
+    phase = 'SCRAMBLING';
+    scrambleHistory = generateScrambleSequence(SCRAMBLE_LENGTH);
+    moveQueue = scrambleHistory.map(m => ({ ...m }));
+    totalPhaseMoves = moveQueue.length;
+    completedPhaseMoves = 0;
+    startNextQueuedMove();
+  }
+
+  function startSolveSequence() {
+    phase = 'SOLVING';
+    // Reverse the scramble sequence and invert each turn direction
+    moveQueue = scrambleHistory
+      .slice()
+      .reverse()
+      .map(m => ({ axis: m.axis, layer: m.layer, dir: -m.dir }));
+    totalPhaseMoves = moveQueue.length;
+    completedPhaseMoves = 0;
+    startNextQueuedMove();
+  }
+
+  function startNextQueuedMove() {
+    if (moveQueue.length === 0) {
+      activeMove = null;
+      return;
+    }
+    const next = moveQueue.shift();
+    const isSolving = phase === 'SOLVING';
+    const duration = isSolving ? 0.285 : 0.255;
+
+    activeMove = {
+      ...next,
+      elapsed: 0,
+      duration,
+      pauseAfter: isSolving ? 0.038 : 0.028,
+      slidePlayed: false,
+      midPlayed: false,
+      clickPlayed: false
+    };
+
+    const pitchFactor = isSolving
+      ? 0.96 + (completedPhaseMoves / Math.max(1, totalPhaseMoves)) * 0.16
+      : 0.94 + Math.random() * 0.12;
+    audio.playSlideStart(pitchFactor);
+    activeMove.slidePlayed = true;
+  }
+
+  // Mechanical speedcube turn curve:
+  // Smooth torque acceleration -> hits 90° snap point at t = 0.80 -> tiny 2.4° magnetic overshoot -> crisp settle at 1.0
+  const CLICK_POINT = 0.80;
+  function evaluateTurnCurve(u) {
+    if (u <= 0) return 0;
+    if (u >= 1) return 1;
+    if (u < CLICK_POINT) {
+      const t = u / CLICK_POINT;
+      // Fast cubic-quartic whip into the magnetic catch
+      return t < 0.45
+        ? 2.2 * t * t
+        : 1 - Math.pow(1 - t, 2.8) * 0.996;
+    } else {
+      // Damped mechanical micro-overshoot & magnetic settle after hitting 90 degrees
+      const s = (u - CLICK_POINT) / (1 - CLICK_POINT);
+      const overshoot = Math.sin(s * Math.PI * 1.35) * Math.exp(-3.8 * s) * 0.029;
+      return 1 + overshoot;
+    }
+  }
+
+  function updateChoreography(dt) {
+    // Decay camera micro-kick
+    cameraKick.x *= Math.exp(-14 * dt);
+    cameraKick.y *= Math.exp(-14 * dt);
+    cameraKick.z *= Math.exp(-14 * dt);
+
+    // Update celebration particles
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.life += dt;
+      if (p.life >= p.maxLife) {
+        particles.splice(i, 1);
+        continue;
+      }
+      p.pos.x += p.vel.x * dt;
+      p.pos.y += p.vel.y * dt;
+      p.pos.z += p.vel.z * dt;
+      p.vel.x *= Math.exp(-2.8 * dt);
+      p.vel.y *= Math.exp(-2.8 * dt);
+      p.vel.z *= Math.exp(-2.8 * dt);
+    }
+
+    if (phase === 'INITIAL_GLIDE') {
+      phaseTimer += dt;
+      // Start scrambling almost immediately (0.35s) while already rotating from frame 0
+      if (phaseTimer >= 0.35) {
+        phaseTimer = 0;
+        startNewScramble();
+      }
+      return;
+    }
+
+    if (phase === 'PAUSE_SCRAMBLED') {
+      phaseTimer += dt;
+      if (phaseTimer >= 0.58) {
+        phaseTimer = 0;
+        startSolveSequence();
+      }
+      return;
+    }
+
+    if (phase === 'SHOWCASE_SOLVED') {
+      phaseTimer += dt;
+      if (phaseTimer >= 1.95) {
+        phaseTimer = 0;
+        startNewScramble();
+      }
+      return;
+    }
+
+    if (activeMove) {
+      activeMove.elapsed += dt;
+      const u = Math.min(1, activeMove.elapsed / activeMove.duration);
+
+      // Mid-turn internal corner-cutting tick at 44%
+      if (!activeMove.midPlayed && u >= 0.44) {
+        activeMove.midPlayed = true;
+        audio.playMidDetent(0.95 + Math.random() * 0.1);
+      }
+
+      // Main crisp click right as the slice impacts the 90-degree magnetic stop
+      if (!activeMove.clickPlayed && u >= CLICK_POINT) {
+        activeMove.clickPlayed = true;
+        const isSolving = phase === 'SOLVING';
+        const isFinalSolve = isSolving && moveQueue.length === 0;
+        const solveProgress = isSolving
+          ? (completedPhaseMoves + 1) / Math.max(1, totalPhaseMoves)
+          : 0;
+
+        audio.playTurnClick({ solveProgress, isFinalSolve });
+
+        // Subtle tactile impulse in the floating cube suspension
+        const kickStrength = isFinalSolve ? 0.055 : 0.028;
+        if (activeMove.axis === 0) cameraKick.y += activeMove.dir * kickStrength;
+        if (activeMove.axis === 1) cameraKick.x -= activeMove.dir * kickStrength;
+        if (activeMove.axis === 2) cameraKick.z += activeMove.dir * kickStrength;
+
+        if (isFinalSolve) {
+          solveGleamTime = performance.now() * 0.001;
+          spawnSolveParticles();
+        }
+      }
+
+      // Complete turn + brief inter-turn beat
+      if (activeMove.elapsed >= activeMove.duration + activeMove.pauseAfter) {
+        applyDiscreteMove(activeMove);
+        completedPhaseMoves++;
+
+        if (moveQueue.length > 0) {
+          startNextQueuedMove();
+        } else {
+          activeMove = null;
+          phaseTimer = 0;
+          if (phase === 'SCRAMBLING') {
+            phase = 'PAUSE_SCRAMBLED';
+          } else if (phase === 'SOLVING') {
+            phase = 'SHOWCASE_SOLVED';
+          }
+        }
+      }
+    }
+  }
+
+  // ============================================================================
+  // 3D CAMERA, LIGHTING & SOFTWARE RENDERER
+  // ============================================================================
+  const LIGHT_KEY = norm3(vec3(0.52, 0.78, 0.68));
+  const LIGHT_FILL = norm3(vec3(-0.75, -0.25, 0.48));
+  const LIGHT_RIM = norm3(vec3(-0.20, 0.65, -0.82));
+
+  function shadeColor(baseRGB, normal, center, camPos, isSticker, gleamFactor) {
+    const viewDir = norm3(sub3(camPos, center));
+
+    // Diffuse from Key & Fill lights
+    const diffKey = Math.max(0, dot3(normal, LIGHT_KEY));
+    const diffFill = Math.max(0, dot3(normal, LIGHT_FILL));
+    const rimDot = Math.max(0, dot3(normal, LIGHT_RIM));
+    const fresnel = Math.pow(1 - Math.max(0, dot3(normal, viewDir)), 2.5);
+
+    // Blinn-Phong Specular
+    const halfVec = norm3(add3(LIGHT_KEY, viewDir));
+    const specAngle = Math.max(0, dot3(normal, halfVec));
+
+    let r, g, b;
+    if (isSticker) {
+      // Vivid saturated base + studio key light + sharp glossy clearcoat reflection
+      const ambient = 0.56;
+      const diffuse = diffKey * 0.46 + diffFill * 0.14;
+      const lightMul = Math.min(1.18, ambient + diffuse);
+
+      const specBroad = Math.pow(specAngle, 26) * 42;
+      const specSharp = Math.pow(specAngle, 110) * 105;
+      const gleamBoost = gleamFactor * 85;
+      const specTotal = specBroad + specSharp + gleamBoost;
+
+      r = Math.min(255, Math.round(baseRGB.r * lightMul + specTotal));
+      g = Math.min(255, Math.round(baseRGB.g * lightMul + specTotal));
+      b = Math.min(255, Math.round(baseRGB.b * lightMul + specTotal));
+    } else {
+      // Sleek dark graphite speedcube plastic with crisp edge specular highlights
+      const ambient = 0.65;
+      const diffuse = diffKey * 0.75 + diffFill * 0.25;
+      const rim = rimDot * fresnel * 38;
+      const spec = Math.pow(specAngle, 36) * 78 + gleamFactor * 35;
+
+      r = Math.min(255, Math.round(baseRGB.r * (ambient + diffuse) + spec + rim * 0.8));
+      g = Math.min(255, Math.round(baseRGB.g * (ambient + diffuse) + spec + rim * 0.9));
+      b = Math.min(255, Math.round(baseRGB.b * (ambient + diffuse) + spec * 1.08 + rim * 1.25));
+    }
+
+    return `rgb(${r},${g},${b})`;
+  }
+
+  let viewW = 0;
+  let viewH = 0;
+  let dpr = 1;
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    viewW = window.innerWidth;
+    viewH = window.innerHeight;
+    canvas.width = Math.round(viewW * dpr);
+    canvas.height = Math.round(viewH * dpr);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  function projectPoint(p, camDist, fovScale, cx, cy) {
+    const zCam = camDist - p.z;
+    const scale = fovScale / Math.max(0.1, zCam);
+    return {
+      x: cx + p.x * scale,
+      y: cy - p.y * scale,
+      scale
+    };
+  }
+
+  function drawPolygon2D(pts, fillStyle, strokeStyle = null, lineWidth = 0.6) {
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) {
+      ctx.lineTo(pts[i].x, pts[i].y);
+    }
+    ctx.closePath();
+    ctx.fillStyle = fillStyle;
+    ctx.fill();
+    if (strokeStyle) {
+      ctx.strokeStyle = strokeStyle;
+      ctx.lineWidth = lineWidth;
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+    }
+  }
+
+  // Main render loop
+  let lastTime = performance.now();
+
+  function renderFrame(nowMs) {
+    requestAnimationFrame(renderFrame);
+
+    const dt = Math.min(0.05, Math.max(0.001, (nowMs - lastTime) * 0.001));
+    lastTime = nowMs;
+    const tSec = nowMs * 0.001;
+
+    updateChoreography(dt);
+
+    const W = canvas.width;
+    const H = canvas.height;
+    const minDim = Math.min(W, H);
+    const cx = W * 0.5;
+    const cy = H * 0.485;
+
+    // 1. Studio Radial Background
+    const bgGrad = ctx.createRadialGradient(
+      cx, cy - minDim * 0.04, minDim * 0.04,
+      cx, cy, minDim * 0.72
+    );
+    bgGrad.addColorStop(0, '#182038');
+    bgGrad.addColorStop(0.52, '#0d1220');
+    bgGrad.addColorStop(1, '#06080f');
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, W, H);
+
+    // 2. Compute Global Cube Orientation (Continuous smooth orbit + showcase spin)
+    const bobY = Math.sin(tSec * 2.1) * 0.065;
+    const yaw = tSec * 0.58 + Math.sin(tSec * 0.35) * 0.28 + cameraKick.y;
+    const pitch = -0.46 + Math.sin(tSec * 0.72) * 0.19 + cameraKick.x;
+    const roll = Math.cos(tSec * 0.48) * 0.08 + cameraKick.z;
+
+    const R_global = mat3Mul(
+      mat3AxisAngle(0, pitch),
+      mat3Mul(mat3AxisAngle(1, yaw), mat3AxisAngle(2, roll))
+    );
+
+    const camDist = 8.4;
+    const camPos = vec3(0, 0, camDist);
+    // Tuned so the 3x3x3 cube fills ~62% of a 1080x1080 viewport with generous margin
+    const fovScale = minDim * 1.24;
+
+    // 3. Dynamic Floating Floor Shadow beneath the cube
+    const shadowY = cy + minDim * 0.345;
+    const shadowRadiusX = minDim * (0.24 - bobY * 0.08);
+    const shadowRadiusY = shadowRadiusX * 0.25;
+    ctx.save();
+    ctx.translate(cx, shadowY);
+    ctx.scale(1, shadowRadiusY / shadowRadiusX);
+    const shGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, shadowRadiusX);
+    shGrad.addColorStop(0, 'rgba(0, 0, 0, 0.58)');
+    shGrad.addColorStop(0.55, 'rgba(2, 4, 10, 0.24)');
+    shGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = shGrad;
+    ctx.beginPath();
+    ctx.arc(0, 0, shadowRadiusX, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // 4. Active Slice Rotation Matrix
+    let activeAxis = -1;
+    let activeLayer = 0;
+    let R_slice = null;
+    if (activeMove) {
+      activeAxis = activeMove.axis;
+      activeLayer = activeMove.layer;
+      const u = Math.min(1, activeMove.elapsed / activeMove.duration);
+      const curveVal = evaluateTurnCurve(u);
+      const angle = curveVal * (Math.PI * 0.5) * activeMove.dir;
+      R_slice = mat3AxisAngle(activeAxis, angle);
+    }
+
+    // Solve celebration gleam wave factor
+    const timeSinceSolve = tSec - solveGleamTime;
+    const hasGleam = timeSinceSolve >= 0 && timeSinceSolve < 1.35;
+
+    // 5. Transform & Depth-Sort Cubies (Hierarchical Slice + Distance Topological Sort)
+    const axisKey = activeAxis === 0 ? 'x' : (activeAxis === 1 ? 'y' : 'z');
+
+    // Compute camera position in cube-local space for exact separating-plane slice ordering
+    // R_global is orthogonal, so its inverse is its transpose:
+    const R_global_T = [
+      R_global[0], R_global[3], R_global[6],
+      R_global[1], R_global[4], R_global[7],
+      R_global[2], R_global[5], R_global[8]
+    ];
+    const localCam = mat3Transform(R_global_T, vec3(0, -bobY, camDist));
+    const sortAxis = activeAxis >= 0 ? activeAxis : 2;
+    const sortAxisKey = sortAxis === 0 ? 'x' : (sortAxis === 1 ? 'y' : 'z');
+    const camSliceCoord = localCam[sortAxisKey];
+
+    const transformedCubies = cubies.map(cubie => {
+      const inRotatingSlice = activeAxis >= 0 && cubie.pos[axisKey] === activeLayer;
+
+      // Local cubie orientation & center in cube space
+      let localRot = cubie.rot;
+      let localPos = vec3(cubie.pos.x, cubie.pos.y, cubie.pos.z);
+
+      if (inRotatingSlice && R_slice) {
+        localRot = mat3Mul(R_slice, localRot);
+        localPos = mat3Transform(R_slice, localPos);
+      }
+
+      // World space orientation & center
+      const worldRot = mat3Mul(R_global, localRot);
+      const worldCenter = mat3Transform(R_global, localPos);
+      worldCenter.y += bobY;
+
+      const dVec = sub3(worldCenter, camPos);
+      const distSq = dot3(dVec, dVec);
+      const sliceIndex = cubie.pos[sortAxisKey]; // -1, 0, or +1 along separating planes
+      const sliceDist = Math.abs(camSliceCoord - sliceIndex);
+
+      return {
+        cubie,
+        worldRot,
+        worldCenter,
+        distSq,
+        sliceIndex,
+        sliceDist
+      };
+    });
+
+    // Sort slices from farthest separating plane to nearest, and within each slice sort cubies by distance to camera
+    transformedCubies.sort((a, b) => {
+      if (a.sliceIndex !== b.sliceIndex) {
+        return b.sliceDist - a.sliceDist;
+      }
+      return b.distSq - a.distSq;
+    });
+
+    // 6. Render Each Cubie Back-to-Front
+    for (const item of transformedCubies) {
+      const { cubie, worldRot, worldCenter } = item;
+      const visibleFaces = [];
+
+      for (const face of CUBIE_TEMPLATE) {
+        const wNormal = mat3Transform(worldRot, face.normal);
+        const wCenter = add3(worldCenter, mat3Transform(worldRot, face.center));
+
+        // Perspective backface culling: visible iff dot(normal, camPos - wCenter) > 0
+        const toCam = sub3(camPos, wCenter);
+        if (dot3(wNormal, toCam) <= 0.0001) continue;
+
+        const faceDistSq = dot3(toCam, toCam);
+        visibleFaces.push({
+          face,
+          wNormal,
+          wCenter,
+          faceDistSq
+        });
+      }
+
+      // Sort visible faces of this convex cubie back-to-front
+      visibleFaces.sort((a, b) => b.faceDistSq - a.faceDistSq);
+
+      for (const vf of visibleFaces) {
+        const { face, wNormal, wCenter } = vf;
+
+        // Calculate solve gleam wave across the cube surface
+        let gleam = 0;
+        if (hasGleam) {
+          const wavePos = -2.2 + timeSinceSolve * 4.2;
+          const coord = (wCenter.x + wCenter.y) * 0.7;
+          gleam = Math.exp(-Math.pow((coord - wavePos) * 2.8, 2));
+        }
+
+        // Project cubie plastic polygon
+        const poly2D = face.verts.map(v => {
+          const wp = add3(worldCenter, mat3Transform(worldRot, v));
+          return projectPoint(wp, camDist, fovScale, cx, cy);
+        });
+
+        const basePlastic = face.type === 'main' ? PLASTIC_BASE : PLASTIC_BEVEL;
+        const plasticColor = shadeColor(basePlastic, wNormal, wCenter, camPos, false, gleam);
+        drawPolygon2D(poly2D, plasticColor, plasticColor, 0.55 * dpr);
+
+        // If this is an exterior main face with a vivid sticker, render the inset rim + glossy sticker
+        if (face.type === 'main') {
+          const stickerColorObj = cubie.stickers[face.id];
+          if (stickerColorObj) {
+            // Subtle recessed dark rim around the sticker
+            const rim2D = face.stickerRimVerts.map(v => {
+              const wp = add3(worldCenter, mat3Transform(worldRot, v));
+              return projectPoint(wp, camDist, fovScale, cx, cy);
+            });
+            drawPolygon2D(rim2D, 'rgba(8, 10, 16, 0.65)');
+
+            // Vivid saturated sticker
+            const sticker2D = face.stickerVerts.map(v => {
+              const wp = add3(worldCenter, mat3Transform(worldRot, v));
+              return projectPoint(wp, camDist, fovScale, cx, cy);
+            });
+            const shadedSticker = shadeColor(stickerColorObj, wNormal, wCenter, camPos, true, gleam);
+            drawPolygon2D(sticker2D, shadedSticker, shadedSticker, 0.4 * dpr);
+          } else {
+            // Internal cubie face (visible during slice turns): draw subtle metallic neodymium magnet detail
+            const pCenter = projectPoint(wCenter, camDist, fovScale, cx, cy);
+            const dotR = Math.max(1.2, pCenter.scale * 0.036);
+            ctx.beginPath();
+            ctx.arc(pCenter.x, pCenter.y, dotR, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(160, 175, 205, 0.22)';
+            ctx.fill();
+          }
+        }
+      }
+    }
+
+    // 7. Render Celebration Particles (when solve completes)
+    if (particles.length > 0) {
+      ctx.save();
+      for (const p of particles) {
+        const u = p.life / p.maxLife;
+        const alpha = Math.sin(u * Math.PI) * (1 - u * 0.5);
+        const wp = add3(vec3(0, bobY, 0), mat3Transform(R_global, p.pos));
+        const proj = projectPoint(wp, camDist, fovScale, cx, cy);
+        const r = Math.max(1, p.size * proj.scale * (1 - u * 0.4));
+
+        ctx.beginPath();
+        ctx.arc(proj.x, proj.y, r, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${p.color.r}, ${p.color.g}, ${p.color.b}, ${alpha.toFixed(3)})`;
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+
+  requestAnimationFrame(renderFrame);
+})();
+</script>
+</body>
+</html>
