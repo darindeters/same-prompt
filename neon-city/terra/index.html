@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Neon Rain</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #08051d; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas id="city" aria-label="An animated neon city at night in the rain"></canvas>
+<script>
+(() => {
+  'use strict';
+  const canvas = document.getElementById('city');
+  const ctx = canvas.getContext('2d');
+  let width, height, scale, ox, oy, dpr;
+  const W = 1080, H = 1080;
+  const colors = ['#00f5ff', '#ff28d7', '#9b50ff', '#ff9c32', '#4b8dff'];
+  let seed = 137;
+  const random = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+  const buildings = [];
+  for (let layer = 0; layer < 3; layer++) {
+    let x = -80;
+    while (x < 1160) {
+      const w = 75 + random() * (layer === 2 ? 115 : 75);
+      const base = [710, 825, 1010][layer];
+      const h = (layer === 0 ? 190 : layer === 1 ? 270 : 350) + random() * (layer === 2 ? 290 : 220);
+      const windows = [];
+      for (let yy = 28; yy < h - 20; yy += 25 + layer * 3) {
+        for (let xx = 13; xx < w - 12; xx += 18 + layer * 2) {
+          if (random() > .37) windows.push([xx, yy, random(), random()]);
+        }
+      }
+      buildings.push({x, w, h, base, layer, windows, roof: random(), accent: random(), color: colors[Math.floor(random() * colors.length)]});
+      x += w - 4;
+    }
+  }
+  const rain = Array.from({length: 260}, () => ({x: random() * W, y: random() * H, speed: 520 + random() * 850, len: 12 + random() * 40, alpha: .1 + random() * .42, depth: random()}));
+  const cars = Array.from({length: 9}, (_, i) => ({x: random() * 1500 - 200, y: 350 + random() * 430, speed: 45 + random() * 100, size: .45 + random() * .75, direction: i % 2 ? 1 : -1, color: i % 2 ? '#00f5ff' : '#ff39d4', phase: random() * 6}));
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    width = window.innerWidth; height = window.innerHeight;
+    canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
+    // Cover the viewport with a square composition, keeping the focal point centered.
+    scale = Math.max(width / W, height / H);
+    ox = (width - W * scale) / 2; oy = (height - H * scale) / 2;
+  }
+  window.addEventListener('resize', resize); resize();
+  function glow(color, blur) { ctx.shadowColor = color; ctx.shadowBlur = blur; }
+  function line(x1, y1, x2, y2, color, thickness = 2, blur = 0) {
+    ctx.strokeStyle = color; ctx.lineWidth = thickness; glow(color, blur);
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); ctx.shadowBlur = 0;
+  }
+  function background(t) {
+    const sky = ctx.createLinearGradient(0, 0, 0, H);
+    sky.addColorStop(0, '#08051e'); sky.addColorStop(.42, '#291044'); sky.addColorStop(.72, '#512252'); sky.addColorStop(1, '#100c29');
+    ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
+    let haze = ctx.createRadialGradient(550, 525, 10, 550, 525, 530);
+    haze.addColorStop(0, 'rgba(255,45,173,.26)'); haze.addColorStop(.45, 'rgba(118,36,177,.12)'); haze.addColorStop(1, 'transparent');
+    ctx.fillStyle = haze; ctx.fillRect(0, 0, W, H);
+    // A pale, hazy moon gives the skyline a distant focal point.
+    glow('#ff55d8', 60); ctx.fillStyle = '#ffb5e5'; ctx.beginPath(); ctx.arc(555, 270, 73, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
+    ctx.fillStyle = 'rgba(50,13,75,.18)';
+    for (let i = 0; i < 5; i++) ctx.fillRect(475, 220 + i * 23, 165, 3 + i);
+    for (let i = 0; i < 6; i++) {
+      const y = 130 + i * 75;
+      const cloud = ctx.createLinearGradient(0, y, W, y + 20);
+      cloud.addColorStop(0, 'transparent'); cloud.addColorStop(.4, 'rgba(221,56,190,.055)'); cloud.addColorStop(1, 'transparent');
+      ctx.fillStyle = cloud; ctx.fillRect(0, y + Math.sin(t * .12 + i) * 5, W, 18);
+    }
+  }
+  function building(b, time) {
+    const {x, w, h, base, layer} = b, top = base - h;
+    ctx.fillStyle = ['#16112f', '#101027', '#090d20'][layer]; ctx.fillRect(x, top, w, h);
+    ctx.fillStyle = ['#251a40', '#201a38', '#16162c'][layer]; ctx.fillRect(x + w - 8, top, 8, h);
+    if (b.roof > .35) {
+      ctx.fillStyle = '#131127'; ctx.fillRect(x + w * .2, top - 13, w * .6, 13);
+      if (b.roof > .7) { line(x + w * .5, top - 13, x + w * .5, top - 45, '#7c55a1', 2); ctx.fillStyle = '#ff477e'; ctx.fillRect(x + w * .5 - 2, top - 47, 4, 4); }
+    }
+    for (const [wx, wy, v, tint] of b.windows) {
+      const flicker = .65 + .35 * Math.sin(time * .7 + v * 30);
+      ctx.fillStyle = tint > .76 ? `rgba(255,66,187,${(.16 + v * .42) * flicker})` : `rgba(76,207,255,${(.09 + v * .3) * flicker})`;
+      ctx.fillRect(x + wx, top + wy, layer === 2 ? 6 : 4, layer === 2 ? 11 : 7);
+    }
+    if (layer > 0 && b.accent > .28) {
+      line(x + 2, top + 5, x + 2, base, b.color, layer === 2 ? 2 : 1, layer === 2 ? 9 : 4);
+      line(x + 3, top + 4, x + w - 9, top + 4, b.color, 2, 7);
+    }
+    if (layer === 2 && b.accent > .48) {
+      const sx = x + w * .17, sy = top + 45, sw = w * .61, sh = Math.min(125, h * .28);
+      ctx.fillStyle = '#130c2a'; ctx.fillRect(sx, sy, sw, sh);
+      ctx.strokeStyle = b.color; ctx.lineWidth = 2; glow(b.color, 10); ctx.strokeRect(sx, sy, sw, sh); ctx.shadowBlur = 0;
+      // Abstract luminous marks suggest signage without any lettering.
+      const cx = sx + sw / 2;
+      for (let j = 0; j < 3; j++) {
+        const yy = sy + 23 + j * 31;
+        line(cx - sw * .22, yy, cx + sw * .22, yy, b.color, 3, 9);
+        line(cx + (j % 2 ? -5 : 5), yy - 10, cx + (j % 2 ? 5 : -5), yy + 10, b.color, 3, 8);
+      }
+    }
+  }
+  function car(c, t) {
+    const x = ((c.x + c.direction * t * c.speed + 2000) % 1480 + 1480) % 1480 - 200;
+    const y = c.y + Math.sin(t * 1.2 + c.phase) * 8;
+    ctx.save(); ctx.translate(x, y); ctx.scale(c.size * c.direction, c.size);
+    const trail = ctx.createLinearGradient(-130, 0, -5, 0); trail.addColorStop(0, 'transparent'); trail.addColorStop(1, c.color);
+    ctx.globalAlpha = .5; ctx.fillStyle = trail; ctx.fillRect(-130, 5, 120, 3); ctx.globalAlpha = 1;
+    glow(c.color, 20); ctx.fillStyle = c.color; ctx.beginPath(); ctx.ellipse(0, 8, 42, 8, 0, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
+    ctx.fillStyle = '#101329'; ctx.beginPath(); ctx.moveTo(-45, 3); ctx.lineTo(-27, -6); ctx.lineTo(-10, -17); ctx.lineTo(17, -17); ctx.lineTo(30, -5); ctx.lineTo(43, 1); ctx.lineTo(38, 8); ctx.lineTo(-39, 8); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#77eaff'; ctx.beginPath(); ctx.moveTo(-17, -7); ctx.lineTo(-7, -14); ctx.lineTo(14, -14); ctx.lineTo(23, -7); ctx.closePath(); ctx.fill();
+    line(-39, 5, 38, 5, c.color, 3, 12); ctx.fillStyle = '#fff6c7'; ctx.fillRect(31, 0, 8, 3);
+    ctx.restore();
+  }
+  function foreground(t) {
+    // Elevated roadway and wet, luminous reflections.
+    ctx.fillStyle = '#080c1c'; ctx.beginPath(); ctx.moveTo(0, 910); ctx.lineTo(1080, 850); ctx.lineTo(1080, 1080); ctx.lineTo(0, 1080); ctx.closePath(); ctx.fill();
+    line(0, 910, 1080, 850, '#fa36cb', 4, 18);
+    line(0, 923, 1080, 863, '#48e8ff', 2, 12);
+    for (let i = 0; i < 38; i++) {
+      const x = (i * 83 + 19) % 1080, y = 930 + ((i * 43) % 150);
+      const col = i % 3 === 0 ? 'rgba(255,45,198,.38)' : 'rgba(24,208,255,.24)';
+      line(x, y, x + 20 + (i % 4) * 18, y - 1, col, 2 + i % 3, 7);
+    }
+    ctx.fillStyle = '#080c19'; ctx.fillRect(0, 1018, 1080, 62);
+    line(0, 1018, 1080, 1018, '#8738cf', 3, 10);
+    for (let x = 20; x < 1080; x += 110) { ctx.fillStyle = '#ff4bcf'; glow('#ff4bcf', 8); ctx.fillRect(x, 1037, 42, 3); }
+    ctx.shadowBlur = 0;
+  }
+  let previous = 0;
+  function frame(ms) {
+    const t = ms / 1000, dt = Math.min((ms - (previous || ms)) / 1000, .05); previous = ms;
+    ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * ox, dpr * oy);
+    background(t);
+    for (const b of buildings) if (b.layer === 0) building(b, t);
+    for (const b of buildings) if (b.layer === 1) building(b, t);
+    cars.filter(c => c.size < .8).forEach(c => car(c, t));
+    for (const b of buildings) if (b.layer === 2) building(b, t);
+    cars.filter(c => c.size >= .8).forEach(c => car(c, t));
+    foreground(t);
+    for (const r of rain) {
+      r.y += r.speed * dt; r.x -= r.speed * dt * .18;
+      if (r.y > H + 50) { r.y = -50; r.x = (r.x + 210 + W) % W; }
+      if (r.x < -50) r.x += W + 100;
+      ctx.strokeStyle = `rgba(${r.depth > .6 ? '112,225,255' : '203,161,255'},${r.alpha})`;
+      ctx.lineWidth = r.depth > .7 ? 1.6 : .8;
+      ctx.beginPath(); ctx.moveTo(r.x, r.y); ctx.lineTo(r.x - r.len * .18, r.y + r.len); ctx.stroke();
+    }
+    const vignette = ctx.createRadialGradient(540, 510, 280, 540, 510, 790);
+    vignette.addColorStop(0, 'transparent'); vignette.addColorStop(1, 'rgba(2,3,15,.48)'); ctx.fillStyle = vignette; ctx.fillRect(0, 0, W, H);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

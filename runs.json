@@ -105,6 +105,13 @@
   "title": "Cherry Blossom Tree",
   "prompt": "Build a cherry blossom tree that grows from a seed, blooms, and sheds its petals in the wind, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
   "runs": {
+   "terra": {
+    "model": "gpt-6.1-terra",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-27T12:25:11Z",
+    "elapsed_s": 41.2
+   },
    "claude": {
     "model": "claude-fable-5-1",
     "effort": "medium",
@@ -139,6 +146,13 @@
   "title": "Lighthouse in a Storm",
   "prompt": "Build a lighthouse on a cliff during a night storm, with crashing waves, rain and lightning, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
   "runs": {
+   "terra": {
+    "model": "gpt-6.1-terra",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-27T12:25:53Z",
+    "elapsed_s": 55.0
+   },
    "claude": {
     "model": "claude-fable-5-1",
     "effort": "medium",
@@ -173,6 +187,13 @@
   "title": "Fireworks Over a City",
   "prompt": "Build a fireworks show over a city skyline at night, with bursts of different shapes and colors reflected in a river, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
   "runs": {
+   "terra": {
+    "model": "gpt-6.1-terra",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-27T03:40:22Z",
+    "elapsed_s": 44.8
+   },
    "claude": {
     "model": "claude-fable-5-1",
     "effort": "medium",
@@ -207,6 +228,13 @@
   "title": "Coral Reef Aquarium",
   "prompt": "Build a coral reef aquarium with a school of fish that swims together, turns, and scatters, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
   "runs": {
+   "terra": {
+    "model": "gpt-6.1-terra",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-27T12:24:20Z",
+    "elapsed_s": 51.5
+   },
    "claude": {
     "model": "claude-fable-5-1",
     "effort": "medium",
@@ -241,6 +269,13 @@
   "title": "Volcano Eruption",
   "prompt": "Build a volcano erupting at night, with lava fountains, glowing lava flowing down its slopes, and ash clouds, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
   "runs": {
+   "terra": {
+    "model": "gpt-6.1-terra",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-27T03:39:42Z",
+    "elapsed_s": 40.1
+   },
    "claude": {
     "model": "claude-fable-5-1",
     "effort": "medium",
@@ -275,6 +310,13 @@
   "title": "Solar System",
   "prompt": "Build the solar system with the sun and all eight planets orbiting it, seen from a slowly moving camera, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
   "runs": {
+   "terra": {
+    "model": "gpt-6.1-terra",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-27T12:22:06Z",
+    "elapsed_s": 45.3
+   },
    "claude": {
     "model": "claude-fable-5-1",
     "effort": "medium",
@@ -404,6 +446,13 @@
   "title": "Lava Lamp",
   "prompt": "Build a lava lamp with glowing blobs that rise, stretch, merge and split, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
   "runs": {
+   "terra": {
+    "model": "gpt-6.1-terra",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-27T03:38:42Z",
+    "elapsed_s": 36.5
+   },
    "claude": {
     "model": "claude-fable-5-1",
     "effort": "medium",
@@ -438,6 +487,13 @@
   "title": "Domino Chain Reaction",
   "prompt": "Build a chain reaction of hundreds of colorful dominoes falling along a winding spiral path, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
   "runs": {
+   "terra": {
+    "model": "gpt-6.1-terra",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-27T12:24:08Z",
+    "elapsed_s": 29.8
+   },
    "claude": {
     "model": "claude-fable-5-1",
     "effort": "medium",
@@ -472,6 +528,13 @@
   "title": "Northern Lights",
   "prompt": "Build the northern lights rippling over a snowy mountain lake, reflected in the water, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
   "runs": {
+   "terra": {
+    "model": "gpt-6.1-terra",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-27T03:41:07Z",
+    "elapsed_s": 39.9
+   },
    "claude": {
     "model": "claude-fable-5-1",
     "effort": "medium",
@@ -506,6 +569,13 @@
   "title": "Pendulum Wave",
   "prompt": "Build a pendulum wave of fifteen pendulums with slightly different lengths, swinging in and out of mesmerizing patterns, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
   "runs": {
+   "terra": {
+    "model": "gpt-6.1-terra",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-27T03:39:19Z",
+    "elapsed_s": 23.5
+   },
    "claude": {
     "model": "claude-fable-5-1",
     "effort": "medium",
@@ -540,6 +610,13 @@
   "title": "Tornado",
   "prompt": "Build a tornado tearing across farmland at dusk, lifting dust and debris into the funnel, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
   "runs": {
+   "terra": {
+    "model": "gpt-6.1-terra",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-27T12:25:12Z",
+    "elapsed_s": 40.8
+   },
    "claude": {
     "model": "claude-fable-5-1",
     "effort": "medium",
@@ -574,6 +651,13 @@
   "title": "Ink in Water",
   "prompt": "Build drops of colorful ink blooming and swirling as they sink through a glass of water, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
   "runs": {
+   "terra": {
+    "model": "gpt-6.1-terra",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-27T12:26:48Z",
+    "elapsed_s": 41.7
+   },
    "claude": {
     "model": "claude-fable-5-1",
     "effort": "medium",
@@ -608,6 +692,13 @@
   "title": "Neon City",
   "prompt": "Build a neon cyberpunk city at night, with rain, glowing signs and flying cars weaving between towers, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
   "runs": {
+   "terra": {
+    "model": "gpt-6.1-terra",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-27T12:27:30Z",
+    "elapsed_s": 44.8
+   },
    "claude": {
     "model": "claude-fable-5-1",
     "effort": "medium",
@@ -740,40 +831,6 @@
    }
   }
  },
- "self-portrait": {
-  "title": "If AIs Were People",
-  "prompt": "Build an animated portrait of yourself, the AI model writing this file, showing how you would look if you were a person, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give yourself a signature sound that fits who you are, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
-  "runs": {
-   "claude": {
-    "model": "claude-fable-5-1",
-    "effort": "medium",
-    "cli": "2.1.303 (Claude Code)",
-    "start_utc": "2026-10-24T18:19:30Z",
-    "elapsed_s": 367.0
-   },
-   "codex": {
-    "model": "gpt-6.1-sol",
-    "effort": "medium",
-    "cli": "codex-cli 0.163.0",
-    "start_utc": "2026-10-24T18:25:37Z",
-    "elapsed_s": 124.7
-   },
-   "gemini": {
-    "model": "gemini-4-argon-medium",
-    "effort": "medium",
-    "cli": "1.4.5",
-    "start_utc": "2026-10-24T18:22:30Z",
-    "elapsed_s": 189.7
-   },
-   "grok": {
-    "model": "grok-4.7",
-    "effort": "medium",
-    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
-    "start_utc": "2026-10-24T18:19:30Z",
-    "elapsed_s": 943.9
-   }
-  }
- },
  "restore-1": {
   "title": "Overgrown House Restoration",
   "prompt": "Build an animated restoration of an old, overgrown, run-down house, as one self-contained file named index.html in this folder. Four AI coding agents will build it in turn, one stage each, and you go first. The page plays a 36-second restoration on a loop: from 0 to 6 seconds the house sits overgrown and run-down; 6 to 12 seconds is stage 1, clearing the overgrowth; 12 to 20 seconds is stage 2, repairing the roof and the walls; 20 to 28 seconds is stage 3, landscaping the garden and yard; 28 to 34 seconds is stage 4, the interior and the lights coming on; 34 to 36 seconds holds the finished house, then it loops. Build the house in its overgrown state and stage 1: tangled vines, tall weeds and debris being cleared away, with satisfying sound effects for each piece that comes off. Leave stages 2, 3 and 4 as clearly marked, empty sections of the code, with their time slots wired in, so the next builders can fill them. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Sound effects for your stage must be generated in code with the Web Audio API, with no audio files, and start as soon as the page loads, or on the first click or key press if the browser blocks that. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
@@ -826,40 +883,6 @@
    }
   }
  },
- "bounce-melody": {
-  "title": "Bouncing Balls Play F\u00fcr Elise",
-  "prompt": "Build dozens of colorful balls bouncing inside a slowly rotating circle, where every bounce plays the next note of Beethoven's F\u00fcr Elise, so the bounces play the melody, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it sound effects that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
-  "runs": {
-   "claude": {
-    "model": "claude-fable-5-1",
-    "effort": "medium",
-    "cli": "2.1.303 (Claude Code)",
-    "start_utc": "2026-10-25T14:16:01Z",
-    "elapsed_s": 126.9
-   },
-   "codex": {
-    "model": "gpt-6.1-sol",
-    "effort": "medium",
-    "cli": "codex-cli 0.163.0",
-    "start_utc": "2026-10-25T14:18:08Z",
-    "elapsed_s": 127.7
-   },
-   "gemini": {
-    "model": "gemini-4-argon-medium",
-    "effort": "medium",
-    "cli": "1.4.7",
-    "start_utc": "2026-10-25T14:15:54Z",
-    "elapsed_s": 172.4
-   },
-   "grok": {
-    "model": "grok-4.7",
-    "effort": "medium",
-    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
-    "start_utc": "2026-10-25T14:16:00Z",
-    "elapsed_s": 1727.0
-   }
-  }
- },
  "bounce-melody-playful": {
   "title": "Bouncing Balls Play F\u00fcr Elise",
   "prompt": "Build dozens of colorful balls bouncing inside a slowly rotating circle, where every bounce plays the next note of Beethoven's F\u00fcr Elise, so the bounces play the melody, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it playful sound effects with personality that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
@@ -891,40 +914,6 @@
     "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
     "start_utc": "2026-10-25T14:16:00Z",
     "elapsed_s": 1001.0
-   }
-  }
- },
- "pendulum-notes": {
-  "title": "Pendulum Wave With Sound",
-  "prompt": "Build a pendulum wave of fifteen pendulums with slightly different lengths, swinging in and out of mesmerizing patterns, where each pendulum plays its own musical note at the bottom of every swing, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it sound effects that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
-  "runs": {
-   "claude": {
-    "model": "claude-fable-5-1",
-    "effort": "medium",
-    "cli": "2.1.303 (Claude Code)",
-    "start_utc": "2026-10-25T14:20:16Z",
-    "elapsed_s": 195.0
-   },
-   "codex": {
-    "model": "gpt-6.1-sol",
-    "effort": "medium",
-    "cli": "codex-cli 0.163.0",
-    "start_utc": "2026-10-25T14:23:31Z",
-    "elapsed_s": 83.6
-   },
-   "gemini": {
-    "model": "gemini-4-argon-medium",
-    "effort": "medium",
-    "cli": "1.4.7",
-    "start_utc": "2026-10-25T14:22:49Z",
-    "elapsed_s": 93.3
-   },
-   "grok": {
-    "model": "grok-4.7",
-    "effort": "medium",
-    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
-    "start_utc": "2026-10-25T14:44:48Z",
-    "elapsed_s": 959.1
    }
   }
  },
@@ -980,44 +969,17 @@
    }
   }
  },
- "rubiks-sound": {
-  "title": "Rubik's Cube With Sound",
-  "prompt": "Build a 3D Rubik's cube that scrambles itself and then solves itself, one turn at a time, with a crisp, satisfying click on every turn, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it sound effects that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
-  "runs": {
-   "claude": {
-    "model": "claude-fable-5-1",
-    "effort": "medium",
-    "cli": "2.1.303 (Claude Code)",
-    "start_utc": "2026-10-25T18:34:27Z",
-    "elapsed_s": 331.5
-   },
-   "codex": {
-    "model": "gpt-6.1-sol",
-    "effort": "medium",
-    "cli": "codex-cli 0.163.0",
-    "start_utc": "2026-10-25T18:39:59Z",
-    "elapsed_s": 126.9
-   },
-   "gemini": {
-    "model": "gemini-4-argon-medium",
-    "effort": "medium",
-    "cli": "1.4.7",
-    "start_utc": "2026-10-25T18:54:07Z",
-    "elapsed_s": 201.4
-   },
-   "grok": {
-    "model": "grok-4.7",
-    "effort": "medium",
-    "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
-    "start_utc": "2026-10-25T18:34:27Z",
-    "elapsed_s": 1037.3
-   }
-  }
- },
  "pumpkin": {
   "title": "Pumpkin Carving Contest",
   "prompt": "Build your entry in a jack-o'-lantern carving contest: a pumpkin being carved in real time, the knife cutting out a face of your own design and the pieces popping out, then a candle lighting it from inside so it glows in the dark, all within about twenty seconds, then the glowing jack-o'-lantern holds before the carving starts again, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it sound effects that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
   "runs": {
+   "terra": {
+    "model": "gpt-6.1-terra",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-27T12:25:53Z",
+    "elapsed_s": 53.7
+   },
    "claude": {
     "model": "claude-fable-5-1",
     "effort": "medium",
@@ -1052,6 +1014,13 @@
   "title": "AI Halloween Costumes",
   "prompt": "Build an animated portrait of yourself, the AI model writing this file, as a person wearing your Halloween costume, as one self-contained file named index.html in this folder. Pick the costume yourself, make it something that fits who you are, and show it off in a spooky Halloween night scene with movement. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it Halloween sound effects that fit your costume, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
   "runs": {
+   "terra": {
+    "model": "gpt-6.1-terra",
+    "effort": "medium",
+    "cli": "codex-cli 0.163.0",
+    "start_utc": "2026-10-27T12:22:06Z",
+    "elapsed_s": 84.9
+   },
    "claude": {
     "model": "claude-fable-5-1",
     "effort": "medium",
@@ -1082,37 +1051,37 @@
    }
   }
  },
- "tesla-coil": {
-  "title": "Singing Tesla Coil",
-  "prompt": "Build a singing Tesla coil on a dark stage whose lightning arcs play Flight of the Bumblebee: every note is a buzzing electric arc, timed to the melody, with the arcs flashing and branching in time with the music, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it sound effects that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
+ "roadster": {
+  "title": "Flying Roadster",
+  "prompt": "Build a sleek two-seat electric sports car, a roadster, that takes off using rocket thrusters, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests.\n\nThe car starts parked on the ground. Its thrusters fire, it lifts straight up, holds a steady hover, flies a short loop through the air, and comes back down for a soft landing, then the sequence repeats. The thrusters must visibly fire whenever the car is in the air, and the car must never float with them off.\n\nMake it look real, like a high-end 3D render: real 3D depth, a moving camera, materials, lighting, shadows and reflections, and natural motion. Use vivid, saturated colors that read well on a phone screen, with the color coming from light and real materials, not flat cartoon fills. No cartoon or flat 2D illustration style and no outlines.\n\nGive it sound effects that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press.\n\nAlso keep a global object, window.carState, updated every frame with the car's height above the ground in meters (height) and whether the thrusters are firing (thrusters, true or false).\n\nIt must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.",
   "runs": {
+   "terra": {
+    "model": "gpt-6.1-terra",
+    "effort": "medium",
+    "cli": "codex-cli 0.166.0",
+    "start_utc": "2026-11-03T13:08:11Z",
+    "elapsed_s": 69.2
+   },
    "claude": {
     "model": "claude-fable-5-1",
     "effort": "medium",
     "cli": "2.1.303 (Claude Code)",
-    "start_utc": "2026-10-26T12:31:27Z",
-    "elapsed_s": 342.4
-   },
-   "codex": {
-    "model": "gpt-6.1-sol",
-    "effort": "medium",
-    "cli": "codex-cli 0.163.0",
-    "start_utc": "2026-10-26T12:37:09Z",
-    "elapsed_s": 171.8
+    "start_utc": "2026-11-03T13:39:58Z",
+    "elapsed_s": 1679.2
    },
    "gemini": {
     "model": "gemini-4-argon-medium",
     "effort": "medium",
-    "cli": "1.4.7",
-    "start_utc": "2026-10-26T12:34:12Z",
-    "elapsed_s": 173.5
+    "cli": "1.4.12",
+    "start_utc": "2026-11-03T13:08:17Z",
+    "elapsed_s": 556.4
    },
    "grok": {
     "model": "grok-4.7",
     "effort": "medium",
     "cli": "grok 1.0.62 (1474f9cbdd91) [stable]",
-    "start_utc": "2026-10-26T12:31:27Z",
-    "elapsed_s": 1451.8
+    "start_utc": "2026-11-03T13:08:21Z",
+    "elapsed_s": 1801.2
    }
   }
  }

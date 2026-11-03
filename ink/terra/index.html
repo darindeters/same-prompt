@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ink in Water</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #050c1c; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<script>
+(() => {
+  'use strict';
+  const canvas = document.getElementById('scene');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const ink = document.createElement('canvas');
+  const ic = ink.getContext('2d');
+  let w, h, dpr, scale, frame = 0, last = 0;
+  const plumes = [];
+  const palette = [
+    [320, 98, 59], [187, 100, 53], [269, 91, 66],
+    [16, 100, 60], [211, 100, 60], [344, 100, 63], [43, 100, 59]
+  ];
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const hsla = (c, alpha, light = c[2]) => `hsla(${c[0]}, ${c[1]}%, ${light}%, ${alpha})`;
+
+  function resize() {
+    w = innerWidth; h = innerHeight;
+    dpr = Math.min(devicePixelRatio || 1, 2);
+    canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // The ink layer is intentionally softer than the crisp glass highlights.
+    scale = Math.min(1, 850 / Math.max(w, h));
+    ink.width = Math.round(w * scale); ink.height = Math.round(h * scale);
+    ic.setTransform(scale, 0, 0, scale, 0, 0);
+    plumes.length = 0;
+    seedScene();
+  }
+
+  function glassPath(c) {
+    const x = w * .105, y = h * .115, gw = w * .79, gh = h * .77;
+    const inset = gw * .055, bottom = y + gh;
+    c.beginPath();
+    c.moveTo(x, y);
+    c.bezierCurveTo(x + gw * .006, y + gh * .27, x + inset * .55, bottom - gh * .1, x + inset, bottom - gh * .045);
+    c.quadraticCurveTo(x + inset * 1.3, bottom, x + inset * 2.1, bottom);
+    c.lineTo(x + gw - inset * 2.1, bottom);
+    c.quadraticCurveTo(x + gw - inset * 1.3, bottom, x + gw - inset, bottom - gh * .045);
+    c.bezierCurveTo(x + gw - inset * .55, bottom - gh * .1, x + gw - gw * .006, y + gh * .27, x + gw, y);
+    c.closePath();
+  }
+
+  function newPlume(x, color, age = 0) {
+    const p = { x, y: h * .18, color, age: 0, life: rand(590, 850),
+      phase: rand(0, 20), drift: rand(-.13, .13), width: rand(.8, 1.2), particles: [] };
+    plumes.push(p);
+    // Seed a young plume so the first frame is already alive with color.
+    for (let i = 0; i < age; i++) advancePlume(p, true);
+  }
+
+  function seedScene() {
+    newPlume(w * .31, palette[0], 150);
+    newPlume(w * .53, palette[1], 115);
+    newPlume(w * .70, palette[2], 75);
+  }
+
+  function advancePlume(p, seeding = false) {
+    p.age++;
+    const unit = Math.min(w, h);
+    const active = p.age < 260;
+    if (active && p.age % 2 === 0) {
+      const spread = Math.min(1, p.age / 75);
+      const a = rand(0, Math.PI * 2);
+      const r = Math.sqrt(Math.random());
+      p.particles.push({
+        x: p.x + Math.cos(a) * r * unit * .022 * spread,
+        y: p.y + Math.sin(a) * r * unit * .008,
+        vx: Math.cos(a) * r * unit * .00045 + p.drift,
+        vy: rand(.00035, .00105) * unit,
+        radius: rand(.009, .023) * unit * p.width,
+        age: 0, life: rand(220, 420), phase: rand(0, 20),
+        curl: rand(-1, 1), alpha: rand(.035, .095)
+      });
+    }
+    p.y += unit * (active ? .00046 : .00016);
+    p.x += Math.sin(p.age * .018 + p.phase) * unit * .00012 + p.drift;
+    for (let i = p.particles.length - 1; i >= 0; i--) {
+      const q = p.particles[i]; q.age++;
+      const t = q.age / q.life;
+      q.vx += Math.sin(q.y / unit * 17 + q.phase + q.age * .012) * unit * .000008;
+      q.vx += q.curl * unit * .000003;
+      q.vx *= .994;
+      q.x += q.vx + Math.sin(q.age * .014 + q.phase) * unit * .00012;
+      q.y += q.vy * (1 - t * .48) + Math.cos(q.age * .012 + q.phase) * unit * .00008;
+      q.radius += unit * .000035;
+      if (t >= 1 || q.y > h * .87) p.particles.splice(i, 1);
+    }
+  }
+
+  function drawInk() {
+    ic.clearRect(0, 0, w, h);
+    ic.save(); glassPath(ic); ic.clip();
+    ic.globalCompositeOperation = 'screen';
+    for (const p of plumes) {
+      for (const q of p.particles) {
+        const t = q.age / q.life;
+        const fade = Math.sin(Math.PI * Math.min(1, t * 1.12)) * (1 - t * .35);
+        const a = q.alpha * Math.max(0, fade);
+        const g = ic.createRadialGradient(q.x, q.y, 0, q.x, q.y, q.radius * 2.3);
+        g.addColorStop(0, hsla(p.color, a * 1.5, 65));
+        g.addColorStop(.28, hsla(p.color, a, p.color[2]));
+        g.addColorStop(1, hsla(p.color, 0));
+        ic.fillStyle = g;
+        ic.beginPath(); ic.arc(q.x, q.y, q.radius * 2.3, 0, Math.PI * 2); ic.fill();
+      }
+    }
+    ic.restore();
+  }
+
+  function render() {
+    const bg = ctx.createRadialGradient(w * .5, h * .42, 0, w * .5, h * .47, Math.max(w, h) * .72);
+    bg.addColorStop(0, '#193650'); bg.addColorStop(.48, '#0b1b30'); bg.addColorStop(1, '#030814');
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
+    const halo = ctx.createRadialGradient(w * .5, h * .51, 0, w * .5, h * .51, w * .53);
+    halo.addColorStop(0, 'rgba(54,127,155,.18)'); halo.addColorStop(1, 'rgba(25,76,105,0)');
+    ctx.fillStyle = halo; ctx.fillRect(0, 0, w, h);
+    ctx.save(); glassPath(ctx); ctx.clip();
+    const water = ctx.createLinearGradient(0, h * .14, 0, h * .89);
+    water.addColorStop(0, 'rgba(95,180,205,.10)'); water.addColorStop(.5, 'rgba(35,105,140,.10)'); water.addColorStop(1, 'rgba(5,35,63,.32)');
+    ctx.fillStyle = water; ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(ink, 0, 0, w, h);
+    ctx.restore();
+    // Fine, restrained reflections make the container legible without obscuring the ink.
+    glassPath(ctx);
+    ctx.lineWidth = Math.max(1, w * .002);
+    ctx.strokeStyle = 'rgba(166,225,242,.30)'; ctx.stroke();
+    ctx.beginPath();
+    ctx.ellipse(w * .5, h * .115, w * .395, h * .018, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(123,202,226,.055)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(187,237,247,.45)'; ctx.lineWidth = Math.max(1, w * .002); ctx.stroke();
+    ctx.beginPath();
+    ctx.ellipse(w * .5, h * .158, w * .382, h * .014, 0, .06, Math.PI - .06);
+    ctx.strokeStyle = 'rgba(171,229,243,.18)'; ctx.lineWidth = Math.max(1, w * .001); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(w * .13, h * .19); ctx.bezierCurveTo(w * .135, h * .35, w * .14, h * .58, w * .16, h * .72);
+    ctx.strokeStyle = 'rgba(205,247,255,.16)'; ctx.lineWidth = Math.max(2, w * .006); ctx.lineCap = 'round'; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(w * .87, h * .22); ctx.bezierCurveTo(w * .865, h * .37, w * .86, h * .58, w * .845, h * .73);
+    ctx.strokeStyle = 'rgba(205,247,255,.09)'; ctx.lineWidth = Math.max(1, w * .003); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(w * .5, h * .886, w * .31, h * .009, 0, 0, Math.PI);
+    ctx.strokeStyle = 'rgba(177,230,244,.24)'; ctx.lineWidth = Math.max(1, w * .002); ctx.stroke();
+  }
+
+  function tick(time) {
+    if (!last) last = time;
+    const steps = Math.min(3, Math.max(1, Math.round((time - last) / 16.67)));
+    last = time;
+    for (let s = 0; s < steps; s++) {
+      frame++;
+      for (let i = plumes.length - 1; i >= 0; i--) {
+        advancePlume(plumes[i]);
+        if (plumes[i].age > plumes[i].life && !plumes[i].particles.length) plumes.splice(i, 1);
+      }
+      if (frame % 125 === 0) {
+        const index = Math.floor(frame / 125 + 2) % palette.length;
+        newPlume(rand(w * .25, w * .75), palette[index]);
+      }
+    }
+    drawInk(); render(); requestAnimationFrame(tick);
+  }
+  resize();
+  addEventListener('resize', resize);
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>

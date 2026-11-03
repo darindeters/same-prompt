@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Volcano at night</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #080816; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas id="scene" aria-label="An erupting volcano at night"></canvas>
+<script>
+(() => {
+  'use strict';
+  const canvas = document.getElementById('scene');
+  const ctx = canvas.getContext('2d');
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const stars = Array.from({length: 150}, () => ({x: Math.random(), y: Math.random() * .72, r: rand(.45, 1.8), phase: rand(0, 6.3), speed: rand(.5, 2)}));
+  const embers = Array.from({length: 130}, () => ({age: Math.random(), speed: rand(.25, .65), drift: rand(-1, 1), size: rand(1, 3.6), phase: rand(0, 7)}));
+  const sparks = Array.from({length: 105}, () => ({age: Math.random(), speed: rand(.45, 1.05), vx: rand(-1, 1), vy: rand(.7, 1.3), size: rand(1.2, 4.2)}));
+  let w, h, scale, ox, oy, last = 0;
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    w = window.innerWidth; h = window.innerHeight;
+    canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    scale = Math.max(w / 1080, h / 1080);
+    ox = (w - 1080 * scale) / 2; oy = (h - 1080 * scale) / 2;
+  }
+  window.addEventListener('resize', resize); resize();
+  function ellipse(x, y, rx, ry, color) {
+    ctx.fillStyle = color; ctx.beginPath(); ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2); ctx.fill();
+  }
+  function glow(x, y, r, color, alpha = 1) {
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, color); g.addColorStop(1, 'rgba(255,40,0,0)');
+    ctx.globalAlpha = alpha; ctx.fillStyle = g; ctx.fillRect(x-r, y-r, r*2, r*2); ctx.globalAlpha = 1;
+  }
+  function path(points, color, width, blur = 0) {
+    ctx.save(); ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = color; ctx.lineWidth = width; ctx.shadowColor = color; ctx.shadowBlur = blur;
+    ctx.beginPath(); ctx.moveTo(points[0][0], points[0][1]);
+    for (let i = 1; i < points.length; i++) ctx.lineTo(points[i][0], points[i][1]);
+    ctx.stroke(); ctx.restore();
+  }
+  const rivers = [
+    [[505,623],[493,658],[475,684],[481,711],[452,741],[447,768],[419,792],[412,827],[375,858],[355,901],[327,930]],
+    [[531,630],[540,661],[532,689],[552,715],[552,747],[570,777],[565,808],[590,837],[599,868],[628,897],[647,939]],
+    [[565,626],[582,657],[600,674],[605,704],[633,725],[638,752],[666,775],[675,804],[708,825],[718,854],[753,880]],
+    [[488,633],[472,660],[446,678],[435,706],[407,721],[395,748],[368,765],[355,794],[319,812]],
+    [[548,641],[557,674],[551,701],[568,724],[574,750],[590,769]]
+  ];
+  function draw(t, dt) {
+    ctx.clearRect(0, 0, w, h); ctx.save(); ctx.translate(ox, oy); ctx.scale(scale, scale);
+    const sky = ctx.createLinearGradient(0, 0, 0, 1080);
+    sky.addColorStop(0, '#080b23'); sky.addColorStop(.42, '#19102a'); sky.addColorStop(.7, '#54212e'); sky.addColorStop(1, '#130e1a');
+    ctx.fillStyle = sky; ctx.fillRect(0, 0, 1080, 1080);
+    glow(540, 590, 510, 'rgba(255,67,13,.30)');
+    for (const s of stars) {
+      const a = .28 + .5 * (0.5 + 0.5 * Math.sin(t * s.speed + s.phase));
+      ellipse(s.x * 1080, s.y * 1080, s.r, s.r, `rgba(220,224,255,${a})`);
+    }
+    // A distant, hazy ridge gives the mountain a sense of scale.
+    ctx.fillStyle = '#211727'; ctx.beginPath(); ctx.moveTo(0, 755); ctx.lineTo(100, 696); ctx.lineTo(190, 745); ctx.lineTo(290, 680); ctx.lineTo(382, 752); ctx.lineTo(475, 711); ctx.lineTo(583, 762); ctx.lineTo(701, 700); ctx.lineTo(795, 739); ctx.lineTo(908, 674); ctx.lineTo(1080, 753); ctx.lineTo(1080,1080); ctx.lineTo(0,1080); ctx.fill();
+    // Billowing ash cloud: overlapping translucent forms lit from beneath.
+    glow(540, 355, 320, 'rgba(255,66,15,.19)');
+    const clouds = [
+      [535,470,105,88],[477,430,110,78],[592,426,119,86],[412,382,115,79],[520,367,135,105],[646,365,125,91],
+      [355,324,115,72],[450,289,126,91],[570,286,142,105],[692,300,135,91],[777,337,91,65],
+      [333,258,90,65],[411,218,113,85],[526,199,128,94],[650,214,123,87],[742,249,104,75],
+      [412,154,101,70],[521,130,125,83],[642,151,112,74],[527,78,92,58]
+    ];
+    clouds.forEach((c, i) => {
+      const x = c[0] + Math.sin(t*.25 + i)*8, y = c[1] + Math.cos(t*.2+i)*5;
+      const g = ctx.createRadialGradient(x-c[2]*.2,y-c[3]*.25,5,x,y,c[2]);
+      g.addColorStop(0, i < 7 ? 'rgba(105,55,59,.78)' : 'rgba(57,48,66,.88)');
+      g.addColorStop(.65, 'rgba(37,31,47,.83)'); g.addColorStop(1, 'rgba(23,21,37,0)');
+      ellipse(x,y,c[2]*1.22,c[3]*1.25,g);
+    });
+    // Airborne glowing fragments arc up and fall back toward the crater.
+    for (const s of sparks) {
+      s.age += dt * s.speed * .32; if (s.age > 1) { s.age = 0; s.vx = rand(-1,1); s.vy = rand(.7,1.3); }
+      const p = s.age, x = 535 + s.vx * p * 210, y = 620 - s.vy * p * 590 + p*p*350;
+      const a = Math.sin(Math.PI * p) * .95;
+      if (a > 0) { glow(x,y,s.size*5,`rgba(255,67,4,${a*.65})`); ellipse(x,y,s.size*(1-p*.35),s.size*(1.6-p*.3),`rgba(255,${Math.floor(135+100*(1-p))},35,${a})`); }
+    }
+    // Dark mountain silhouette and facets.
+    ctx.fillStyle = '#120e18'; ctx.beginPath(); ctx.moveTo(-100,1080); ctx.lineTo(365,735); ctx.lineTo(467,635); ctx.lineTo(493,617); ctx.quadraticCurveTo(533,634,574,617); ctx.lineTo(617,653); ctx.lineTo(773,793); ctx.lineTo(1170,1080); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#28151c'; ctx.beginPath(); ctx.moveTo(493,625); ctx.lineTo(466,670); ctx.lineTo(344,817); ctx.lineTo(130,1080); ctx.lineTo(399,930); ctx.lineTo(474,784); ctx.lineTo(524,670); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#1c121b'; ctx.beginPath(); ctx.moveTo(565,624); ctx.lineTo(620,680); ctx.lineTo(782,818); ctx.lineTo(1080,1080); ctx.lineTo(714,948); ctx.lineTo(633,815); ctx.lineTo(584,705); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#32191f'; ctx.beginPath(); ctx.moveTo(520,665); ctx.lineTo(482,762); ctx.lineTo(502,842); ctx.lineTo(457,1000); ctx.lineTo(544,1080); ctx.lineTo(655,1080); ctx.lineTo(595,919); ctx.lineTo(608,834); ctx.lineTo(561,728); ctx.closePath(); ctx.fill();
+    // Lava channels: broad red halos, molten bodies, and bright moving cores.
+    rivers.forEach((river, i) => {
+      path(river, 'rgba(255,43,0,.28)', 29, 27);
+      path(river, '#8d1c0c', 16);
+      path(river, '#f04408', 9, 9);
+      path(river, '#ff9c16', 3.5, 5);
+      ctx.save(); ctx.setLineDash([15, 45 + i*4]); ctx.lineDashOffset = -t * (28+i*4); path(river, '#ffe364', 2.4, 7); ctx.restore();
+    });
+    // The crater lip sits in front of the fountain.
+    glow(535, 626, 115, 'rgba(255,67,0,.65)');
+    ellipse(536, 622, 66, 15, '#360f0d');
+    ellipse(536, 620, 53, 8, '#ff4c08');
+    ellipse(536, 618, 38, 4, '#ffd04a');
+    path([[467,635],[494,626],[514,630],[535,634],[557,630],[578,625],[606,642]], '#441a17', 12);
+    path([[493,628],[513,631],[535,634],[557,630],[579,627]], '#ef5010', 3, 9);
+    // Small floating cinders add depth in front of the mountain.
+    for (const e of embers) {
+      e.age += dt * e.speed * .12; if (e.age > 1) { e.age = 0; e.drift = rand(-1,1); }
+      const p = e.age, x = 535 + e.drift * (80 + p*450) + Math.sin(t*1.2+e.phase)*12, y = 720 - p*590;
+      const a = Math.sin(Math.PI*p) * .8;
+      ellipse(x,y,e.size*(1-p*.45),e.size*(1-p*.45),`rgba(255,${Math.floor(90+120*(1-p))},25,${a})`);
+    }
+    const foreground = ctx.createLinearGradient(0, 930, 0, 1080); foreground.addColorStop(0,'rgba(8,8,16,0)'); foreground.addColorStop(1,'rgba(5,6,13,.88)');
+    ctx.fillStyle = foreground; ctx.fillRect(0, 900, 1080, 180);
+    ctx.restore();
+  }
+  function frame(ms) { const t = ms / 1000; const dt = last ? Math.min(t-last, .05) : 0; last = t; draw(t, dt); requestAnimationFrame(frame); }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

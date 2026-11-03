@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Aurora Lake</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #031021; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas id="view" aria-label="Northern lights moving over a snowy mountain lake"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('view');
+  const ctx = canvas.getContext('2d');
+  const scene = document.createElement('canvas');
+  const s = scene.getContext('2d');
+  let w, h, dpr, scale, ox, oy;
+  const W = 1080, H = 1080, horizon = 635;
+  const rnd = (n) => { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
+  const stars = Array.from({length: 230}, (_, i) => ({
+    x: rnd(i + 1) * W, y: rnd(i + 401) * 575,
+    r: .45 + rnd(i + 901) * 1.45, a: .25 + rnd(i + 1201) * .7,
+    phase: rnd(i + 1501) * 6.28
+  }));
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    w = innerWidth; h = innerHeight;
+    canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+    scene.width = W; scene.height = H;
+    scale = Math.max(w / W, h / H);
+    ox = (w - W * scale) / 2; oy = (h - H * scale) / 2;
+  }
+  function path(points, fill) {
+    s.beginPath(); s.moveTo(points[0][0], points[0][1]);
+    for (let i = 1; i < points.length; i++) s.lineTo(points[i][0], points[i][1]);
+    s.closePath(); s.fillStyle = fill; s.fill();
+  }
+  function aurora(t, offset, hue, strength) {
+    s.save(); s.globalCompositeOperation = 'screen';
+    for (let band = 0; band < 5; band++) {
+      const ybase = 195 + offset + band * 17;
+      const wave = x => ybase + 56 * Math.sin(x * .0053 + t * .24 + band * .19) + 24 * Math.sin(x * .0105 - t * .16 + band * .4);
+      const grad = s.createLinearGradient(0, ybase - 105, 0, ybase + 210);
+      grad.addColorStop(0, 'rgba(24,255,184,0)');
+      grad.addColorStop(.27, `hsla(${hue + band * 4},100%,55%,${.018 * strength})`);
+      grad.addColorStop(.48, `hsla(${hue + band * 5},100%,57%,${.13 * strength})`);
+      grad.addColorStop(.6, `hsla(${hue + 24},100%,64%,${.10 * strength})`);
+      grad.addColorStop(.8, 'rgba(86,110,255,0.025)');
+      grad.addColorStop(1, 'rgba(80,80,255,0)');
+      s.beginPath();
+      for (let x = -40; x <= W + 40; x += 12) {
+        const y = wave(x) - 115 - 20 * Math.sin(x * .018 + t * .2);
+        if (x === -40) s.moveTo(x, y); else s.lineTo(x, y);
+      }
+      for (let x = W + 40; x >= -40; x -= 12) s.lineTo(x, wave(x) + 195 + 28 * Math.sin(x * .014 + t * .3));
+      s.closePath(); s.fillStyle = grad; s.fill();
+      // Fine vertical folds give the luminous curtain its soft, fibrous texture.
+      for (let x = 0; x < W; x += 5) {
+        const y = wave(x);
+        const flicker = .35 + .65 * Math.pow(Math.sin(x * .038 + t * .45 + band), 2);
+        const g = s.createLinearGradient(x, y - 70, x, y + 155);
+        g.addColorStop(0, 'rgba(84,255,204,0)');
+        g.addColorStop(.46, `hsla(${hue + 8},100%,70%,${.045 * flicker * strength})`);
+        g.addColorStop(1, 'rgba(118,113,255,0)');
+        s.fillStyle = g; s.fillRect(x, y - 70, 3, 225);
+      }
+    }
+    s.restore();
+  }
+  function drawScene(t) {
+    let g = s.createLinearGradient(0, 0, 0, horizon);
+    g.addColorStop(0, '#02091d'); g.addColorStop(.48, '#071b37'); g.addColorStop(1, '#123d50');
+    s.fillStyle = g; s.fillRect(0, 0, W, H);
+    const glow = s.createRadialGradient(550, 410, 10, 550, 410, 570);
+    glow.addColorStop(0, 'rgba(4,128,113,.25)'); glow.addColorStop(.55, 'rgba(14,68,102,.1)'); glow.addColorStop(1, 'rgba(0,0,0,0)');
+    s.fillStyle = glow; s.fillRect(0, 0, W, horizon);
+    for (const star of stars) {
+      s.globalAlpha = star.a * (.75 + .25 * Math.sin(t * .8 + star.phase));
+      s.fillStyle = '#d9faff'; s.beginPath(); s.arc(star.x, star.y, star.r, 0, Math.PI * 2); s.fill();
+    }
+    s.globalAlpha = 1;
+    aurora(t, -38, 151, .9); aurora(t * .8 + 8, 92, 170, .8);
+    // Distant peaks and their cold, moonlit faces.
+    path([[0,620],[0,530],[90,472],[150,501],[231,407],[281,457],[355,390],[447,490],[505,457],[581,503],[660,430],[741,489],[819,405],[890,472],[963,420],[1080,522],[1080,650]], '#132f45');
+    path([[90,472],[150,501],[231,407],[281,457],[355,390],[447,490],[388,467],[355,439],[335,454],[306,442],[281,479],[250,450],[231,430],[205,465],[176,467],[150,489]], '#90b9c5');
+    path([[660,430],[741,489],[819,405],[890,472],[963,420],[1080,522],[1009,482],[963,445],[943,462],[919,453],[890,485],[853,456],[819,430],[793,466],[770,457],[741,498]], '#729dab');
+    path([[0,641],[0,594],[89,568],[165,586],[247,520],[307,555],[392,464],[482,548],[550,511],[622,570],[708,503],[781,555],[857,494],[929,557],[1006,517],[1080,562],[1080,654]], '#10283a');
+    path([[247,520],[307,555],[392,464],[482,548],[443,534],[420,517],[400,524],[392,490],[367,522],[350,515],[325,547],[307,541],[282,536]], '#d0e6e8');
+    path([[392,464],[400,524],[420,517],[443,534],[482,548],[439,544],[410,535],[387,548],[365,538],[350,550],[325,547],[350,515],[367,522],[392,490]], '#7298a7');
+    path([[708,503],[781,555],[857,494],[929,557],[1006,517],[1080,562],[1041,555],[1006,535],[985,549],[967,542],[944,564],[920,553],[897,550],[857,515],[837,538],[822,533],[801,554],[781,544],[755,537],[738,542]], '#a9cbd0');
+    path([[0,610],[83,582],[164,604],[245,569],[319,595],[407,558],[501,600],[591,569],[670,600],[760,566],[843,598],[925,571],[1000,590],[1080,575],[1080,650],[0,650]], '#071d2b');
+    // A narrow snowy shoreline anchors the reflection.
+    path([[0,628],[95,618],[191,627],[279,617],[370,628],[454,619],[552,629],[641,620],[731,628],[821,618],[924,628],[1005,619],[1080,626],[1080,639],[0,639]], '#9dbfc3');
+    path([[0,636],[126,632],[230,637],[339,631],[450,637],[565,633],[686,638],[806,632],[921,638],[1080,632],[1080,645],[0,645]], '#193b48');
+  }
+  function frame(ms) {
+    const t = ms * .001;
+    drawScene(t);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = '#031021'; ctx.fillRect(0, 0, w, h);
+    ctx.save(); ctx.translate(ox, oy); ctx.scale(scale, scale);
+    ctx.drawImage(scene, 0, 0, W, horizon, 0, 0, W, horizon);
+    const water = ctx.createLinearGradient(0, horizon, 0, H);
+    water.addColorStop(0, '#123b4a'); water.addColorStop(.5, '#082536'); water.addColorStop(1, '#041320');
+    ctx.fillStyle = water; ctx.fillRect(0, horizon, W, H - horizon);
+    // Flip the scene into thin strips so each wave shifts its reflection independently.
+    ctx.save(); ctx.beginPath(); ctx.rect(0, horizon, W, H - horizon); ctx.clip();
+    for (let y = horizon; y < H; y += 3) {
+      const depth = y - horizon;
+      const sourceY = horizon - depth * .91;
+      const shift = Math.sin(y * .065 + t * 1.1) * (1 + depth * .012) + Math.sin(y * .023 - t * .7) * 3;
+      ctx.globalAlpha = .52 * (1 - depth / 1050);
+      ctx.drawImage(scene, 0, Math.max(0, sourceY - 3), W, 3, shift - 8, y, W + 16, 3.5);
+    }
+    ctx.globalAlpha = 1;
+    const shade = ctx.createLinearGradient(0, horizon, 0, H);
+    shade.addColorStop(0, 'rgba(3,23,31,.08)'); shade.addColorStop(1, 'rgba(1,12,24,.48)');
+    ctx.fillStyle = shade; ctx.fillRect(0, horizon, W, H - horizon);
+    for (let i = 0; i < 95; i++) {
+      const y = horizon + 10 + rnd(i + 2100) * (H - horizon - 10);
+      const x = rnd(i + 2500) * W;
+      const length = 12 + rnd(i + 2800) * (30 + (y - horizon) * .18);
+      ctx.strokeStyle = `rgba(${i % 3 ? '87,211,201' : '160,219,224'},${(.025 + rnd(i + 3000) * .075) * (1 - (y - horizon) / 700)})`;
+      ctx.lineWidth = .7 + rnd(i + 3300) * 1.4;
+      ctx.beginPath(); ctx.moveTo(x + Math.sin(t * .5 + i) * 4, y); ctx.lineTo(x + length, y); ctx.stroke();
+    }
+    ctx.restore();
+    const vignette = ctx.createRadialGradient(540, 475, 300, 540, 530, 780);
+    vignette.addColorStop(0, 'rgba(0,0,0,0)'); vignette.addColorStop(1, 'rgba(0,5,15,.48)');
+    ctx.fillStyle = vignette; ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+    requestAnimationFrame(frame);
+  }
+  window.addEventListener('resize', resize);
+  resize(); requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

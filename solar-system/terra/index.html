@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Solar System</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #030515; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas id="space" aria-label="An animated view of the solar system"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('space');
+  const ctx = canvas.getContext('2d');
+  const planets = [
+    { orbit: 72,  size: 3.2, color: '#b5a99c', light: '#f9e6c9', speed: .48, phase: 1.8 },
+    { orbit: 101, size: 5.5, color: '#e7a34c', light: '#ffe3a2', speed: .34, phase: 4.3 },
+    { orbit: 135, size: 6.1, color: '#157be8', light: '#92e5ff', speed: .26, phase: 2.7, earth: true },
+    { orbit: 170, size: 4.4, color: '#df5634', light: '#ffc083', speed: .20, phase: 5.6 },
+    { orbit: 222, size: 13.5, color: '#c98153', light: '#ffe2aa', speed: .105, phase: .6, bands: true },
+    { orbit: 278, size: 11.2, color: '#dbb67c', light: '#fff0b3', speed: .075, phase: 3.6, rings: true },
+    { orbit: 333, size: 8.2, color: '#65d4d5', light: '#d6ffff', speed: .052, phase: 1.15 },
+    { orbit: 383, size: 8, color: '#335ce0', light: '#8bbdff', speed: .039, phase: 4.9 }
+  ];
+  let w, h, dpr, scale, cx, cy;
+  let seed = 394827;
+  function random() { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }
+  const stars = Array.from({ length: 350 }, () => ({
+    x: random(), y: random(), r: .3 + random() * 1.15,
+    a: .22 + random() * .7, tint: random(), twinkle: random() * 6.28
+  }));
+  function resize() {
+    w = innerWidth; h = innerHeight; dpr = Math.min(devicePixelRatio || 1, 2);
+    canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    scale = Math.min(w, h) / 900;
+    cx = w / 2; cy = h / 2;
+  }
+  addEventListener('resize', resize); resize();
+  function glow(x, y, radius, color, alpha = 1) {
+    const g = ctx.createRadialGradient(x, y, 0, x, y, radius);
+    g.addColorStop(0, color); g.addColorStop(1, 'transparent');
+    ctx.globalAlpha = alpha; ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+  }
+  function render(ms) {
+    const t = ms * .001;
+    ctx.clearRect(0, 0, w, h);
+    const bg = ctx.createRadialGradient(w*.51, h*.47, 0, w*.5, h*.5, Math.max(w,h)*.75);
+    bg.addColorStop(0, '#111431'); bg.addColorStop(.48, '#080c20'); bg.addColorStop(1, '#02040d');
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
+    glow(w*.7, h*.25, Math.max(w,h)*.45, '#292054', .19);
+    glow(w*.2, h*.75, Math.max(w,h)*.4, '#063d57', .14);
+    for (const s of stars) {
+      ctx.globalAlpha = s.a * (.8 + .2 * Math.sin(t*.6 + s.twinkle));
+      ctx.fillStyle = s.tint > .85 ? '#91c9ff' : s.tint > .7 ? '#ffcfba' : '#ffffff';
+      ctx.beginPath(); ctx.arc(s.x*w, s.y*h, s.r * Math.max(.7, scale), 0, Math.PI*2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    ctx.save(); ctx.translate(cx, cy); ctx.scale(scale, scale);
+    // The camera gently changes its angle and height as it drifts around the system.
+    const rotation = .22 + t*.018;
+    const tilt = .49 + .045 * Math.sin(t*.08);
+    const cos = Math.cos(rotation), sin = Math.sin(rotation);
+    function project(x, z) {
+      const rx = x*cos - z*sin, depth = x*sin + z*cos;
+      return { x: rx, y: depth*tilt, depth };
+    }
+    // Faint orbital paths establish the shared plane without overpowering the planets.
+    ctx.lineWidth = .8;
+    for (const p of planets) {
+      ctx.beginPath();
+      for (let i = 0; i <= 180; i++) {
+        const a = i / 180 * Math.PI * 2, q = project(Math.cos(a)*p.orbit, Math.sin(a)*p.orbit);
+        if (!i) ctx.moveTo(q.x, q.y); else ctx.lineTo(q.x, q.y);
+      }
+      ctx.strokeStyle = 'rgba(125, 164, 210, 0.19)'; ctx.stroke();
+    }
+    const bodies = planets.map(p => {
+      const a = p.phase + t*p.speed*.12;
+      return { p, ...project(Math.cos(a)*p.orbit, Math.sin(a)*p.orbit) };
+    });
+    bodies.push({ sun: true, x: 0, y: 0, depth: 0 });
+    bodies.sort((a,b) => a.depth - b.depth);
+    for (const b of bodies) {
+      if (b.sun) {
+        glow(0, 0, 115, '#ff7500', .22);
+        glow(0, 0, 71, '#ff9b13', .35);
+        const sun = ctx.createRadialGradient(-10, -12, 2, 0, 0, 36);
+        sun.addColorStop(0, '#fff6ab'); sun.addColorStop(.38, '#ffd447'); sun.addColorStop(.78, '#ff9c13'); sun.addColorStop(1, '#ee4c06');
+        ctx.fillStyle = sun; ctx.beginPath(); ctx.arc(0, 0, 35, 0, Math.PI*2); ctx.fill();
+        ctx.save(); ctx.beginPath(); ctx.arc(0, 0, 35, 0, Math.PI*2); ctx.clip();
+        for (let i = 0; i < 7; i++) {
+          ctx.strokeStyle = `rgba(255, 246, 157, ${.06 + i*.006})`; ctx.lineWidth = 2 + i%3;
+          ctx.beginPath(); ctx.ellipse(-3, -25+i*9, 32, 5+2*Math.sin(t*.2+i), -.12, 0, Math.PI*2); ctx.stroke();
+        }
+        ctx.restore();
+        continue;
+      }
+      const p = b.p, r = p.size, x = b.x, y = b.y;
+      glow(x, y, r*3.2, p.color, .18);
+      if (p.rings) {
+        ctx.save(); ctx.translate(x, y); ctx.rotate(-.23);
+        ctx.strokeStyle = 'rgba(236, 205, 151, .72)'; ctx.lineWidth = 5;
+        ctx.beginPath(); ctx.ellipse(0, 0, r*1.85, r*.48, 0, Math.PI, Math.PI*2); ctx.stroke();
+        ctx.restore();
+      }
+      const sphere = ctx.createRadialGradient(x-r*.38, y-r*.42, r*.05, x, y, r*1.1);
+      sphere.addColorStop(0, p.light); sphere.addColorStop(.45, p.color); sphere.addColorStop(1, '#101025');
+      ctx.fillStyle = sphere; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2); ctx.fill();
+      if (p.bands || p.earth) {
+        ctx.save(); ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2); ctx.clip();
+        if (p.bands) {
+          ctx.strokeStyle = 'rgba(116, 55, 43, .3)'; ctx.lineWidth = 2;
+          for (let j = -2; j <= 2; j++) { ctx.beginPath(); ctx.ellipse(x, y+j*r*.37, r, r*.11, -.08, 0, Math.PI*2); ctx.stroke(); }
+        } else {
+          ctx.fillStyle = 'rgba(92, 204, 123, .8)';
+          ctx.beginPath(); ctx.ellipse(x-r*.25, y-r*.25, r*.38, r*.2, -.6, 0, Math.PI*2); ctx.fill();
+          ctx.beginPath(); ctx.ellipse(x+r*.25, y+r*.2, r*.22, r*.36, .5, 0, Math.PI*2); ctx.fill();
+        }
+        ctx.restore();
+      }
+      if (p.rings) {
+        ctx.save(); ctx.translate(x, y); ctx.rotate(-.23);
+        ctx.strokeStyle = 'rgba(246, 218, 167, .9)'; ctx.lineWidth = 5;
+        ctx.beginPath(); ctx.ellipse(0, 0, r*1.85, r*.48, 0, 0, Math.PI); ctx.stroke();
+        ctx.strokeStyle = 'rgba(116, 78, 65, .55)'; ctx.lineWidth = .8;
+        ctx.beginPath(); ctx.ellipse(0, 0, r*1.85, r*.48, 0, 0, Math.PI); ctx.stroke(); ctx.restore();
+      }
+    }
+    ctx.restore();
+    requestAnimationFrame(render);
+  }
+  requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>

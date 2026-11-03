@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Domino Spiral</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #100d28; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<script>
+(() => {
+  'use strict';
+  const canvas = document.getElementById('scene');
+  const ctx = canvas.getContext('2d');
+  const count = 420;
+  const tiles = [];
+  const turns = 5.25;
+  const startAngle = -Math.PI * 0.48;
+  const endAngle = startAngle + turns * Math.PI * 2;
+  const inner = 0.035, outer = 0.455;
+  // Sample the spiral by distance so the gaps remain even around every turn.
+  const samples = [];
+  let distance = 0, previous = null;
+  for (let i = 0; i <= 12000; i++) {
+    const t = i / 12000;
+    const a = startAngle + (endAngle - startAngle) * t;
+    const r = outer + (inner - outer) * t;
+    const p = { x: Math.cos(a) * r, y: Math.sin(a) * r, a, r };
+    if (previous) distance += Math.hypot(p.x - previous.x, p.y - previous.y);
+    samples.push({ ...p, d: distance });
+    previous = p;
+  }
+  let cursor = 0;
+  for (let i = 0; i < count; i++) {
+    const target = distance * i / (count - 1);
+    while (cursor < samples.length - 2 && samples[cursor + 1].d < target) cursor++;
+    const p = samples[cursor], q = samples[cursor + 1];
+    const f = (target - p.d) / (q.d - p.d || 1);
+    const x = p.x + (q.x - p.x) * f;
+    const y = p.y + (q.y - p.y) * f;
+    const dx = q.x - p.x, dy = q.y - p.y;
+    const len = Math.hypot(dx, dy);
+    // Color travels in broad, bright bands along the path.
+    const hue = (i * 2.65 + 318) % 360;
+    tiles.push({ x, y, tx: dx / len, ty: dy / len, hue, index: i });
+  }
+
+  let width, height, scale, dpr;
+  function resize() {
+    width = innerWidth; height = innerHeight;
+    dpr = Math.min(devicePixelRatio || 1, 2);
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    scale = Math.min(width, height);
+  }
+  addEventListener('resize', resize, { passive: true });
+  resize();
+
+  function polygon(points, fill) {
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+    ctx.closePath(); ctx.fillStyle = fill; ctx.fill();
+  }
+  function drawTile(tile, progress) {
+    const { x, y, tx, ty, hue } = tile;
+    const nx = -ty, ny = tx;
+    const w = 0.0105, thickness = 0.0042, h = 0.029;
+    // A tile rotates forward about its lower edge, passing its momentum onward.
+    const eased = 1 - Math.pow(1 - Math.max(0, Math.min(1, progress)), 2.3);
+    const angle = eased * Math.PI * 0.485;
+    const lean = Math.sin(angle) * h;
+    const rise = Math.cos(angle) * h;
+    const project = (px, py, z = 0) => ({
+      x: width / 2 + px * scale,
+      y: height / 2 + py * scale * 0.89 - z * scale
+    });
+    const point = (along, across, z = 0) => project(x + tx * along + nx * across, y + ty * along + ny * across, z);
+    const a = point(-thickness / 2, -w / 2), b = point(-thickness / 2, w / 2);
+    const c = point(thickness / 2, w / 2), d = point(thickness / 2, -w / 2);
+    const A = point(-thickness / 2 + lean, -w / 2, rise), B = point(-thickness / 2 + lean, w / 2, rise);
+    const C = point(thickness / 2 + lean, w / 2, rise), D = point(thickness / 2 + lean, -w / 2, rise);
+    // Soft offset grounds each piece and makes the path legible on the dark floor.
+    ctx.save();
+    ctx.globalAlpha = 0.23;
+    ctx.lineWidth = scale * 0.009;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = '#030315';
+    ctx.beginPath(); ctx.moveTo((a.x + b.x) / 2 + scale * 0.004, (a.y + b.y) / 2 + scale * 0.006);
+    ctx.lineTo((A.x + B.x) / 2 + scale * 0.008, (A.y + B.y) / 2 + scale * 0.009); ctx.stroke();
+    ctx.restore();
+    polygon([b, c, C, B], `hsl(${hue} 90% 35%)`);
+    polygon([a, b, B, A], `hsl(${hue} 96% 56%)`);
+    polygon([d, a, A, D], `hsl(${hue} 90% 43%)`);
+    polygon([A, B, C, D], `hsl(${hue} 100% 72%)`);
+    // A fine highlight catches the edge without adding visual clutter.
+    ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(B.x, B.y);
+    ctx.strokeStyle = `hsla(${hue} 100% 88% / .7)`; ctx.lineWidth = Math.max(0.5, scale * 0.0007); ctx.stroke();
+  }
+
+  const ordered = [...tiles].sort((a, b) => a.y - b.y);
+  const duration = 17000, rest = 2200, reset = 900;
+  function frame(now) {
+    ctx.clearRect(0, 0, width, height);
+    const bg = ctx.createRadialGradient(width * .5, height * .43, 0, width * .5, height * .5, Math.max(width, height) * .72);
+    bg.addColorStop(0, '#292052'); bg.addColorStop(.55, '#191337'); bg.addColorStop(1, '#09091c');
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, width, height);
+    const cycle = now % (duration + rest + reset);
+    const wave = cycle < duration + rest ? cycle / duration * (count + 12) : -20;
+    for (const tile of ordered) drawTile(tile, (wave - tile.index) / 9);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

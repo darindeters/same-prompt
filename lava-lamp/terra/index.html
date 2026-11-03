@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lava Lamp</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #100521; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas id="scene" aria-label="An animated glowing lava lamp"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('scene');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const lava = document.createElement('canvas');
+  lava.width = 230;
+  lava.height = 390;
+  const lc = lava.getContext('2d');
+  const pixels = lc.createImageData(lava.width, lava.height);
+  const blobs = Array.from({ length: 13 }, (_, i) => ({
+    phase: (i * 0.61803398875) % 1,
+    speed: 0.035 + (i % 5) * 0.004,
+    x: 0.23 + ((i * 0.381966) % 1) * 0.54,
+    radius: 0.075 + (i % 4) * 0.012,
+    sway: i * 2.37
+  }));
+  let width, height, scale, ox, oy;
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    scale = Math.min(width, height) / 1080;
+    ox = (width - 1080 * scale) / 2;
+    oy = (height - 1080 * scale) / 2;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  function vessel() {
+    ctx.beginPath();
+    ctx.moveTo(457, 169);
+    ctx.bezierCurveTo(450, 240, 422, 325, 382, 429);
+    ctx.bezierCurveTo(339, 541, 316, 668, 334, 750);
+    ctx.bezierCurveTo(345, 801, 399, 825, 540, 825);
+    ctx.bezierCurveTo(681, 825, 735, 801, 746, 750);
+    ctx.bezierCurveTo(764, 668, 741, 541, 698, 429);
+    ctx.bezierCurveTo(658, 325, 630, 240, 623, 169);
+    ctx.closePath();
+  }
+
+  function drawLava(t) {
+    const w = lava.width, h = lava.height, data = pixels.data;
+    const moving = blobs.map(b => {
+      const p = (b.phase + t * b.speed) % 1;
+      const y = 1.12 - p * 1.27;
+      const x = b.x + Math.sin(t * 0.62 + b.sway + p * 5) * 0.065;
+      const stretch = 1.15 + 0.55 * (0.5 + 0.5 * Math.sin(t * 1.1 + b.sway));
+      return { x, y, rx: b.radius * (1.15 - 0.12 * Math.sin(t + b.sway)), ry: b.radius * stretch };
+    });
+    let k = 0;
+    for (let y = 0; y < h; y++) {
+      const ny = y / h;
+      for (let x = 0; x < w; x++) {
+        const nx = x / w;
+        let field = 0;
+        for (let i = 0; i < moving.length; i++) {
+          const b = moving[i];
+          const dx = (nx - b.x) / b.rx, dy = (ny - b.y) / b.ry;
+          field += 1 / (dx * dx + dy * dy + 0.08);
+        }
+        // A pool of wax at the bottom feeds the rising shapes.
+        const bottom = (ny - 0.99) / 0.055;
+        field += 1.15 / (bottom * bottom + 0.5);
+        const edge = Math.max(0, Math.min(1, (field - 1.05) * 4));
+        const hot = Math.max(0, Math.min(1, (field - 1.1) / 2.5));
+        const glow = Math.max(0, Math.min(1, field / 1.2));
+        data[k++] = 43 + edge * (189 + hot * 23) + glow * 14;
+        data[k++] = 5 + edge * (19 + hot * 80) + glow * 3;
+        data[k++] = 94 + edge * (59 - hot * 75) + glow * 30;
+        data[k++] = 255;
+      }
+    }
+    lc.putImageData(pixels, 0, 0);
+  }
+
+  function render(ms) {
+    const t = ms / 1000;
+    ctx.setTransform(canvas.width / width, 0, 0, canvas.height / height, 0, 0);
+    const bg = ctx.createRadialGradient(width / 2, height * 0.49, 0, width / 2, height * 0.5, Math.max(width, height) * 0.72);
+    bg.addColorStop(0, '#42104f'); bg.addColorStop(0.45, '#1e0a37'); bg.addColorStop(1, '#090419');
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, width, height);
+    ctx.save(); ctx.translate(ox, oy); ctx.scale(scale, scale);
+
+    // Colored light cast onto the surrounding room.
+    let glow = ctx.createRadialGradient(540, 548, 65, 540, 548, 430);
+    glow.addColorStop(0, 'rgba(255,22,126,.24)'); glow.addColorStop(.55, 'rgba(168,20,150,.09)'); glow.addColorStop(1, 'rgba(168,20,150,0)');
+    ctx.fillStyle = glow; ctx.fillRect(80, 90, 920, 860);
+    ctx.fillStyle = 'rgba(4, 1, 17, .45)';
+    ctx.beginPath(); ctx.ellipse(540, 958, 294, 32, 0, 0, Math.PI * 2); ctx.fill();
+
+    drawLava(t);
+    ctx.save(); vessel(); ctx.clip();
+    ctx.drawImage(lava, 318, 158, 444, 675);
+    const glass = ctx.createLinearGradient(320, 0, 760, 0);
+    glass.addColorStop(0, 'rgba(28,0,73,.75)'); glass.addColorStop(.12, 'rgba(243,113,255,.22)');
+    glass.addColorStop(.24, 'rgba(255,188,255,.05)'); glass.addColorStop(.72, 'rgba(50,0,91,.03)');
+    glass.addColorStop(.91, 'rgba(255,118,236,.23)'); glass.addColorStop(1, 'rgba(26,0,62,.7)');
+    ctx.fillStyle = glass; ctx.fillRect(310, 150, 460, 690);
+    const shine = ctx.createLinearGradient(0, 170, 0, 820);
+    shine.addColorStop(0, 'rgba(255,196,255,.18)'); shine.addColorStop(.35, 'rgba(255,255,255,0)'); shine.addColorStop(1, 'rgba(255,63,132,.13)');
+    ctx.fillStyle = shine; ctx.fillRect(310, 150, 460, 690);
+    ctx.restore();
+    vessel(); ctx.strokeStyle = 'rgba(255,167,246,.38)'; ctx.lineWidth = 5; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(427, 340); ctx.bezierCurveTo(388, 448, 359, 550, 355, 640);
+    ctx.strokeStyle = 'rgba(255,215,255,.28)'; ctx.lineWidth = 7; ctx.lineCap = 'round'; ctx.stroke();
+
+    // Polished cap and weighted base.
+    const metal = ctx.createLinearGradient(350, 0, 730, 0);
+    metal.addColorStop(0, '#36173f'); metal.addColorStop(.16, '#a264a5'); metal.addColorStop(.32, '#f4b7e7');
+    metal.addColorStop(.5, '#8f538f'); metal.addColorStop(.76, '#542b67'); metal.addColorStop(.9, '#bd79b9'); metal.addColorStop(1, '#35143f');
+    ctx.fillStyle = metal;
+    ctx.beginPath(); ctx.moveTo(452, 176); ctx.lineTo(472, 105); ctx.quadraticCurveTo(479, 84, 497, 81);
+    ctx.quadraticCurveTo(540, 73, 583, 81); ctx.quadraticCurveTo(601, 84, 608, 105); ctx.lineTo(628, 176);
+    ctx.quadraticCurveTo(540, 190, 452, 176); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,207,251,.45)'; ctx.lineWidth = 3; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(337, 779); ctx.quadraticCurveTo(540, 834, 743, 779);
+    ctx.lineTo(704, 925); ctx.quadraticCurveTo(540, 954, 376, 925); ctx.closePath();
+    ctx.fillStyle = metal; ctx.fill();
+    ctx.strokeStyle = 'rgba(255,186,239,.35)'; ctx.lineWidth = 3; ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(540, 925, 164, 17, 0, 0, Math.PI); ctx.lineWidth = 7; ctx.strokeStyle = '#35163f'; ctx.stroke();
+    ctx.restore();
+    requestAnimationFrame(render);
+  }
+  requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>

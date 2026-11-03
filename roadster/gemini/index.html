@@ -1,0 +1,1562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Rocket Roadster</title>
+<style>
+  *, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #060812;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="viewport"></canvas>
+<script>
+(() => {
+  "use strict";
+
+  // Global state required every frame
+  window.carState = {
+    height: 0,
+    thrusters: false
+  };
+
+  const canvas = document.getElementById("viewport");
+  const gl = canvas.getContext("webgl2", { antialias: false, alpha: false, powerPreference: "high-performance" });
+  if (!gl) return;
+
+  // ---------------------------------------------------------------------------
+  // SHADERS: High-End 3D Raymarched & Volumetric PBR Renderer
+  // ---------------------------------------------------------------------------
+  const vsSource = `#version 300 es
+  precision highp float;
+  layout(location = 0) in vec2 aPos;
+  out vec2 vUv;
+  void main() {
+    vUv = aPos * 0.5 + 0.5;
+    gl_Position = vec4(aPos, 0.0, 1.0);
+  }
+  `;
+
+  const fsSource = `#version 300 es
+  precision highp float;
+
+  in vec2 vUv;
+  out vec4 fragColor;
+
+  uniform vec2 uResolution;
+  uniform float uTime;
+  uniform vec3 uCarPos;
+  uniform mat3 uCarRot;      // World-to-Car local rotation matrix
+  uniform mat3 uCarRotInv;   // Car-local-to-World rotation matrix
+  uniform vec3 uCamPos;
+  uniform vec3 uCamTarget;
+  uniform float uCamRoll;
+  uniform float uThrusterPower;     // 0.0 when off, >0.0 when firing
+  uniform float uRearBoosterPower;  // Extra rear booster thrust during loop
+  uniform float uNozzleDeploy;      // 0.0 parked -> 1.0 deployed VTOL vector angle
+  uniform float uSuspOffset;        // Suspension compression on liftoff/landing
+  uniform float uWheelSpin;         // Wheel rotation angle
+  uniform vec2 uGimbal;             // Pitch/roll thruster nozzle gimbal
+
+  // Material IDs
+  #define MAT_GROUND      1.0
+  #define MAT_CAR_PAINT   2.0
+  #define MAT_CARBON      3.0
+  #define MAT_GLASS       4.0
+  #define MAT_CHROME      5.0
+  #define MAT_TIRE        6.0
+  #define MAT_HEADLIGHT   7.0
+  #define MAT_TAILLIGHT   8.0
+  #define MAT_THRUSTER    9.0
+  #define MAT_SEAT        10.0
+  #define MAT_CALIPER     11.0
+  #define MAT_INTERIOR    12.0
+
+  // Smoothstep helper that safely supports both ascending (e0 < e1) and descending (e0 > e1) edges
+  float ss(float e0, float e1, float x) {
+    float t = clamp((x - e0) / (e1 - e0), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+  }
+
+  // Smooth minimum & maximum helpers
+  float smin(float a, float b, float k) {
+    float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+    return mix(b, a, h) - k * h * (1.0 - h);
+  }
+
+  float smax(float a, float b, float k) {
+    return -smin(-a, -b, k);
+  }
+
+  mat2 rot2(float a) {
+    float c = cos(a), s = sin(a);
+    return mat2(c, -s, s, c);
+  }
+
+  // Signed Distance Primitives
+  float sdBox(vec3 p, vec3 b) {
+    vec3 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
+  }
+
+  float sdRoundBox(vec3 p, vec3 b, float r) {
+    vec3 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0) - r;
+  }
+
+  float sdCapsule(vec3 p, vec3 a, vec3 b, float r) {
+    vec3 pa = p - a, ba = b - a;
+    float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+    return length(pa - ba * h) - r;
+  }
+
+  float sdCylinderX(vec3 p, float r, float h) {
+    vec2 d = abs(vec2(length(p.yz), p.x)) - vec2(r, h);
+    return min(max(d.x, d.y), 0.0) + length(max(d, 0.0));
+  }
+
+  float sdCylinderY(vec3 p, float r, float h) {
+    vec2 d = abs(vec2(length(p.xz), p.y)) - vec2(r, h);
+    return min(max(d.x, d.y), 0.0) + length(max(d, 0.0));
+  }
+
+  float sdCylinderZ(vec3 p, float r, float h) {
+    vec2 d = abs(vec2(length(p.xy), p.z)) - vec2(r, h);
+    return min(max(d.x, d.y), 0.0) + length(max(d, 0.0));
+  }
+
+  float sdCappedConeY(vec3 p, float h, float r1, float r2) {
+    vec2 q = vec2(length(p.xz), p.y);
+    vec2 k1 = vec2(r2, h);
+    vec2 k2 = vec2(r2 - r1, 2.0 * h);
+    vec2 ca = vec2(q.x - min(q.x, (q.y < 0.0) ? r1 : r2), abs(q.y) - h);
+    vec2 cb = q - k1 + k2 * clamp(dot(k1 - q, k2) / dot(k2, k2), 0.0, 1.0);
+    float s = (cb.x < 0.0 && ca.y < 0.0) ? -1.0 : 1.0;
+    return s * sqrt(min(dot(ca, ca), dot(cb, cb)));
+  }
+
+  float sdTorusX(vec3 p, vec2 t) {
+    vec2 q = vec2(length(p.yz) - t.x, p.x);
+    return length(q) - t.y;
+  }
+
+  // Fast procedural hash & 3D value noise
+  float hash12(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+  }
+
+  float noise3(vec3 x) {
+    vec3 p = floor(x);
+    vec3 f = fract(x);
+    f = f * f * (3.0 - 2.0 * f);
+    float n = p.x + p.y * 157.0 + 113.0 * p.z;
+    vec4 v1 = fract(sin(vec4(n + 0.0, n + 1.0, n + 157.0, n + 158.0)) * 43758.5453);
+    vec4 v2 = fract(sin(vec4(n + 113.0, n + 114.0, n + 270.0, n + 271.0)) * 43758.5453);
+    vec4 a = mix(v1, v2, f.z);
+    vec2 b = mix(a.xy, a.zw, f.y);
+    return mix(b.x, b.y, f.x);
+  }
+
+  // ---------------------------------------------------------------------------
+  // SLEEK TWO-SEAT ELECTRIC ROCKET ROADSTER SDF
+  // Local coordinates:
+  //   X: width  (-1.05 to +1.05 m)
+  //   Y: height (0.0 is ground contact plane when parked)
+  //   Z: length (-2.25 rear to +2.25 front)
+  // ---------------------------------------------------------------------------
+  vec2 mapCar(vec3 pLocal) {
+    // Apply suspension offset to the sprung chassis
+    vec3 p = pLocal;
+    p.y -= 0.50 + uSuspOffset;
+
+    // Bounding box early-out for the entire car
+    float bbox = sdBox(p, vec3(1.38, 0.92, 2.55));
+    if (bbox > 0.35) return vec2(bbox, 0.0);
+
+    // Symmetry along X for sculpted bodywork
+    vec3 ps = p;
+    ps.x = abs(ps.x);
+
+    // --- 1. MAIN AERODYNAMIC BODY SHELL ---
+    // Lower sleek fuselage with curved nose drop and wasp-waist side pinch
+    float zNorm = clamp(p.z / 2.15, -1.0, 1.0);
+    float noseDrop = ss(0.1, 1.0, zNorm) * 0.16;
+    float rearKick = ss(-0.1, -1.0, zNorm) * 0.09;
+    float waistPinch = exp(-p.z * p.z * 1.4) * 0.11;
+    float noseTaper = ss(0.35, 1.0, zNorm) * 0.22;
+    float rearTaper = ss(-0.55, -1.0, zNorm) * 0.10;
+
+    float halfWidth = 0.96 - waistPinch - noseTaper - rearTaper;
+    vec3 pCore = p;
+    pCore.y += noseDrop - rearKick;
+
+    // Crown arch across X
+    pCore.y -= (1.0 - clamp((ps.x * ps.x) / 0.95, 0.0, 1.0)) * 0.055;
+
+    float dCore = sdRoundBox(pCore, vec3(halfWidth, 0.19, 2.06), 0.085);
+
+    // Front splitter wedge cut
+    float frontPlane = (p.z - 1.92) * 0.75 - (p.y + 0.18) * 0.66;
+    dCore = smax(dCore, frontPlane, 0.07);
+
+    // Sculpted muscular front & rear fenders
+    vec3 pFrontFender = ps - vec3(0.84, 0.04, 1.30);
+    pFrontFender.y += ss(1.1, 2.0, p.z) * 0.12;
+    float dFrontFender = sdRoundBox(pFrontFender, vec3(0.22, 0.21, 0.62), 0.11);
+
+    vec3 pRearFender = ps - vec3(0.88, 0.09, -1.32);
+    pRearFender.y += ss(-1.3, -2.15, -p.z) * 0.06;
+    float dRearFender = sdRoundBox(pRearFender, vec3(0.24, 0.24, 0.68), 0.12);
+
+    float dBody = smin(dCore, dFrontFender, 0.11);
+    dBody = smin(dBody, dRearFender, 0.12);
+
+    // Twin Speedster Aerodynamic Rear Buttresses (behind driver & passenger seats)
+    vec3 pButtress = ps - vec3(0.41, 0.30, -0.98);
+    pButtress.y += (p.z + 0.45) * -0.18;
+    float buttressWidth = mix(0.16, 0.05, clamp((-p.z - 0.35) / 1.4, 0.0, 1.0));
+    float dButtress = sdRoundBox(pButtress, vec3(buttressWidth, 0.15, 0.62), 0.06);
+    dBody = smin(dBody, dButtress, 0.09);
+
+    // Front hood aero channel / venturi scoop
+    vec3 pHoodScoop = p - vec3(0.0, 0.19, 1.28);
+    float dHoodScoop = sdRoundBox(pHoodScoop, vec3(0.38, 0.08, 0.42), 0.04);
+    dBody = smax(dBody, -dHoodScoop, 0.04);
+
+    // Deep sculpted side air intakes ahead of rear wheels
+    vec3 pSideScoop = ps - vec3(0.95, 0.04, -0.32);
+    pSideScoop.xz *= rot2(-0.22);
+    float dSideScoop = sdRoundBox(pSideScoop, vec3(0.18, 0.13, 0.56), 0.05);
+    dBody = smax(dBody, -dSideScoop, 0.045);
+
+    // Active Rear Aero Wing (floating carbon/body blade)
+    vec3 pWing = p - vec3(0.0, 0.40, -1.96);
+    pWing.y += ps.x * ps.x * 0.06;
+    pWing.yz *= rot2(0.16);
+    float dWing = sdRoundBox(pWing, vec3(0.84, 0.012, 0.13), 0.015);
+    float dStrut = sdRoundBox(ps - vec3(0.46, 0.30, -1.92), vec3(0.018, 0.10, 0.08), 0.01);
+    dBody = smin(dBody, dWing, 0.025);
+
+    // Wheel arch cutouts
+    vec3 pWheelF = ps - vec3(0.88, -0.12, 1.32);
+    vec3 pWheelR = ps - vec3(0.91, -0.10, -1.34);
+    float dArchF = sdCylinderX(pWheelF, 0.39, 0.36);
+    float dArchR = sdCylinderX(pWheelR, 0.42, 0.38);
+    dBody = smax(dBody, -dArchF, 0.03);
+    dBody = smax(dBody, -dArchR, 0.03);
+
+    // Open-Top Two-Seat Cockpit Tub Cutout
+    vec3 pCockpitCut = p - vec3(0.0, 0.22, -0.05);
+    float dCockpitCut = sdRoundBox(pCockpitCut, vec3(0.68, 0.24, 0.74), 0.12);
+    dBody = smax(dBody, -dCockpitCut, 0.05);
+
+    vec2 res = vec2(dBody, MAT_CAR_PAINT);
+
+    // --- 2. CARBON FIBER SPLITTER, SIDE SKIRTS & REAR DIFFUSER ---
+    vec3 pSplitter = p - vec3(0.0, -0.24, 0.02);
+    float splitW = 0.94 - waistPinch * 0.6 - ss(0.5, 1.0, zNorm) * 0.16;
+    float dSplitter = sdRoundBox(pSplitter, vec3(splitW, 0.028, 2.12), 0.02);
+    dSplitter = smax(dSplitter, -sdCylinderX(pWheelF, 0.40, 0.40), 0.02);
+    dSplitter = smax(dSplitter, -sdCylinderX(pWheelR, 0.43, 0.40), 0.02);
+
+    // Rear diffuser strakes
+    vec3 pDiff = p - vec3(0.0, -0.16, -2.06);
+    float dDiff = sdRoundBox(pDiff, vec3(0.76, 0.11, 0.16), 0.02);
+    dSplitter = smin(dSplitter, dDiff, 0.04);
+    dSplitter = min(dSplitter, dStrut);
+
+    if (dSplitter < res.x) res = vec2(dSplitter, MAT_CARBON);
+
+    // --- 3. WRAPAROUND SPEEDSTER GLASS WINDSHIELD ---
+    vec3 pGlass = p - vec3(0.0, 0.28, 0.52);
+    pGlass.y += ps.x * ps.x * 0.14;
+    pGlass.z += ps.x * ps.x * 0.36;
+    pGlass.yz *= rot2(-0.98);
+    float dGlassOuter = sdRoundBox(pGlass, vec3(0.74, 0.016, 0.36), 0.02);
+    if (dGlassOuter < res.x) res = vec2(dGlassOuter, MAT_GLASS);
+
+    // --- 4. TWO-SEAT ROADSTER INTERIOR (Driver & Passenger Bucket Seats + Console + Yoke) ---
+    // Center console spine dividing the two seats
+    vec3 pConsole = p - vec3(0.0, 0.05, -0.02);
+    float dConsole = sdRoundBox(pConsole, vec3(0.11, 0.14, 0.68), 0.04);
+    // Dashboard cowl
+    vec3 pDash = p - vec3(0.0, 0.16, 0.56);
+    float dDash = sdRoundBox(pDash, vec3(0.68, 0.09, 0.18), 0.04);
+    float dInterior = smin(dConsole, dDash, 0.05);
+
+    // Steering yoke on left side (x = -0.38)
+    vec3 pYoke = p - vec3(-0.38, 0.21, 0.35);
+    pYoke.yz *= rot2(-0.35);
+    float dYoke = sdRoundBox(pYoke, vec3(0.15, 0.075, 0.018), 0.015);
+    float dYokeHole = sdRoundBox(pYoke - vec3(0.0, 0.01, 0.0), vec3(0.10, 0.04, 0.05), 0.01);
+    dYoke = max(dYoke, -dYokeHole);
+    dInterior = min(dInterior, dYoke);
+    if (dInterior < res.x) res = vec2(dInterior, MAT_INTERIOR);
+
+    // Two distinct sculpted sports seats (left & right via ps.x symmetry at x = +/-0.38)
+    vec3 pSeat = ps - vec3(0.38, 0.02, -0.18);
+    // Seat cushion
+    float dCushion = sdRoundBox(pSeat - vec3(0.0, -0.04, 0.14), vec3(0.19, 0.05, 0.22), 0.035);
+    // Reclined backrest + side bolsters + integrated headrest
+    vec3 pBack = pSeat - vec3(0.0, 0.18, -0.10);
+    pBack.yz *= rot2(0.28);
+    float seatW = mix(0.19, 0.10, ss(0.05, 0.28, pBack.y));
+    float dBack = sdRoundBox(pBack, vec3(seatW, 0.26, 0.045), 0.035);
+    // Side bolsters
+    vec3 pBolster = pBack;
+    pBolster.x = abs(pBolster.x) - 0.16;
+    float dBolster = sdCapsule(pBolster, vec3(0.0, -0.16, 0.04), vec3(0.0, 0.08, 0.03), 0.04);
+    float dSeats = smin(dCushion, smin(dBack, dBolster, 0.03), 0.04);
+    if (dSeats < res.x) res = vec2(dSeats, MAT_SEAT);
+
+    // --- 5. LED LASER HEADLIGHTS & FULL-WIDTH REAR LIGHTBLADE ---
+    vec3 pHL = ps - vec3(0.64, 0.04, 1.93);
+    pHL.xz *= rot2(0.36);
+    float dHL = sdRoundBox(pHL, vec3(0.22, 0.018, 0.04), 0.012);
+    if (dHL < res.x) res = vec2(dHL, MAT_HEADLIGHT);
+
+    vec3 pTL = p - vec3(0.0, 0.15, -2.10);
+    pTL.y -= ps.x * ps.x * 0.03;
+    float dTL = sdRoundBox(pTL, vec3(0.84, 0.022, 0.035), 0.012);
+    if (dTL < res.x) res = vec2(dTL, MAT_TAILLIGHT);
+
+    // --- 6. WHEELS, TIRES, ALLOY SPOKES & BRAKE CALIPERS ---
+    // Unsprung wheel positions (stay planted on ground when parked)
+    vec3 pUnsprung = pLocal;
+    pUnsprung.y -= 0.37;
+    vec3 puS = pUnsprung;
+    puS.x = abs(puS.x);
+
+    vec3 pwF = puS - vec3(0.88, 0.0, 1.32);
+    vec3 pwR = puS - vec3(0.91, 0.02, -1.34);
+    vec3 pw = (abs(pLocal.z - 1.32) < abs(pLocal.z + 1.34)) ? pwF : pwR;
+    float wRad = (abs(pLocal.z - 1.32) < abs(pLocal.z + 1.34)) ? 0.36 : 0.385;
+
+    // Tire torus/cylinder with rounded shoulder
+    float dTire = sdCylinderX(pw, wRad, 0.145) - 0.025;
+    dTire = max(dTire, -sdCylinderX(pw, wRad * 0.72, 0.22));
+    if (dTire < res.x) res = vec2(dTire, MAT_TIRE);
+
+    // Forged alloy rim + 5 twin spokes
+    float dRimBarrel = sdCylinderX(pw, wRad * 0.73, 0.13);
+    dRimBarrel = max(dRimBarrel, -sdCylinderX(pw, wRad * 0.65, 0.16));
+    vec3 pwSpin = pw;
+    pwSpin.yz *= rot2(uWheelSpin);
+    float ang = atan(pwSpin.y, pwSpin.z);
+    float spokeAngle = mod(ang + 3.14159265, 1.256637) - 0.6283185; // 5-fold symmetry
+    vec3 pSpoke = vec3(pw.x - 0.11, length(pw.yz) * sin(spokeAngle), length(pw.yz) * cos(spokeAngle));
+    pSpoke.y = abs(pSpoke.y) - 0.026;
+    float dSpokes = sdBox(pSpoke - vec3(0.0, 0.0, wRad * 0.35), vec3(0.018, 0.012, wRad * 0.34));
+    float dHub = sdCylinderX(pw - vec3(0.08, 0.0, 0.0), 0.065, 0.06);
+    float dRim = min(dRimBarrel, min(dSpokes, dHub));
+    if (dRim < res.x) res = vec2(dRim, MAT_CHROME);
+
+    // Brake disc & caliper
+    float dCaliper = sdRoundBox(pw - vec3(0.04, 0.06, -wRad * 0.44), vec3(0.045, 0.09, 0.055), 0.015);
+    if (dCaliper < res.x) res = vec2(dCaliper, MAT_CALIPER);
+
+    // --- 7. ARTICULATING QUAD VTOL ROCKET THRUSTERS & TWIN REAR BOOSTERS ---
+    // Quad under-chassis / rocker VTOL thruster pods at front & rear corners
+    float zPod = (p.z > 0.0) ? 0.82 : -0.82;
+    vec3 pPod = ps - vec3(0.76, -0.22, zPod);
+    // Deploy outward and gimbal dynamically with flight pitch/roll
+    float deployTilt = 0.18 * uNozzleDeploy + uGimbal.y * sign(p.x) * 0.2;
+    pPod.xy *= rot2(deployTilt);
+    pPod.yz *= rot2(uGimbal.x * 0.25);
+
+    float dNozzleOuter = sdCappedConeY(pPod, 0.14, 0.135, 0.085);
+    float dNozzleInner = sdCappedConeY(pPod - vec3(0.0, -0.03, 0.0), 0.13, 0.118, 0.065);
+    float dQuadNozzle = max(dNozzleOuter, -dNozzleInner);
+
+    // Glowing inner plasma injector core inside each quad nozzle
+    float dQuadCore = sdCylinderY(pPod - vec3(0.0, 0.03, 0.0), 0.075, 0.03);
+
+    // Twin Rear Main Rocket Booster Nozzles in rear diffuser
+    vec3 pRearNozzle = ps - vec3(0.28, -0.08, -2.14);
+    pRearNozzle.yz *= rot2(1.42); // Pointed backward and slightly down
+    float dRearOuter = sdCappedConeY(pRearNozzle, 0.15, 0.13, 0.08);
+    float dRearInner = sdCappedConeY(pRearNozzle - vec3(0.0, -0.03, 0.0), 0.14, 0.11, 0.06);
+    float dRearBell = max(dRearOuter, -dRearInner);
+    float dRearCore = sdCylinderY(pRearNozzle - vec3(0.0, 0.02, 0.0), 0.072, 0.03);
+
+    float dNozzleMetal = min(dQuadNozzle, dRearBell);
+    if (dNozzleMetal < res.x) res = vec2(dNozzleMetal, MAT_CHROME);
+
+    float dThrusterCore = min(dQuadCore, dRearCore);
+    if (dThrusterCore < res.x) res = vec2(dThrusterCore, MAT_THRUSTER);
+
+    return res;
+  }
+
+  // World-space scene SDF (Ground Launchpad + Rocket Roadster)
+  vec2 mapScene(vec3 p) {
+    // Ground plane at y = 0.0
+    float dGround = p.y;
+    vec2 res = vec2(dGround, MAT_GROUND);
+
+    // Transform world point into Car local coordinates
+    vec3 pLocal = uCarRot * (p - uCarPos);
+    vec2 dCar = mapCar(pLocal);
+    if (dCar.x < res.x) res = dCar;
+
+    return res;
+  }
+
+  // Normal calculation using tetrahedron technique
+  vec3 calcNormal(vec3 p) {
+    const float h = 0.0012;
+    const vec2 k = vec2(1.0, -1.0);
+    return normalize(
+      k.xyy * mapScene(p + k.xyy * h).x +
+      k.yyx * mapScene(p + k.yyx * h).x +
+      k.yxy * mapScene(p + k.yxy * h).x +
+      k.xxx * mapScene(p + k.xxx * h).x
+    );
+  }
+
+  // Soft shadow raymarching
+  float calcSoftShadow(vec3 ro, vec3 rd, float mint, float maxt, float k) {
+    float res = 1.0;
+    float t = mint;
+    for (int i = 0; i < 36; i++) {
+      if (t > maxt) break;
+      vec3 p = ro + rd * t;
+      vec3 pLocal = uCarRot * (p - uCarPos);
+      float h = mapCar(pLocal).x;
+      if (h < 0.001) return 0.02;
+      res = min(res, k * h / t);
+      t += clamp(h, 0.02, 0.25);
+    }
+    return clamp(res, 0.02, 1.0);
+  }
+
+  // Ambient occlusion
+  float calcAO(vec3 pos, vec3 nor) {
+    float occ = 0.0;
+    float sca = 1.0;
+    for (int i = 0; i < 5; i++) {
+      float h = 0.02 + 0.09 * float(i);
+      float d = mapScene(pos + h * nor).x;
+      occ += (h - d) * sca;
+      sca *= 0.72;
+    }
+    return clamp(1.0 - 2.4 * occ, 0.0, 1.0);
+  }
+
+  // ---------------------------------------------------------------------------
+  // SKY & ENVIRONMENT LIGHTING (Vivid Twilight Sunset + Studio Rim)
+  // ---------------------------------------------------------------------------
+  vec3 getSkyColor(vec3 rd) {
+    vec3 sunDir = normalize(vec3(-0.52, 0.24, -0.82));
+    float sunDot = clamp(dot(rd, sunDir), 0.0001, 1.0);
+    float y = max(rd.y, 0.0001);
+
+    // Rich saturated twilight gradient: deep royal cobalt zenith -> vibrant magenta -> warm golden-orange horizon
+    vec3 zenithCol  = vec3(0.025, 0.055, 0.20);
+    vec3 midSkyCol  = vec3(0.28, 0.07, 0.34);
+    vec3 horizonCol = vec3(0.96, 0.32, 0.14);
+
+    vec3 col = mix(horizonCol, midSkyCol, pow(y, 0.32));
+    col = mix(col, zenithCol, pow(y, 0.75));
+
+    // Atmospheric sunset glow & vivid sun disc
+    col += vec3(1.0, 0.45, 0.12) * pow(sunDot, 5.0) * 0.65;
+    col += vec3(1.0, 0.78, 0.42) * pow(sunDot, 32.0) * 1.1;
+    col += vec3(1.0, 0.95, 0.85) * ss(0.9975, 0.9994, sunDot) * 4.5;
+
+    // Subtle distant horizon mountains silhouette
+    if (rd.y > -0.05 && rd.y < 0.12) {
+      float ang = atan(rd.x, rd.z);
+      float mH = 0.035 * sin(ang * 5.0 + 1.2) + 0.018 * sin(ang * 13.0) + 0.008 * sin(ang * 29.0);
+      float mMask = ss(mH + 0.003, mH - 0.002, rd.y);
+      vec3 mCol = mix(vec3(0.06, 0.03, 0.10), vec3(0.35, 0.10, 0.18), pow(sunDot, 3.0));
+      col = mix(col, mCol, mMask * ss(-0.02, 0.01, rd.y));
+    }
+
+    // High altitude stars in upper zenith
+    if (rd.y > 0.25) {
+      vec2 starUV = rd.xz / (rd.y + 0.1) * 45.0;
+      float s = hash12(floor(starUV));
+      vec2 f = fract(starUV) - 0.5;
+      float star = ss(0.985, 0.999, s) * exp(-dot(f, f) * 35.0);
+      col += vec3(0.8, 0.9, 1.0) * star * ss(0.25, 0.6, rd.y);
+    }
+
+    return max(col, vec3(0.0));
+  }
+
+  // ---------------------------------------------------------------------------
+  // VOLUMETRIC ROCKET THRUSTER PLUMES, SHOCK DIAMONDS & GROUND BLAST WAVE
+  // ---------------------------------------------------------------------------
+  // Evaluates analytic + noisy distance and density to a single rocket plume cone
+  vec3 evalSinglePlume(vec3 ro, vec3 rd, float maxT, vec3 nozzleOrig, vec3 nozzleDir, float plumeLen, float baseRad, float power, float seed) {
+    if (power <= 0.001) return vec3(0.0);
+
+    // Closest approach between view ray (ro, rd) and plume axis (nozzleOrig, nozzleDir)
+    vec3 w0 = ro - nozzleOrig;
+    float b = dot(rd, nozzleDir);
+    float c = dot(w0, rd);
+    float d = dot(w0, nozzleDir);
+    float denom = 1.0 - b * b;
+
+    float tRayCenter = 0.0;
+    if (denom > 0.0001) {
+      tRayCenter = (b * d - c) / denom;
+    } else {
+      tRayCenter = -c;
+    }
+
+    // Sample a window along the view ray around the closest approach to the plume axis
+    float halfWin = plumeLen * 0.95;
+    float tStart = max(0.05, tRayCenter - halfWin);
+    float tEnd   = min(maxT, tRayCenter + halfWin);
+    if (tEnd <= tStart) return vec3(0.0);
+
+    vec3 accum = vec3(0.0);
+    const int STEPS = 14;
+    float dt = (tEnd - tStart) / float(STEPS);
+
+    for (int i = 0; i < STEPS; i++) {
+      float t = tStart + (float(i) + 0.5) * dt;
+      vec3 pos = ro + rd * t;
+      vec3 rel = pos - nozzleOrig;
+      float axial = dot(rel, nozzleDir);
+
+      if (axial > -0.05 && axial < plumeLen) {
+        vec3 radialVec = rel - nozzleDir * axial;
+        float r = length(radialVec);
+        float normAxial = clamp(axial / max(plumeLen, 0.01), 0.0001, 1.0);
+
+        // Plume expands slightly then tapers to a supersonic tip
+        float coneRad = max(0.02, mix(baseRad, baseRad * 2.1, pow(normAxial, 0.55)) * (1.0 - 0.55 * pow(normAxial, 1.8)));
+
+        if (r < coneRad * 2.2) {
+          // High-speed supersonic turbulence + Mach shock diamonds
+          float turb = noise3(pos * 14.0 - nozzleDir * (uTime * 38.0 + seed));
+          float shock = 0.5 + 0.5 * cos(axial * 28.0 - uTime * 42.0 + turb * 2.2);
+          shock = mix(0.65, 1.45, shock * (1.0 - normAxial));
+
+          float radialFalloff = exp(-(r * r) / (coneRad * coneRad * 0.42));
+          float axialFalloff  = ss(-0.04, 0.04, axial) * (1.0 - pow(normAxial, 1.35));
+
+          float density = radialFalloff * axialFalloff * shock * power;
+
+          // Vivid plasma color gradient:
+          // Core: incandescent white-cyan -> mid: electric blue/violet -> outer: fiery orange-gold
+          vec3 coreCol  = vec3(1.8, 2.4, 3.2);
+          vec3 midCol   = vec3(0.15, 0.72, 2.5);
+          vec3 outerCol = vec3(2.4, 0.55, 0.08);
+
+          float coreFactor = exp(-(r * r) / (coneRad * coneRad * 0.14)) * (1.0 - normAxial * 0.6);
+          vec3 pCol = mix(outerCol, midCol, ss(0.0, 0.65, radialFalloff));
+          pCol = mix(pCol, coreCol, coreFactor);
+
+          accum += pCol * density * dt * 5.2;
+        }
+      }
+    }
+    return accum;
+  }
+
+  vec3 renderAllPlumes(vec3 ro, vec3 rd, float maxT) {
+    if (uThrusterPower <= 0.001) return vec3(0.0);
+
+    vec3 totalGlow = vec3(0.0);
+    vec3 sprungCenter = uCarPos + uCarRotInv * vec3(0.0, 0.50 + uSuspOffset, 0.0);
+
+    // 4 Quad VTOL Thrusters
+    for (int sx = -1; sx <= 1; sx += 2) {
+      for (int sz = -1; sz <= 1; sz += 2) {
+        float fx = float(sx);
+        float fz = float(sz);
+        vec3 localNozzle = vec3(fx * 0.76, -0.32, fz * 0.82);
+
+        float deployTilt = 0.18 * uNozzleDeploy + uGimbal.y * fx * 0.2;
+        vec3 localDir = normalize(vec3(sin(deployTilt) * fx, -cos(deployTilt), sin(uGimbal.x * 0.25)));
+
+        vec3 worldNozzle = sprungCenter + uCarRotInv * localNozzle;
+        vec3 worldDir    = normalize(uCarRotInv * localDir);
+
+        float len = (1.05 + 0.45 * sin(uTime * 31.0 + fx * 1.7 + fz)) * clamp(uThrusterPower, 0.0, 1.4);
+        totalGlow += evalSinglePlume(ro, rd, maxT, worldNozzle, worldDir, len, 0.125, uThrusterPower, fx * 3.1 + fz * 7.3);
+      }
+    }
+
+    // 2 Rear Main Rocket Boosters (always active when thrusters fire, supercharged during aerial loop)
+    float rearPwr = uThrusterPower * (0.55 + 1.15 * uRearBoosterPower);
+    vec3 localRearDir = normalize(vec3(0.0, -0.15, -0.988));
+    vec3 worldRearDir = normalize(uCarRotInv * localRearDir);
+    for (int sx = -1; sx <= 1; sx += 2) {
+      float fx = float(sx);
+      vec3 localRearPos = vec3(fx * 0.28, -0.09, -2.26);
+      vec3 worldRearPos = sprungCenter + uCarRotInv * localRearPos;
+      float rLen = (1.1 + 1.15 * uRearBoosterPower) * clamp(uThrusterPower, 0.0, 1.5);
+      totalGlow += evalSinglePlume(ro, rd, maxT, worldRearPos, worldRearDir, rLen, 0.135, rearPwr, fx * 5.0);
+    }
+
+    // Ground Impingement Plasma Ring when car is near the launchpad (< 4.8m altitude)
+    float altFactor = ss(5.0, 0.0, uCarPos.y) * uThrusterPower;
+    if (altFactor > 0.01 && rd.y < -0.001) {
+      float tGround = (0.04 - ro.y) / rd.y;
+      if (tGround > 0.0 && tGround < maxT) {
+        vec3 gp = ro + rd * tGround;
+        vec2 d2 = gp.xz - uCarPos.xz;
+        float dist = length(d2);
+        float expandR = mix(1.4, 3.8, 1.0 - altFactor * 0.5);
+        float wave = sin(dist * 7.0 - uTime * 26.0) * 0.5 + 0.5;
+        vec2 dir2 = d2 / max(dist, 0.001);
+        float n = noise3(vec3(d2 * 2.5 - dir2 * uTime * 9.0, uTime * 4.0));
+        float ringDelta = (dist - 1.15) / expandR;
+        float ring = exp(-ringDelta * ringDelta * 2.4) * ss(4.8, 0.5, dist);
+        vec3 blastCol = mix(vec3(2.2, 0.55, 0.1), vec3(0.3, 1.4, 2.8), exp(-dist * 0.6));
+        totalGlow += blastCol * ring * (0.6 + 0.7 * n * wave) * altFactor * 1.35;
+      }
+    }
+
+    return totalGlow;
+  }
+
+  // ---------------------------------------------------------------------------
+  // SURFACE SHADING (PBR Metallic Paint, Clearcoat, Reflections & Launchpad)
+  // ---------------------------------------------------------------------------
+  vec3 shadeSurface(vec3 pos, vec3 nor, vec3 rd, float matID, bool isReflection) {
+    vec3 V = -rd;
+    vec3 R = reflect(rd, nor);
+
+    // Key sun light (warm golden sunset) + cool sky dome + thruster dynamic under-glow
+    vec3 sunDir = normalize(vec3(-0.52, 0.34, -0.78));
+    vec3 sunCol = vec3(2.6, 1.75, 1.15);
+
+    float shadow = 1.0;
+    if (!isReflection) {
+      shadow = calcSoftShadow(pos + nor * 0.015, sunDir, 0.03, 14.0, 12.0);
+    }
+    float ao = isReflection ? 0.85 : calcAO(pos, nor);
+
+    // Thruster dynamic point light under the car
+    vec3 thrusterLightPos = uCarPos + vec3(0.0, max(0.12, uCarPos.y - 0.15), 0.0);
+    vec3 toThruster = thrusterLightPos - pos;
+    float tDist = length(toThruster);
+    vec3 tDir = toThruster / max(tDist, 0.001);
+    float flicker = 0.9 + 0.1 * sin(uTime * 55.0) * cos(uTime * 37.0);
+    vec3 thrusterLightCol = mix(vec3(0.25, 0.85, 2.4), vec3(2.2, 0.85, 0.25), 0.38) * uThrusterPower * flicker * 5.5;
+    float tAtten = 1.0 / (1.0 + 0.35 * tDist + 0.22 * tDist * tDist);
+    float tDiff = max(dot(nor, tDir), 0.0);
+    if (matID == MAT_GROUND) {
+      tDiff = max(tDiff, 0.45 * exp(-tDist * 0.35));
+    }
+
+    // Material properties
+    vec3 albedo = vec3(0.1);
+    float metallic = 0.0;
+    float roughness = 0.3;
+    float clearcoat = 0.0;
+    vec3 emissive = vec3(0.0);
+
+    vec3 pLocal = uCarRot * (pos - uCarPos);
+
+    if (matID == MAT_GROUND) {
+      // High-tech dark basalt launchpad with glowing telemetry rings & wet reflection
+      float rPad = length(pos.xz);
+      float gridX = abs(fract(pos.x * 0.5 + 0.5) - 0.5);
+      float gridZ = abs(fract(pos.z * 0.5 + 0.5) - 0.5);
+      float panelLine = ss(0.015, 0.004, min(gridX, gridZ));
+
+      float grain = hash12(floor(pos.xz * 42.0)) * 0.035;
+      albedo = vec3(0.035, 0.04, 0.055) + grain - panelLine * 0.018;
+      roughness = mix(0.14, 0.32, grain * 18.0);
+      metallic = 0.15;
+
+      // Concentric launchpad target markings & emissive guide rings
+      float ring1 = ss(0.06, 0.015, abs(rPad - 2.65));
+      float ring2 = ss(0.08, 0.02, abs(rPad - 4.4));
+      float ang = atan(pos.x, pos.z);
+      float dashes = step(0.15, sin(ang * 16.0));
+      float crossHair = ss(0.05, 0.01, min(abs(pos.x), abs(pos.z))) * step(2.65, rPad) * step(rPad, 6.2);
+
+      // Pad lights respond to thruster activation
+      vec3 padGlowCol = mix(vec3(0.0, 0.75, 1.4), vec3(1.8, 0.55, 0.08), clamp(uThrusterPower, 0.0, 1.0));
+      emissive += padGlowCol * (ring1 * 1.4 + ring2 * dashes * 0.9 + crossHair * 0.45);
+
+      // Scorched/heated pad glow right under liftoff spot
+      float heatSpot = exp(-rPad * rPad * 0.55) * uThrusterPower * ss(3.5, 0.0, uCarPos.y);
+      emissive += vec3(1.8, 0.45, 0.08) * heatSpot * 1.1;
+
+    } else if (matID == MAT_CAR_PAINT) {
+      // Vivid Candy Sunset Crimson-Red Metallic Paint with Golden-Orange Flip & Glossy Clearcoat
+      float ndotv = clamp(dot(nor, V), 0.0, 1.0);
+      vec3 deepCrimson = vec3(0.78, 0.015, 0.08);
+      vec3 candyRed    = vec3(1.00, 0.08, 0.04);
+      vec3 goldFlip    = vec3(1.00, 0.42, 0.05);
+
+      albedo = mix(goldFlip, candyRed, ss(0.0, 0.45, ndotv));
+      albedo = mix(albedo, deepCrimson, ss(0.45, 1.0, ndotv));
+      metallic = 0.78;
+      roughness = 0.14;
+      clearcoat = 1.0;
+
+    } else if (matID == MAT_CARBON) {
+      float weave = sin((pLocal.x + pLocal.z) * 140.0) * sin((pLocal.x - pLocal.z) * 140.0);
+      albedo = vec3(0.03, 0.032, 0.04) + weave * 0.008;
+      metallic = 0.35;
+      roughness = 0.26;
+      clearcoat = 0.5;
+
+    } else if (matID == MAT_GLASS) {
+      albedo = vec3(0.02, 0.05, 0.09);
+      metallic = 0.1;
+      roughness = 0.03;
+      clearcoat = 1.0;
+
+    } else if (matID == MAT_CHROME) {
+      albedo = vec3(0.82, 0.85, 0.92);
+      metallic = 0.95;
+      roughness = 0.12;
+
+    } else if (matID == MAT_TIRE) {
+      albedo = vec3(0.022, 0.022, 0.026);
+      metallic = 0.05;
+      roughness = 0.72;
+
+    } else if (matID == MAT_SEAT) {
+      // Rich warm cognac / saddle-tan leather sports seats
+      albedo = vec3(0.58, 0.22, 0.07);
+      metallic = 0.05;
+      roughness = 0.38;
+
+    } else if (matID == MAT_INTERIOR) {
+      albedo = vec3(0.04, 0.045, 0.06);
+      metallic = 0.2;
+      roughness = 0.32;
+      // Glowing telemetry screen on center console
+      if (abs(pLocal.x) < 0.08 && abs(pLocal.z - 0.32) < 0.12 && pLocal.y > 0.55) {
+        emissive = vec3(0.1, 0.85, 1.6) * 1.8;
+      }
+
+    } else if (matID == MAT_CALIPER) {
+      albedo = vec3(0.95, 0.68, 0.02);
+      metallic = 0.7;
+      roughness = 0.18;
+      clearcoat = 0.8;
+
+    } else if (matID == MAT_HEADLIGHT) {
+      albedo = vec3(0.9, 0.95, 1.0);
+      emissive = vec3(2.2, 2.7, 3.5);
+      roughness = 0.05;
+
+    } else if (matID == MAT_TAILLIGHT) {
+      albedo = vec3(1.0, 0.05, 0.05);
+      emissive = vec3(3.6, 0.18, 0.08) * (1.0 + 0.5 * uThrusterPower);
+      roughness = 0.05;
+
+    } else if (matID == MAT_THRUSTER) {
+      albedo = vec3(0.15, 0.18, 0.22);
+      emissive = mix(vec3(0.05, 0.2, 0.4), vec3(2.5, 3.8, 5.5), clamp(uThrusterPower * 1.4, 0.0, 1.0));
+      roughness = 0.1;
+    }
+
+    // Direct Sun Lighting (Cook-Torrance GGX approximation)
+    float NdotL = max(dot(nor, sunDir), 0.0);
+    vec3 H = normalize(V + sunDir);
+    float NdotH = max(dot(nor, H), 0.0001);
+    float NdotV = max(dot(nor, V), 0.001);
+    float VdotH = clamp(dot(V, H), 0.0, 0.9999);
+
+    vec3 F0 = mix(vec3(0.04), albedo, metallic);
+    vec3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
+
+    float alpha = roughness * roughness;
+    float alpha2 = max(alpha * alpha, 0.0002);
+    float denom = NdotH * NdotH * (alpha2 - 1.0) + 1.0;
+    float D = alpha2 / (3.14159265 * denom * denom);
+
+    vec3 diffuse = albedo * (1.0 - metallic) / 3.14159265;
+    vec3 directSun = (diffuse + F * D * 0.25) * sunCol * NdotL * shadow;
+
+    // Clearcoat layer for automotive showroom gloss
+    float oneMinusNdotV = max(1.0 - NdotV, 0.0001);
+    float ccFresnel = 0.04 + 0.96 * pow(oneMinusNdotV, 5.0);
+    float ccSpec = pow(NdotH, 180.0) * clearcoat * 2.5;
+    directSun += sunCol * ccSpec * shadow;
+
+    // Environment Sky & Ground Bounce Reflection
+    vec3 envSky = getSkyColor(R);
+    vec3 skyAmbient = mix(vec3(0.08, 0.06, 0.14), vec3(0.28, 0.22, 0.42), nor.y * 0.5 + 0.5);
+    vec3 envF = F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(oneMinusNdotV, 5.0);
+
+    vec3 ambient = diffuse * skyAmbient * ao * 1.8;
+    vec3 specEnv = envSky * (envF + clearcoat * ccFresnel * 0.55) * mix(1.0, ao, 0.5);
+
+    // Thruster dynamic illumination on car & launchpad
+    vec3 Ht = normalize(V + tDir);
+    float tSpec = pow(max(dot(nor, Ht), 0.0001), 28.0);
+    vec3 thrusterIllum = (diffuse * tDiff + (F0 + 0.25) * tSpec * 0.45) * thrusterLightCol * tAtten;
+
+    // Headlight beam projection onto the launchpad ahead of the car
+    if (matID == MAT_GROUND) {
+      vec3 carForward = normalize(uCarRotInv * vec3(0.0, -0.08, 1.0));
+      vec3 headOrigin = uCarPos + uCarRotInv * vec3(0.0, 0.48, 2.0);
+      vec3 toGround = pos - headOrigin;
+      float fwdDist = dot(toGround, carForward);
+      if (fwdDist > 0.0 && fwdDist < 16.0) {
+        vec3 beamDir = normalize(toGround);
+        float cone = pow(max(dot(beamDir, carForward), 0.0001), 14.0);
+        float atten = exp(-fwdDist * 0.16);
+        emissive += vec3(0.75, 0.9, 1.2) * cone * atten * 0.45;
+      }
+    }
+
+    return directSun + ambient + specEnv + thrusterIllum + emissive;
+  }
+
+  void main() {
+    // Normalized coordinates centered on screen, aspect-corrected so 1080x1080 is pristine
+    vec2 uv = (gl_FragCoord.xy - 0.5 * uResolution.xy) / min(uResolution.x, uResolution.y);
+
+    // Camera basis with dynamic bank/roll
+    vec3 cw = normalize(uCamTarget - uCamPos);
+    vec3 worldUp = vec3(sin(uCamRoll), cos(uCamRoll), 0.0);
+    vec3 cu = normalize(cross(cw, worldUp));
+    vec3 cv = cross(cu, cw);
+
+    float fov = 1.38;
+    vec3 ro = uCamPos;
+    vec3 rd = normalize(uv.x * cu + uv.y * cv + fov * cw);
+
+    // Primary Raymarch
+    float t = 0.05;
+    float maxT = 48.0;
+    float hitMat = 0.0;
+
+    for (int i = 0; i < 96; i++) {
+      vec3 p = ro + rd * t;
+      vec2 h = mapScene(p);
+      if (h.x < 0.0014 * (1.0 + 0.15 * t)) {
+        hitMat = h.y;
+        break;
+      }
+      t += h.x;
+      if (t > maxT) break;
+    }
+
+    vec3 col = vec3(0.0);
+    float sceneT = maxT;
+
+    if (hitMat > 0.5 && t < maxT) {
+      sceneT = t;
+      vec3 pos = ro + rd * t;
+      vec3 nor = (hitMat == MAT_GROUND) ? vec3(0.0, 1.0, 0.0) : calcNormal(pos);
+
+      col = shadeSurface(pos, nor, rd, hitMat, false);
+
+      // True Raymarched Ground Reflection of the Car & Thrusters on the Polished Launchpad
+      if (hitMat == MAT_GROUND) {
+        float rPad = length(pos.xz);
+        if (rPad < 14.0) {
+          vec3 refRd = reflect(rd, nor);
+          float rt = 0.04;
+          float refMat = 0.0;
+          for (int j = 0; j < 44; j++) {
+            vec3 rp = pos + refRd * rt;
+            vec3 rpLocal = uCarRot * (rp - uCarPos);
+            vec2 rh = mapCar(rpLocal);
+            if (rh.x < 0.003) {
+              refMat = rh.y;
+              break;
+            }
+            rt += rh.x;
+            if (rt > 16.0) break;
+          }
+
+          float fresnel = 0.06 + 0.55 * pow(max(1.0 - max(dot(nor, -rd), 0.0), 0.0001), 4.0);
+          float padFade = ss(14.0, 2.5, rPad);
+
+          if (refMat > 0.5 && rt < 16.0) {
+            vec3 rPos = pos + refRd * rt;
+            vec3 rNor = calcNormal(rPos);
+            vec3 rCol = shadeSurface(rPos, rNor, refRd, refMat, true);
+            rCol += renderAllPlumes(pos, refRd, rt);
+            col = mix(col, rCol, fresnel * padFade * 0.72);
+          } else {
+            vec3 rPlume = renderAllPlumes(pos, refRd, 14.0);
+            col += rPlume * fresnel * padFade * 0.65;
+          }
+        }
+
+        // Distance atmospheric horizon blend on the ground plane
+        float fog = 1.0 - exp(-0.0014 * t * t);
+        col = mix(col, getSkyColor(vec3(rd.x, 0.01, rd.z)), fog);
+      }
+    } else {
+      col = getSkyColor(rd);
+    }
+
+    // Add Volumetric 3D Rocket Plumes in front of scene geometry
+    col += renderAllPlumes(ro, rd, sceneT);
+
+    // Subtle lens flare / bloom from active thrusters when visible
+    if (uThrusterPower > 0.01) {
+      vec3 toCar = uCarPos - ro;
+      float carDist = max(length(toCar), 0.001);
+      float viewAlign = max(dot(rd, toCar / carDist), 0.0001);
+      col += vec3(0.15, 0.55, 1.2) * pow(viewAlign, 24.0) * uThrusterPower * 0.22;
+    }
+
+    // ACES Filmic Tone Mapping + Vivid Saturation Enhancement for Phone/1080x1080 Display
+    col *= 1.08;
+    const float a = 2.51;
+    const float b = 0.03;
+    const float c = 2.43;
+    const float d = 0.59;
+    const float e = 0.14;
+    col = clamp((col * (a * col + b)) / (col * (c * col + d) + e), 0.0, 1.0);
+
+    // Subtle vibrance boost so colors pop naturally without clipping
+    float luma = dot(col, vec3(0.2126, 0.7152, 0.0722));
+    col = mix(vec3(luma), col, 1.18);
+
+    // Subtle cinematic vignette
+    float vig = 1.0 - 0.16 * dot(uv, uv);
+    col *= clamp(vig, 0.75, 1.0);
+
+    // Gamma correction
+    col = pow(max(col, vec3(0.0001)), vec3(1.0 / 2.2));
+
+    fragColor = vec4(col, 1.0);
+  }
+  `;
+
+  function compileShader(type, source) {
+    const shader = gl.createShader(type);
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(shader));
+      gl.deleteShader(shader);
+      return null;
+    }
+    return shader;
+  }
+
+  const vs = compileShader(gl.VERTEX_SHADER, vsSource);
+  const fs = compileShader(gl.FRAGMENT_SHADER, fsSource);
+  const program = gl.createProgram();
+  gl.attachShader(program, vs);
+  gl.attachShader(program, fs);
+  gl.linkProgram(program);
+  gl.useProgram(program);
+
+  // Fullscreen triangle strip
+  const quadVao = gl.createVertexArray();
+  gl.bindVertexArray(quadVao);
+  const quadBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+  // Uniform locations
+  const uniforms = {
+    uResolution: gl.getUniformLocation(program, "uResolution"),
+    uTime: gl.getUniformLocation(program, "uTime"),
+    uCarPos: gl.getUniformLocation(program, "uCarPos"),
+    uCarRot: gl.getUniformLocation(program, "uCarRot"),
+    uCarRotInv: gl.getUniformLocation(program, "uCarRotInv"),
+    uCamPos: gl.getUniformLocation(program, "uCamPos"),
+    uCamTarget: gl.getUniformLocation(program, "uCamTarget"),
+    uCamRoll: gl.getUniformLocation(program, "uCamRoll"),
+    uThrusterPower: gl.getUniformLocation(program, "uThrusterPower"),
+    uRearBoosterPower: gl.getUniformLocation(program, "uRearBoosterPower"),
+    uNozzleDeploy: gl.getUniformLocation(program, "uNozzleDeploy"),
+    uSuspOffset: gl.getUniformLocation(program, "uSuspOffset"),
+    uWheelSpin: gl.getUniformLocation(program, "uWheelSpin"),
+    uGimbal: gl.getUniformLocation(program, "uGimbal")
+  };
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    const w = Math.floor(window.innerWidth * dpr);
+    const h = Math.floor(window.innerHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  // ---------------------------------------------------------------------------
+  // WEB AUDIO API PROCEDURAL ROCKET & ELECTRIC TURBINE SYNTHESIZER
+  // ---------------------------------------------------------------------------
+  let audioCtx = null;
+  let audioNodes = null;
+  let lastThrusterState = false;
+  let wasAirborne = false;
+
+  function initAudio() {
+    if (audioNodes) {
+      if (audioCtx && audioCtx.state === "suspended") {
+        audioCtx.resume().catch(() => {});
+      }
+      return;
+    }
+    try {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return;
+      audioCtx = new AudioContextClass();
+
+      const masterGain = audioCtx.createGain();
+      masterGain.gain.value = 0.42;
+      masterGain.connect(audioCtx.destination);
+
+      // 1. Procedural Pink/Brown Noise Buffer for Rocket Plume Combustion Roar
+      const bufSize = audioCtx.sampleRate * 3;
+      const noiseBuf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
+      const data = noiseBuf.getChannelData(0);
+      let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+      for (let i = 0; i < bufSize; i++) {
+        const white = Math.random() * 2 - 1;
+        b0 = 0.99886 * b0 + white * 0.0555179;
+        b1 = 0.99332 * b1 + white * 0.0750759;
+        b2 = 0.96900 * b2 + white * 0.1538520;
+        b3 = 0.86650 * b3 + white * 0.3104856;
+        b4 = 0.55000 * b4 + white * 0.5329522;
+        b5 = -0.7616 * b5 - white * 0.0168980;
+        data[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.045;
+        b6 = white * 0.115926;
+      }
+
+      const roarSource = audioCtx.createBufferSource();
+      roarSource.buffer = noiseBuf;
+      roarSource.loop = true;
+
+      // Low-pass filter for deep rocket exhaust rumble
+      const roarFilter = audioCtx.createBiquadFilter();
+      roarFilter.type = "lowpass";
+      roarFilter.frequency.value = 180;
+      roarFilter.Q.value = 2.4;
+
+      const roarGain = audioCtx.createGain();
+      roarGain.gain.value = 0.0;
+
+      // Bandpass filter for high-velocity plasma jet hiss/rush
+      const jetFilter = audioCtx.createBiquadFilter();
+      jetFilter.type = "bandpass";
+      jetFilter.frequency.value = 850;
+      jetFilter.Q.value = 1.2;
+
+      const jetGain = audioCtx.createGain();
+      jetGain.gain.value = 0.0;
+
+      roarSource.connect(roarFilter);
+      roarFilter.connect(roarGain);
+      roarGain.connect(masterGain);
+
+      roarSource.connect(jetFilter);
+      jetFilter.connect(jetGain);
+      jetGain.connect(masterGain);
+      roarSource.start();
+
+      // 2. Sub-Bass Rocket Thrust Oscillator
+      const subOsc = audioCtx.createOscillator();
+      subOsc.type = "sawtooth";
+      subOsc.frequency.value = 48;
+
+      const subFilter = audioCtx.createBiquadFilter();
+      subFilter.type = "lowpass";
+      subFilter.frequency.value = 110;
+
+      const subGain = audioCtx.createGain();
+      subGain.gain.value = 0.0;
+
+      subOsc.connect(subFilter);
+      subFilter.connect(subGain);
+      subGain.connect(masterGain);
+      subOsc.start();
+
+      // 3. Electric Turbo-Plasma Whine (Dual harmonic oscillators)
+      const turbineOsc1 = audioCtx.createOscillator();
+      turbineOsc1.type = "sine";
+      turbineOsc1.frequency.value = 160;
+
+      const turbineOsc2 = audioCtx.createOscillator();
+      turbineOsc2.type = "triangle";
+      turbineOsc2.frequency.value = 240;
+
+      const turbineGain = audioCtx.createGain();
+      turbineGain.gain.value = 0.015; // Subtle electric idle hum on pad
+
+      turbineOsc1.connect(turbineGain);
+      turbineOsc2.connect(turbineGain);
+      turbineGain.connect(masterGain);
+      turbineOsc1.start();
+      turbineOsc2.start();
+
+      audioNodes = {
+        roarFilter,
+        roarGain,
+        jetFilter,
+        jetGain,
+        subOsc,
+        subGain,
+        turbineOsc1,
+        turbineOsc2,
+        turbineGain,
+        masterGain
+      };
+
+      if (audioCtx.state === "suspended") {
+        audioCtx.resume().catch(() => {});
+      }
+    } catch (e) {
+      // Ignore audio errors if blocked until interaction
+    }
+  }
+
+  function triggerIgnitionPulse() {
+    if (!audioCtx || audioCtx.state !== "running" || !audioNodes) return;
+    const now = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(140, now);
+    osc.frequency.exponentialRampToValueAtTime(38, now + 0.35);
+    g.gain.setValueAtTime(0.32, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.38);
+    osc.connect(g);
+    g.connect(audioNodes.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.4);
+  }
+
+  function triggerTouchdownThud() {
+    if (!audioCtx || audioCtx.state !== "running" || !audioNodes) return;
+    const now = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(95, now);
+    osc.frequency.exponentialRampToValueAtTime(28, now + 0.25);
+    g.gain.setValueAtTime(0.25, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+    osc.connect(g);
+    g.connect(audioNodes.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.3);
+  }
+
+  function updateAudio(thrusterPower, rearBooster, height, speed) {
+    if (!audioCtx || !audioNodes) return;
+    if (audioCtx.state !== "running") return;
+
+    const now = audioCtx.currentTime;
+    const isFiring = thrusterPower > 0.001;
+
+    if (isFiring && !lastThrusterState) {
+      triggerIgnitionPulse();
+    }
+    lastThrusterState = isFiring;
+
+    const airborne = height > 0.02;
+    if (!airborne && wasAirborne) {
+      triggerTouchdownThud();
+    }
+    wasAirborne = airborne;
+
+    const totalThrust = Math.min(1.6, thrusterPower + rearBooster * 0.55);
+
+    // Modulate rocket roar & plasma hiss
+    audioNodes.roarGain.gain.setTargetAtTime(isFiring ? Math.min(0.85, totalThrust * 0.55) : 0.0, now, 0.05);
+    audioNodes.roarFilter.frequency.setTargetAtTime(160 + totalThrust * 340 + speed * 18, now, 0.05);
+
+    audioNodes.jetGain.gain.setTargetAtTime(isFiring ? Math.min(0.38, totalThrust * 0.24) : 0.0, now, 0.05);
+    audioNodes.jetFilter.frequency.setTargetAtTime(650 + totalThrust * 680 + speed * 35, now, 0.05);
+
+    // Modulate sub-bass rumble
+    audioNodes.subGain.gain.setTargetAtTime(isFiring ? Math.min(0.35, totalThrust * 0.22) : 0.0, now, 0.05);
+    audioNodes.subOsc.frequency.setTargetAtTime(44 + totalThrust * 18, now, 0.05);
+
+    // Modulate electric turbine pitch & volume
+    const baseFreq = isFiring ? (240 + totalThrust * 280 + height * 16 + speed * 22) : 110;
+    audioNodes.turbineOsc1.frequency.setTargetAtTime(baseFreq, now, 0.06);
+    audioNodes.turbineOsc2.frequency.setTargetAtTime(baseFreq * 1.498, now, 0.06);
+    audioNodes.turbineGain.gain.setTargetAtTime(isFiring ? (0.045 + totalThrust * 0.04) : 0.008, now, 0.06);
+  }
+
+  // Attempt audio start immediately on load, plus unlock on first click/key/touch
+  initAudio();
+  const unlockEvents = ["click", "keydown", "pointerdown", "touchstart", "mousedown"];
+  function onUserInteract() {
+    initAudio();
+    if (audioCtx && audioCtx.state === "running") {
+      unlockEvents.forEach((ev) => window.removeEventListener(ev, onUserInteract));
+    }
+  }
+  unlockEvents.forEach((ev) => window.addEventListener(ev, onUserInteract, { passive: true }));
+
+  // ---------------------------------------------------------------------------
+  // FLIGHT CHOREOGRAPHY & PHYSICS STATE MACHINE
+  // Cycle duration: 16.5 seconds, seamlessly repeating:
+  //   0.00 - 1.25s : Parked on the ground (height = 0, thrusters = false)
+  //   1.25 - 2.00s : Thrusters ignite on ground & spool up (height = 0, thrusters = true)
+  //   2.00 - 4.40s : Vertical liftoff straight up to hover altitude (4.0m)
+  //   4.40 - 6.80s : Steady controlled hover in mid-air (4.0m)
+  //   6.80 - 12.60s: Dynamic 3D aerial loop through the sky and back over pad
+  //  12.60 - 15.20s: Controlled vertical descent & soft landing flare to 0.0m
+  //  15.20 - 15.65s: Thruster spool-down on ground (height = 0, thrusters = true -> false)
+  //  15.65 - 16.50s: Parked cooldown on ground (height = 0, thrusters = false)
+  // ---------------------------------------------------------------------------
+  const CYCLE_DURATION = 16.5;
+  const HOVER_ALTITUDE = 4.0;
+
+  function smoothstep(edge0, edge1, x) {
+    const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+    return t * t * (3 - 2 * t);
+  }
+
+  function smootherstep(edge0, edge1, x) {
+    const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+    return t * t * t * (t * (t * 6 - 15) + 10);
+  }
+
+  // Computes 3x3 rotation matrix from yaw (Y), pitch (X), roll (Z)
+  function buildRotationMatrices(yaw, pitch, roll) {
+    const cy = Math.cos(yaw), sy = Math.sin(yaw);
+    const cp = Math.cos(pitch), sp = Math.sin(pitch);
+    const cr = Math.cos(roll), sr = Math.sin(roll);
+
+    // Local-to-World matrix R = Ry(yaw) * Rx(pitch) * Rz(roll)
+    // Column-major for WebGL
+    const r00 = cy * cr + sy * sp * sr;
+    const r10 = cp * sr;
+    const r20 = -sy * cr + cy * sp * sr;
+
+    const r01 = -cy * sr + sy * sp * cr;
+    const r11 = cp * cr;
+    const r21 = sy * sr + cy * sp * cr;
+
+    const r02 = sy * cp;
+    const r12 = -sp;
+    const r22 = cy * cp;
+
+    const localToWorld = new Float32Array([
+      r00, r10, r20,
+      r01, r11, r21,
+      r02, r12, r22
+    ]);
+
+    // World-to-Local is the transpose
+    const worldToLocal = new Float32Array([
+      r00, r01, r02,
+      r10, r11, r12,
+      r20, r21, r22
+    ]);
+
+    return { localToWorld, worldToLocal };
+  }
+
+  function evaluateFlightState(timeSec) {
+    const t = timeSec % CYCLE_DURATION;
+
+    let x = 0.0;
+    let y = 0.0;
+    let z = 0.0;
+    let yaw = 0.0;
+    let pitch = 0.0;
+    let roll = 0.0;
+
+    let thrusters = false;
+    let thrusterPower = 0.0;
+    let rearBoosterPower = 0.0;
+    let nozzleDeploy = 0.0;
+    let suspOffset = 0.0;
+    let wheelSpin = 0.0;
+    let gimbalX = 0.0;
+    let gimbalY = 0.0;
+    let speed = 0.0;
+
+    if (t < 1.25) {
+      // Phase 1: Parked on the ground
+      y = 0.0;
+      thrusters = false;
+      thrusterPower = 0.0;
+      nozzleDeploy = smoothstep(0.7, 1.25, t) * 0.4;
+      suspOffset = 0.0;
+
+    } else if (t < 2.00) {
+      // Phase 2: Thrusters ignite on the ground & build thrust before liftoff
+      y = 0.0;
+      thrusters = true;
+      const p = smoothstep(1.25, 2.00, t);
+      thrusterPower = 0.35 + 0.75 * p;
+      nozzleDeploy = 0.4 + 0.6 * p;
+      // Subtle high-frequency chassis vibration & suspension pre-load as thrusters roar
+      suspOffset = 0.025 * p + 0.005 * Math.sin(t * 65.0);
+
+    } else if (t < 4.40) {
+      // Phase 3: Vertical liftoff straight up to hover altitude
+      thrusters = true;
+      const u = smootherstep(2.00, 4.40, t);
+      const hoverBob = Math.sin((t - 2.0) * 3.5) * 0.04 * smoothstep(3.2, 4.4, t);
+      y = Math.max(0.001, HOVER_ALTITUDE * u + hoverBob);
+
+      // Extra thrust burst during vertical climb, settling to hover thrust (1.0)
+      const climbBoost = Math.sin(smoothstep(2.00, 4.40, t) * Math.PI);
+      thrusterPower = 1.0 + 0.35 * climbBoost;
+      nozzleDeploy = 1.0;
+      suspOffset = 0.03;
+      pitch = -0.03 * climbBoost;
+      roll = 0.015 * Math.sin(t * 4.2);
+      gimbalX = -pitch * 2.0;
+      gimbalY = -roll * 2.0;
+      speed = (HOVER_ALTITUDE / 2.4) * climbBoost;
+
+    } else if (t < 6.80) {
+      // Phase 4: Steady controlled hover in mid-air
+      thrusters = true;
+      const hoverT = t - 4.40;
+      const bob = Math.sin(hoverT * 3.2) * 0.055 + Math.cos(hoverT * 5.7) * 0.02;
+      y = HOVER_ALTITUDE + bob;
+      x = Math.sin(hoverT * 2.1) * 0.08;
+      z = Math.cos(hoverT * 1.7) * 0.08;
+
+      thrusterPower = 0.96 + 0.08 * Math.sin(hoverT * 6.0);
+      nozzleDeploy = 1.0;
+      suspOffset = 0.03;
+      pitch = Math.sin(hoverT * 2.6) * 0.025;
+      roll = Math.cos(hoverT * 2.2) * 0.03;
+      gimbalX = -pitch * 3.0;
+      gimbalY = -roll * 3.0;
+      speed = 0.3;
+
+    } else if (t < 12.60) {
+      // Phase 5: Dynamic 3D loop through the air and back over the launchpad
+      thrusters = true;
+      const loopDur = 12.60 - 6.80;
+      const u = (t - 6.80) / loopDur; // 0 -> 1
+      const s = smootherstep(0.0, 1.0, u);
+      const ang = s * Math.PI * 2.0;
+
+      // Envelope smoothly starts at (0, HOVER_ALTITUDE, 0) and returns to (0, HOVER_ALTITUDE, 0)
+      const env = Math.sin(s * Math.PI);
+      const env2 = env * env;
+
+      // Closed 3D banked loop trajectory around the sky above the pad
+      const radiusX = 7.5;
+      const radiusZ = 9.0;
+      x = -Math.sin(ang) * radiusX * env;
+      z = Math.sin(ang * 0.5) * Math.cos(ang * 0.5) * radiusZ * 2.2 * env;
+      // Climb high at the apex of the loop (up to ~8.8m) then swoop back to hover altitude
+      y = HOVER_ALTITUDE + 4.8 * (0.5 - 0.5 * Math.cos(ang)) * env;
+
+      // Numerical derivative for accurate velocity tangent, pitch, yaw & banked roll
+      const dt = 0.015;
+      const uNext = Math.min(1.0, u + dt / loopDur);
+      const sNext = smootherstep(0.0, 1.0, uNext);
+      const angNext = sNext * Math.PI * 2.0;
+      const envNext = Math.sin(sNext * Math.PI);
+
+      const xNext = -Math.sin(angNext) * radiusX * envNext;
+      const zNext = Math.sin(angNext * 0.5) * Math.cos(angNext * 0.5) * radiusZ * 2.2 * envNext;
+      const yNext = HOVER_ALTITUDE + 4.8 * (0.5 - 0.5 * Math.cos(angNext)) * envNext;
+
+      const vx = (xNext - x) / dt;
+      const vy = (yNext - y) / dt;
+      const vz = (zNext - z) / dt;
+      const horizSpeed = Math.hypot(vx, vz);
+      speed = Math.hypot(horizSpeed, vy);
+
+      // Smoothly blend yaw from 0 into heading direction and back to 0 (or 2*PI) at end of loop
+      const headingYaw = Math.atan2(vx, vz);
+      yaw = headingYaw * smoothstep(0.0, 0.14, u) * smoothstep(1.0, 0.84, u);
+
+      // Pitch tracks climb/dive angle + forward acceleration tilt
+      const climbPitch = -Math.atan2(vy, Math.max(horizSpeed, 1.0)) * 0.65;
+      const accelPitch = 0.14 * Math.sin(u * Math.PI * 2.0) * env;
+      pitch = (climbPitch + accelPitch) * env;
+
+      // Realistic aerodynamic bank angle into the turn
+      roll = -0.58 * Math.sin(ang + 0.35) * env2;
+
+      thrusterPower = 1.15 + 0.35 * env;
+      rearBoosterPower = env;
+      nozzleDeploy = 1.0;
+      suspOffset = 0.03;
+      gimbalX = pitch * 1.4;
+      gimbalY = -roll * 1.2;
+
+    } else if (t < 15.20) {
+      // Phase 6: Controlled vertical descent & soft landing
+      const descDur = 15.20 - 12.60;
+      const u = (t - 12.60) / descDur; // 0 -> 1
+      const s = smootherstep(0.0, 1.0, u);
+      y = HOVER_ALTITUDE * (1.0 - s);
+
+      if (y <= 0.0005) {
+        y = 0.0;
+      }
+      // Thrusters ALWAYS fire while descending and through touchdown flare
+      thrusters = true;
+
+      // Retro-brake flare just before touchdown
+      const flare = Math.exp(-Math.pow((u - 0.78) / 0.18, 2.0));
+      thrusterPower = 0.82 + 0.42 * flare;
+      nozzleDeploy = 1.0 - 0.3 * smoothstep(0.85, 1.0, u);
+      suspOffset = 0.03 * (1.0 - smoothstep(0.88, 1.0, u));
+      pitch = 0.02 * flare;
+      roll = 0.01 * Math.sin(t * 5.0) * (1.0 - s);
+      speed = (HOVER_ALTITUDE / descDur) * (1.0 - u);
+
+    } else if (t < 15.65) {
+      // Phase 7: Touchdown suspension compression & thruster spool-down on the pad
+      y = 0.0;
+      const u = (t - 15.20) / (15.65 - 15.20);
+      thrusters = true;
+      thrusterPower = 0.65 * (1.0 - smoothstep(0.0, 1.0, u));
+      nozzleDeploy = 0.7 * (1.0 - smoothstep(0.0, 1.0, u));
+      // Soft landing suspension dip and rebound
+      suspOffset = -0.045 * Math.sin(u * Math.PI) * Math.exp(-u * 1.5);
+
+    } else {
+      // Phase 8: Parked on the ground with thrusters off before repeating
+      y = 0.0;
+      thrusters = false;
+      thrusterPower = 0.0;
+      nozzleDeploy = 0.0;
+      const u = (t - 15.65) / (CYCLE_DURATION - 15.65);
+      suspOffset = 0.01 * Math.sin(u * Math.PI * 2.0) * Math.exp(-u * 4.0);
+    }
+
+    // Strict guarantee: whenever the car is above the ground, thrusters MUST be firing
+    if (y > 0.0) {
+      thrusters = true;
+      thrusterPower = Math.max(thrusterPower, 0.75);
+    } else {
+      y = 0.0;
+      if (!thrusters) {
+        thrusterPower = 0.0;
+      }
+    }
+
+    return {
+      pos: [x, y, z],
+      yaw,
+      pitch,
+      roll,
+      thrusters,
+      thrusterPower,
+      rearBoosterPower,
+      nozzleDeploy,
+      suspOffset,
+      wheelSpin,
+      gimbal: [gimbalX, gimbalY],
+      speed,
+      cycleTime: t
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // CINEMATIC CAMERA CONTROLLER (Keeps the car dynamically framed in 1080x1080)
+  // ---------------------------------------------------------------------------
+  function computeCamera(carStateObj, globalTime) {
+    const [cx, cy, cz] = carStateObj.pos;
+    const t = carStateObj.cycleTime;
+
+    // Smoothly orbit around the car while tracking its 3D loop and vertical liftoff
+    const loopBlend = smoothstep(6.5, 8.2, t) * smoothstep(13.2, 11.4, t);
+    const orbitAngle = 0.58 + 0.36 * Math.sin(globalTime * 0.28) + loopBlend * 0.45;
+
+    // Pull distance slightly back during aerial loop so the car & full rocket plumes stay heroically framed
+    const dist = 4.45 + 1.15 * loopBlend + 0.25 * smoothstep(0.0, 4.0, cy);
+    const camElev = 1.05 + cy * 0.78 + 0.45 * Math.sin(globalTime * 0.35) * (1.0 - 0.5 * loopBlend);
+
+    const camX = cx * 0.72 + Math.sin(orbitAngle) * dist;
+    const camZ = cz * 0.72 + Math.cos(orbitAngle) * dist;
+    const camY = Math.max(0.42, camElev);
+
+    // Look slightly below the car's center when airborne so both the roadster and its rocket plumes are centered
+    const targetX = cx;
+    const targetY = cy + 0.34 - 0.14 * smoothstep(0.5, 4.0, cy);
+    const targetZ = cz;
+
+    const camRoll = carStateObj.roll * 0.22;
+
+    return {
+      camPos: [camX, camY, camZ],
+      camTarget: [targetX, targetY, targetZ],
+      camRoll
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // MAIN RENDER LOOP (Starts immediately on load)
+  // ---------------------------------------------------------------------------
+  const startTime = performance.now();
+
+  function frame(now) {
+    resize();
+    const elapsedSec = Math.max(0, (now - startTime) * 0.001);
+
+    const state = evaluateFlightState(elapsedSec);
+
+    // Update global window.carState every frame (strictly guaranteeing thrusters=true whenever height > 0)
+    const heightMeters = state.pos[1] > 0 ? Math.max(0.001, Math.round(state.pos[1] * 1000) / 1000) : 0;
+    window.carState.height = heightMeters;
+    window.carState.thrusters = heightMeters > 0 ? true : Boolean(state.thrusters);
+
+    // Update procedural Web Audio API sound effects
+    updateAudio(state.thrusterPower, state.rearBoosterPower, heightMeters, state.speed);
+
+    // Build rotation matrices & camera
+    const { localToWorld, worldToLocal } = buildRotationMatrices(state.yaw, state.pitch, state.roll);
+    const cam = computeCamera(state, elapsedSec);
+
+    // Bind uniforms & draw fullscreen raymarched scene
+    gl.useProgram(program);
+    gl.bindVertexArray(quadVao);
+
+    gl.uniform2f(uniforms.uResolution, canvas.width, canvas.height);
+    gl.uniform1f(uniforms.uTime, elapsedSec);
+    gl.uniform3f(uniforms.uCarPos, state.pos[0], heightMeters, state.pos[2]);
+    gl.uniformMatrix3fv(uniforms.uCarRot, false, worldToLocal);
+    gl.uniformMatrix3fv(uniforms.uCarRotInv, false, localToWorld);
+    gl.uniform3f(uniforms.uCamPos, cam.camPos[0], cam.camPos[1], cam.camPos[2]);
+    gl.uniform3f(uniforms.uCamTarget, cam.camTarget[0], cam.camTarget[1], cam.camTarget[2]);
+    gl.uniform1f(uniforms.uCamRoll, cam.camRoll);
+    gl.uniform1f(uniforms.uThrusterPower, state.thrusterPower);
+    gl.uniform1f(uniforms.uRearBoosterPower, state.rearBoosterPower);
+    gl.uniform1f(uniforms.uNozzleDeploy, state.nozzleDeploy);
+    gl.uniform1f(uniforms.uSuspOffset, state.suspOffset);
+    gl.uniform1f(uniforms.uWheelSpin, state.wheelSpin);
+    gl.uniform2f(uniforms.uGimbal, state.gimbal[0], state.gimbal[1]);
+
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+    requestAnimationFrame(frame);
+  }
+
+  frame(startTime);
+})();
+</script>
+</body>
+</html>

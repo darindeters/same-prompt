@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Storm at the lighthouse</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #071018; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas id="scene" aria-label="A lighthouse on a rocky cliff in a storm at night"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('scene');
+  const ctx = canvas.getContext('2d');
+  let w, h, scale, ox, oy;
+  const rnd = (a, b) => a + Math.random() * (b - a);
+  const rain = Array.from({length: 310}, () => ({x: rnd(-300, 1300), y: rnd(-1100, 1100), z: rnd(.35, 1), l: rnd(16, 40)}));
+  const stars = Array.from({length: 90}, () => ({x: rnd(0, 1080), y: rnd(70, 640), r: rnd(.4, 1.7), a: rnd(.05, .23)}));
+  const spray = Array.from({length: 125}, () => ({x: rnd(0, 1), y: rnd(0, 1), s: rnd(1, 4)}));
+  function resize() {
+    w = innerWidth; h = innerHeight;
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    scale = Math.max(w / 1080, h / 1080); ox = (w - 1080 * scale) / 2; oy = (h - 1080 * scale) / 2;
+  }
+  addEventListener('resize', resize); resize();
+  function path(points, fill) {
+    ctx.beginPath(); ctx.moveTo(points[0][0], points[0][1]);
+    for (let i = 1; i < points.length; i++) ctx.lineTo(points[i][0], points[i][1]);
+    ctx.closePath(); ctx.fillStyle = fill; ctx.fill();
+  }
+  function cloud(x, y, sx, sy, alpha) {
+    ctx.save(); ctx.translate(x, y); ctx.scale(sx, sy);
+    const g = ctx.createRadialGradient(0, 0, 5, 0, 0, 180);
+    g.addColorStop(0, `rgba(91,111,123,${alpha})`); g.addColorStop(.48, `rgba(48,66,80,${alpha * .7})`); g.addColorStop(1, 'rgba(23,35,49,0)');
+    ctx.fillStyle = g; ctx.fillRect(-180, -180, 360, 360); ctx.restore();
+  }
+  function wave(y, amp, phase, color, width) {
+    ctx.beginPath();
+    for (let x = -40; x <= 1120; x += 8) {
+      const yy = y + Math.sin(x * .012 + phase) * amp + Math.sin(x * .028 - phase * .7) * amp * .3;
+      if (x === -40) ctx.moveTo(x, yy); else ctx.lineTo(x, yy);
+    }
+    ctx.strokeStyle = color; ctx.lineWidth = width; ctx.stroke();
+  }
+  function draw(t) {
+    ctx.clearRect(0, 0, w, h); ctx.save(); ctx.translate(ox, oy); ctx.scale(scale, scale);
+    const time = t * .001;
+    const cycle = time % 13.5;
+    const flash = Math.max(0, 1 - Math.abs(cycle - 7.1) * 7, .75 - Math.abs(cycle - 7.34) * 8);
+    let g = ctx.createLinearGradient(0, 0, 0, 1080);
+    g.addColorStop(0, '#101b2a'); g.addColorStop(.48, '#263a49'); g.addColorStop(.7, '#263d49'); g.addColorStop(1, '#07141c');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, 1080, 1080);
+    const glow = ctx.createRadialGradient(650, 330, 10, 650, 330, 660);
+    glow.addColorStop(0, `rgba(137,162,167,${.09 + flash * .28})`); glow.addColorStop(1, 'rgba(50,69,79,0)');
+    ctx.fillStyle = glow; ctx.fillRect(0, 0, 1080, 750);
+    for (let i = 0; i < 14; i++) cloud((i * 177 + time * (i % 2 ? 3 : -2)) % 1450 - 150, 65 + (i % 4) * 92, 2.2, .58, .18 + (i % 3) * .04);
+    stars.forEach(p => {ctx.fillStyle = `rgba(194,211,213,${p.a})`; ctx.fillRect(p.x, p.y, p.r, p.r);});
+    // The lantern throws a slow, broad shaft through the wet air.
+    const sweep = .5 + .5 * Math.sin(time * .42);
+    ctx.save(); ctx.globalCompositeOperation = 'screen';
+    ctx.translate(720, 355); ctx.rotate(-.04 + .11 * Math.sin(time * .42));
+    g = ctx.createLinearGradient(0, 0, -700, 0);
+    g.addColorStop(0, `rgba(249,222,158,${.21 + .09 * sweep})`); g.addColorStop(.4, `rgba(219,211,169,${.08 + .04 * sweep})`); g.addColorStop(1, 'rgba(180,201,196,0)');
+    path([[0,-13],[-850,-180],[-850,150],[0,13]], g); ctx.restore();
+    if (flash > .02) {
+      ctx.save(); ctx.globalCompositeOperation = 'screen'; ctx.strokeStyle = `rgba(218,240,255,${flash})`; ctx.shadowColor = '#c9edff'; ctx.shadowBlur = 22; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(384, 0); ctx.lineTo(401, 93); ctx.lineTo(377, 157); ctx.lineTo(412, 153); ctx.lineTo(387, 230); ctx.lineTo(428, 221); ctx.lineTo(402, 305); ctx.lineTo(442, 298); ctx.lineTo(413, 395); ctx.stroke();
+      ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(389, 230); ctx.lineTo(342, 264); ctx.lineTo(329, 311); ctx.lineTo(296, 341); ctx.moveTo(402, 305); ctx.lineTo(455, 335); ctx.lineTo(467, 378); ctx.stroke(); ctx.restore();
+    }
+    // Distant sea and layered, wind-torn swells.
+    g = ctx.createLinearGradient(0, 590, 0, 1080); g.addColorStop(0, '#304955'); g.addColorStop(.3, '#142e39'); g.addColorStop(1, '#07171e');
+    ctx.fillStyle = g; ctx.fillRect(0, 610, 1080, 470);
+    for (let i = 0; i < 22; i++) {
+      const y = 625 + i * 22; wave(y, 2 + i * .32, time * (.55 + i * .014) + i, `rgba(${110 + i},${150 + i},${157 + i},${.09 + i * .003})`, 1 + i * .07);
+    }
+    // Cliff silhouette and fractured, wet rock faces.
+    path([[540,1080],[555,1000],[580,954],[589,896],[615,860],[624,801],[651,772],[665,734],[687,718],[698,685],[733,676],[758,657],[794,664],[816,647],[851,659],[878,651],[915,667],[955,656],[1006,673],[1080,666],[1080,1080]], '#101d22');
+    path([[642,1080],[590,989],[623,930],[614,881],[662,836],[667,775],[701,738],[738,721],[762,680],[816,666],[852,679],[888,669],[931,682],[971,672],[1080,685],[1080,1080]], '#273139');
+    path([[655,1080],[679,992],[654,947],[700,899],[694,845],[731,799],[723,754],[764,722],[784,688],[821,675],[798,732],[825,768],[790,820],[808,856],[770,912],[793,949],[748,1010],[770,1080]], '#17262c');
+    path([[806,1080],[786,1019],[834,974],[823,923],[854,879],[840,831],[884,790],[866,743],[908,690],[969,679],[936,730],[966,766],[937,812],[957,861],[922,916],[948,960],[907,1018],[931,1080]], '#1a282d');
+    path([[1014,1080],[986,1007],[1021,959],[1001,902],[1040,843],[1017,789],[1053,742],[1035,687],[1080,681],[1080,1080]], '#101e24');
+    ctx.strokeStyle = 'rgba(134,153,151,.18)'; ctx.lineWidth = 2;
+    [[626,887,674,849,660,809],[695,945,733,911,741,874],[805,902,834,868,826,830],[894,774,914,737,932,716],[966,1002,995,956,977,918]].forEach(a => {ctx.beginPath(); ctx.moveTo(a[0],a[1]); ctx.lineTo(a[2],a[3]); ctx.lineTo(a[4],a[5]); ctx.stroke();});
+    // Lighthouse foundation, tapered masonry and illuminated lantern.
+    path([[666,686],[674,663],[770,663],[783,687]], '#111d20');
+    path([[681,665],[694,402],[749,402],[766,665]], '#d0cbb8');
+    path([[721,402],[749,402],[766,665],[731,665]], '#888f88');
+    path([[681,665],[694,402],[702,402],[697,665]], '#9aa39c');
+    ctx.strokeStyle = 'rgba(54,69,68,.23)'; ctx.lineWidth = 1;
+    for (let y = 435; y < 665; y += 28) {ctx.beginPath(); ctx.moveTo(693 - (y-402)*.05,y); ctx.lineTo(752 + (y-402)*.06,y); ctx.stroke();}
+    path([[709,665],[709,630],[714,621],[725,621],[730,630],[730,665]], '#1a292b');
+    [[706,479],[710,548]].forEach(([x,y]) => {ctx.fillStyle = '#263635'; ctx.fillRect(x,y,10,20); ctx.fillStyle = 'rgba(223,199,137,.5)'; ctx.fillRect(x+3,y+3,3,12);});
+    path([[684,403],[687,391],[758,391],[761,403]], '#1a292b');
+    ctx.fillStyle = '#121f23'; ctx.fillRect(691, 380, 64, 12);
+    ctx.fillRect(696, 338, 54, 44);
+    const lamp = ctx.createRadialGradient(722, 357, 2, 722, 357, 95); lamp.addColorStop(0, 'rgba(255,239,181,.55)'); lamp.addColorStop(.2, 'rgba(255,219,144,.18)'); lamp.addColorStop(1, 'rgba(255,218,150,0)');
+    ctx.fillStyle = lamp; ctx.fillRect(627,262,190,190);
+    ctx.fillStyle = '#f6dba0'; ctx.fillRect(701, 342, 44, 35);
+    ctx.fillStyle = '#fff3cc'; ctx.fillRect(714, 342, 15, 35);
+    ctx.fillStyle = '#263432'; [700,713,730,744].forEach(x => ctx.fillRect(x, 340, 3, 39));
+    ctx.fillRect(695, 376, 56, 5); ctx.fillRect(692, 335, 61, 6);
+    path([[687,335],[700,326],[708,316],[737,316],[747,326],[757,335]], '#152429');
+    ctx.fillStyle = '#111e22'; ctx.fillRect(719, 307, 5, 11); ctx.beginPath(); ctx.arc(721.5, 306, 3, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#263837'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(682,387); ctx.lineTo(762,387); ctx.moveTo(685,387); ctx.lineTo(685,399); ctx.moveTo(758,387); ctx.lineTo(758,399); ctx.stroke();
+    // White water breaks against the foot of the cliff.
+    ctx.save(); ctx.globalCompositeOperation = 'screen';
+    for (let j = 0; j < 4; j++) {
+      ctx.beginPath(); ctx.moveTo(-30, 900 + j * 36); ctx.bezierCurveTo(130, 870 + j * 30, 265, 962 + j * 27, 410, 920 + j * 32); ctx.bezierCurveTo(485, 900 + j * 28, 526, 952 + j * 19, 612, 927 + j * 17);
+      ctx.strokeStyle = `rgba(158,196,198,${.18 - j*.025})`; ctx.lineWidth = 5 - j; ctx.stroke();
+    }
+    const burst = .5 + .5 * Math.sin(time * 1.2);
+    spray.forEach((p, i) => {const x = 540 + p.x * 170; const y = 1000 - p.y * (75 + burst * 90) + Math.sin(time * 2 + i) * 9; ctx.fillStyle = `rgba(189,217,212,${(.08 + p.y * .2) * (1 - p.x * .5)})`; ctx.beginPath(); ctx.ellipse(x,y,p.s * 1.8,p.s*.55,-.5,0,Math.PI*2); ctx.fill();});
+    ctx.restore();
+    // Wind-driven rain, with nearer streaks brighter and longer.
+    ctx.lineCap = 'round';
+    rain.forEach(p => {
+      const x = ((p.x - time * (190 + p.z * 150) + 3000) % 1600) - 300;
+      const y = ((p.y + time * (510 + p.z * 350) + 5000) % 1300) - 100;
+      ctx.strokeStyle = `rgba(185,210,216,${.05 + p.z * .16 + flash * .15})`; ctx.lineWidth = .5 + p.z;
+      ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x - p.l * .42,y + p.l); ctx.stroke();
+    });
+    if (flash > 0) {ctx.fillStyle = `rgba(198,224,238,${flash * .16})`; ctx.fillRect(0,0,1080,1080);}
+    const vignette = ctx.createRadialGradient(540, 495, 260, 540, 540, 810); vignette.addColorStop(0, 'rgba(0,0,0,0)'); vignette.addColorStop(1, 'rgba(0,5,12,.67)'); ctx.fillStyle = vignette; ctx.fillRect(0,0,1080,1080);
+    ctx.restore(); requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+})();
+</script>
+</body>
+</html>

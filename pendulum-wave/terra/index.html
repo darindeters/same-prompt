@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pendulum Wave</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #07051a; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas id="wave" aria-label="Fifteen colorful pendulums swinging in a wave"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('wave');
+  const ctx = canvas.getContext('2d');
+  const count = 15;
+  let width, height, scale, dpr;
+  const started = performance.now();
+
+  function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    scale = Math.min(width, height);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  function draw(now) {
+    const t = (now - started) / 1000;
+    const cx = width / 2;
+    const cy = height / 2;
+    const s = scale;
+
+    const background = ctx.createRadialGradient(cx, cy * 0.88, s * 0.03, cx, cy, Math.max(width, height) * 0.78);
+    background.addColorStop(0, '#17113f');
+    background.addColorStop(0.52, '#0c0928');
+    background.addColorStop(1, '#04030e');
+    ctx.fillStyle = background;
+    ctx.fillRect(0, 0, width, height);
+
+    // A soft pool of light gives the suspended forms a sense of depth.
+    const pool = ctx.createRadialGradient(cx, cy + s * 0.32, 0, cx, cy + s * 0.32, s * 0.47);
+    pool.addColorStop(0, 'rgba(70, 41, 145, .19)');
+    pool.addColorStop(1, 'rgba(20, 10, 60, 0)');
+    ctx.fillStyle = pool;
+    ctx.fillRect(0, 0, width, height);
+
+    const top = cy - s * 0.33;
+    const anchorWidth = s * 0.13;
+    // The support recedes into the scene, matching the pendulums' depth.
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(cx - anchorWidth / 2, top - s * 0.022);
+    ctx.lineTo(cx + anchorWidth / 2, top + s * 0.022);
+    ctx.strokeStyle = 'rgba(153, 170, 255, .16)';
+    ctx.lineWidth = s * 0.004;
+    ctx.stroke();
+
+    for (let i = 0; i < count; i++) {
+      const depth = i / (count - 1);
+      const pivotX = cx - anchorWidth / 2 + depth * anchorWidth;
+      const pivotY = top - s * 0.022 + depth * s * 0.044;
+      const length = s * (0.465 + depth * 0.135);
+      // Each pendulum completes one more oscillation per 90 seconds.
+      const frequency = (45 + i) / 90;
+      const angle = 0.53 * Math.cos(2 * Math.PI * frequency * t);
+      const x = pivotX + Math.sin(angle) * length;
+      const y = pivotY + Math.cos(angle) * length;
+      const hue = (190 + i * 13.5) % 360;
+      const radius = s * (0.012 + depth * 0.006);
+
+      ctx.beginPath();
+      ctx.moveTo(pivotX, pivotY);
+      ctx.lineTo(x, y);
+      ctx.strokeStyle = `hsla(${hue}, 100%, 77%, ${0.38 + depth * 0.2})`;
+      ctx.lineWidth = Math.max(0.8, s * 0.00125);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(pivotX, pivotY, Math.max(1.3, s * 0.0023), 0, Math.PI * 2);
+      ctx.fillStyle = `hsla(${hue}, 100%, 85%, .8)`;
+      ctx.fill();
+
+      const glow = ctx.createRadialGradient(x, y, 0, x, y, radius * 4.2);
+      glow.addColorStop(0, `hsla(${hue}, 100%, 65%, .48)`);
+      glow.addColorStop(0.3, `hsla(${hue}, 100%, 55%, .18)`);
+      glow.addColorStop(1, `hsla(${hue}, 100%, 50%, 0)`);
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(x, y, radius * 4.2, 0, Math.PI * 2);
+      ctx.fill();
+
+      const orb = ctx.createRadialGradient(x - radius * 0.32, y - radius * 0.38, radius * 0.04, x, y, radius * 1.1);
+      orb.addColorStop(0, '#ffffff');
+      orb.addColorStop(0.18, `hsl(${hue}, 100%, 85%)`);
+      orb.addColorStop(0.55, `hsl(${hue}, 100%, 59%)`);
+      orb.addColorStop(1, `hsl(${hue}, 100%, 34%)`);
+      ctx.fillStyle = orb;
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+})();
+</script>
+</body>
+</html>

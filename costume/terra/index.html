@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Halloween Portrait</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #09051c; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas id="scene" aria-label="An animated Halloween portrait of a lantern keeper beneath a haunted moon"></canvas>
+<script>
+(() => {
+  'use strict';
+  const canvas = document.getElementById('scene');
+  const ctx = canvas.getContext('2d');
+  let w, h, scale, ox, oy;
+  function resize() {
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    w = innerWidth; h = innerHeight;
+    canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    scale = Math.max(w / 1080, h / 1080);
+    ox = (w - 1080 * scale) / 2; oy = (h - 1080 * scale) / 2;
+  }
+  addEventListener('resize', resize); resize();
+  const rand = (n) => { const x = Math.sin(n * 127.1 + 17.7) * 43758.5453; return x - Math.floor(x); };
+  const stars = Array.from({length: 92}, (_, i) => ({x: rand(i+1)*1080, y: rand(i+231)*620, r: .8+rand(i+411)*2.1, p: rand(i+61)*7}));
+  const motes = Array.from({length: 34}, (_, i) => ({x: rand(i+91)*1080, y: rand(i+319)*1080, r: 1+rand(i+876)*3, s: .3+rand(i+700)*.8, p: rand(i+50)*9}));
+  function path(points, fill, stroke, width=1) {
+    ctx.beginPath(); points(ctx); if (fill) { ctx.fillStyle=fill; ctx.fill(); } if (stroke) { ctx.strokeStyle=stroke; ctx.lineWidth=width; ctx.stroke(); }
+  }
+  function ellipse(x,y,rx,ry,color) { ctx.beginPath(); ctx.ellipse(x,y,rx,ry,0,0,Math.PI*2); ctx.fillStyle=color; ctx.fill(); }
+  function line(x1,y1,x2,y2,color,width=2) { ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.strokeStyle=color; ctx.lineWidth=width; ctx.stroke(); }
+  function glow(x,y,r,color) { const g=ctx.createRadialGradient(x,y,0,x,y,r); g.addColorStop(0,color); g.addColorStop(1,'transparent'); ctx.fillStyle=g; ctx.fillRect(x-r,y-r,r*2,r*2); }
+  function bat(x,y,s,t) {
+    ctx.save(); ctx.translate(x,y); ctx.scale(s,s); const flap=Math.sin(t*5+x)*5;
+    path(c=>{c.moveTo(0,0); c.quadraticCurveTo(-12,-12-flap,-25,-5-flap); c.quadraticCurveTo(-19,-4,-18,3); c.quadraticCurveTo(-11,-3,-6,4); c.lineTo(0,1); c.lineTo(6,4); c.quadraticCurveTo(11,-3,18,3); c.quadraticCurveTo(19,-4,25,-5-flap); c.quadraticCurveTo(12,-12-flap,0,0);}, '#160b2a'); ctx.restore();
+  }
+  function draw(t) {
+    ctx.clearRect(0,0,w,h); ctx.save(); ctx.translate(ox,oy); ctx.scale(scale,scale);
+    const bg=ctx.createLinearGradient(0,0,0,1080); bg.addColorStop(0,'#10062e'); bg.addColorStop(.55,'#41205e'); bg.addColorStop(1,'#110c2a'); ctx.fillStyle=bg; ctx.fillRect(0,0,1080,1080);
+    glow(765,247,330,'rgba(241,95,147,.34)');
+    stars.forEach(s=>{ctx.globalAlpha=.35+.6*(.5+.5*Math.sin(t*1.7+s.p)); ellipse(s.x,s.y,s.r,s.r,'#ffd5a2');}); ctx.globalAlpha=1;
+    // The enormous harvest moon, partly veiled by drifting clouds.
+    glow(773,245,225,'rgba(255,151,92,.25)');
+    const moon=ctx.createRadialGradient(735,198,15,773,245,183); moon.addColorStop(0,'#fff0ae'); moon.addColorStop(.7,'#ffb879'); moon.addColorStop(1,'#ef7089'); ellipse(773,245,175,175,moon);
+    ctx.globalAlpha=.12; ellipse(820,182,35,16,'#bd5a75'); ellipse(716,274,50,21,'#c85a79'); ellipse(815,313,24,11,'#ba5275'); ctx.globalAlpha=1;
+    for(let i=0;i<5;i++) { const x=((i*290+t*8)%1450)-190, y=125+i*74; ctx.globalAlpha=.16; ellipse(x,y,125,17,'#89518d'); ellipse(x+73,y-12,69,20,'#89518d'); } ctx.globalAlpha=1;
+    bat(185+Math.sin(t*.3)*30,184,1.1,t); bat(353,105,.65,t+1); bat(902,420,.75,t+2); bat(628,95,.55,t+3);
+    // Distant crooked pines and hills.
+    path(c=>{c.moveTo(0,690); c.quadraticCurveTo(160,590,315,680); c.quadraticCurveTo(520,560,690,680); c.quadraticCurveTo(880,570,1080,680); c.lineTo(1080,1080); c.lineTo(0,1080);},'#201331');
+    for(let i=0;i<15;i++){const x=i*83-30, y=690+(i%3)*24, ht=100+rand(i+4)*120; path(c=>{c.moveTo(x-39,y); c.lineTo(x-18,y-ht*.38); c.lineTo(x-29,y-ht*.38); c.lineTo(x-9,y-ht*.72); c.lineTo(x-17,y-ht*.72); c.lineTo(x,y-ht); c.lineTo(x+17,y-ht*.72); c.lineTo(x+9,y-ht*.72); c.lineTo(x+29,y-ht*.38); c.lineTo(x+18,y-ht*.38); c.lineTo(x+39,y);},'#181027');}
+    path(c=>{c.moveTo(0,830); c.quadraticCurveTo(180,750,365,827); c.quadraticCurveTo(630,738,850,817); c.quadraticCurveTo(1000,770,1080,810); c.lineTo(1080,1080); c.lineTo(0,1080);},'#120d25');
+    // Backlit cloak and shoulders.
+    glow(528,645,340,'rgba(127,67,205,.22)');
+    path(c=>{c.moveTo(412,521); c.quadraticCurveTo(323,545,287,620); c.quadraticCurveTo(235,744,191,1080); c.lineTo(862,1080); c.quadraticCurveTo(813,728,741,621); c.quadraticCurveTo(708,563,633,529); c.closePath();},'#170e31','#a36ae0',5);
+    path(c=>{c.moveTo(408,552); c.quadraticCurveTo(319,585,289,691); c.lineTo(245,1080); c.lineTo(427,1080); c.lineTo(486,671);},'#321a55');
+    path(c=>{c.moveTo(629,550); c.quadraticCurveTo(716,576,752,684); c.lineTo(821,1080); c.lineTo(638,1080); c.lineTo(569,673);},'#321a55');
+    path(c=>{c.moveTo(411,548); c.lineTo(323,611); c.lineTo(427,744); c.lineTo(497,633); c.closePath();},'#7d3f8c','#c17acb',4);
+    path(c=>{c.moveTo(628,548); c.lineTo(716,611); c.lineTo(617,744); c.lineTo(546,633); c.closePath();},'#7d3f8c','#c17acb',4);
+    path(c=>{c.moveTo(456,535); c.lineTo(445,603); c.lineTo(519,679); c.lineTo(593,603); c.lineTo(582,535);},'#d68a75');
+    path(c=>{c.moveTo(451,601); c.lineTo(519,659); c.lineTo(588,601); c.lineTo(567,785); c.lineTo(470,785);},'#f8d9b1');
+    path(c=>{c.moveTo(499,647); c.lineTo(519,661); c.lineTo(539,647); c.lineTo(533,687); c.lineTo(519,704); c.lineTo(505,687);},'#f47867');
+    // Head and hair: a human portrait of the keeper of stories.
+    path(c=>{c.moveTo(378,338); c.quadraticCurveTo(373,208,517,203); c.quadraticCurveTo(663,198,661,344); c.lineTo(654,481); c.quadraticCurveTo(668,548,611,570); c.lineTo(421,570); c.quadraticCurveTo(365,547,382,479); c.closePath();},'#21132e');
+    ellipse(390,432,25,43,'#ce7e73'); ellipse(646,432,25,43,'#ce7e73');
+    path(c=>{c.moveTo(399,343); c.quadraticCurveTo(402,255,519,250); c.quadraticCurveTo(635,255,640,343); c.lineTo(631,446); c.quadraticCurveTo(625,515,572,549); c.quadraticCurveTo(520,578,467,549); c.quadraticCurveTo(414,515,407,446); c.closePath();},'#e8a28a');
+    path(c=>{c.moveTo(399,356); c.quadraticCurveTo(372,262,437,223); c.quadraticCurveTo(503,184,559,211); c.quadraticCurveTo(640,205,646,331); c.quadraticCurveTo(604,319,583,279); c.quadraticCurveTo(537,332,455,315); c.quadraticCurveTo(443,345,399,356);},'#24152f');
+    path(c=>{c.moveTo(410,318); c.quadraticCurveTo(430,247,500,231); c.quadraticCurveTo(456,257,451,291);},'#563052');
+    path(c=>{c.moveTo(547,225); c.quadraticCurveTo(611,228,632,299); c.quadraticCurveTo(603,271,588,252);},'#563052');
+    // Expressive eyes and a knowing smile.
+    path(c=>{c.moveTo(427,376); c.quadraticCurveTo(456,362,482,375);},null,'#633b43',6);
+    path(c=>{c.moveTo(554,375); c.quadraticCurveTo(581,362,609,376);},null,'#633b43',6);
+    ellipse(456,398,22,12,'#fff0d5'); ellipse(581,398,22,12,'#fff0d5');
+    ellipse(458,399,9,10,'#56315d'); ellipse(579,399,9,10,'#56315d'); ellipse(460,396,3,3,'#fff8df'); ellipse(581,396,3,3,'#fff8df');
+    path(c=>{c.moveTo(427,395); c.quadraticCurveTo(454,377,483,394);},null,'#3c2637',5); path(c=>{c.moveTo(553,394); c.quadraticCurveTo(580,377,609,395);},null,'#3c2637',5);
+    path(c=>{c.moveTo(516,408); c.quadraticCurveTo(509,442,520,443);},null,'#c77b70',4);
+    path(c=>{c.moveTo(489,476); c.quadraticCurveTo(519,494,550,475); c.quadraticCurveTo(520,508,489,476);},'#943f57');
+    ellipse(443,447,22,9,'rgba(236,105,111,.25)'); ellipse(596,447,22,9,'rgba(236,105,111,.25)');
+    // Wizard hat, with a stitched crescent and stars.
+    path(c=>{c.moveTo(381,281); c.quadraticCurveTo(394,142,485,72); c.quadraticCurveTo(527,32,586,44); c.quadraticCurveTo(550,61,562,102); c.quadraticCurveTo(614,161,647,281); c.closePath();},'#40205e','#bd75c6',5);
+    path(c=>{c.moveTo(428,255); c.quadraticCurveTo(446,141,514,83); c.quadraticCurveTo(488,150,501,256);},'#653573');
+    path(c=>{c.moveTo(360,271); c.quadraticCurveTo(514,310,673,267); c.quadraticCurveTo(710,277,698,299); c.quadraticCurveTo(519,337,342,300); c.quadraticCurveTo(332,283,360,271);},'#271638','#bd75c6',5);
+    path(c=>{c.moveTo(389,245); c.quadraticCurveTo(520,273,642,244); c.lineTo(650,273); c.quadraticCurveTo(520,303,383,274);},'#ef795f');
+    ellipse(519,262,23,23,'#ffd581'); ellipse(525,256,19,19,'#ef795f');
+    function sparkle(x,y,r,col){ctx.save();ctx.translate(x,y);path(c=>{c.moveTo(0,-r);c.quadraticCurveTo(r*.15,-r*.15,r,0);c.quadraticCurveTo(r*.15,r*.15,0,r);c.quadraticCurveTo(-r*.15,r*.15,-r,0);c.quadraticCurveTo(-r*.15,-r*.15,0,-r);},col);ctx.restore();}
+    sparkle(465,179,10,'#ffd586'); sparkle(554,145,7,'#ffd586'); sparkle(601,209,9,'#ffd586');
+    // Cloak clasp and embroidered constellation.
+    ellipse(519,720,27,27,'#ed9a57'); ellipse(519,720,19,19,'#ffdf91'); sparkle(519,720,13,'#9e5080');
+    const dots=[[342,743],[369,785],[340,831],[380,862],[356,912]]; for(let i=0;i<dots.length-1;i++)line(...dots[i],...dots[i+1],'#d794c6',2); dots.forEach(p=>sparkle(p[0],p[1],5,'#ffd89b'));
+    // A floating lantern, held in one gloved hand.
+    const sway=Math.sin(t*1.3)*5;
+    ctx.save(); ctx.translate(0,sway);
+    path(c=>{c.moveTo(686,777); c.quadraticCurveTo(691,730,731,707); c.quadraticCurveTo(750,697,762,710); c.quadraticCurveTo(750,721,740,740); c.quadraticCurveTo(766,722,778,729); c.quadraticCurveTo(787,738,767,753); c.lineTo(733,786);},'#e9a18a','#9e5c69',4);
+    glow(760,870,180,'rgba(255,137,58,.42)');
+    path(c=>{c.moveTo(719,824); c.quadraticCurveTo(718,774,760,774); c.quadraticCurveTo(802,774,801,824);},null,'#f5ba79',8);
+    path(c=>{c.moveTo(710,821); c.lineTo(810,821); c.lineTo(798,937); c.quadraticCurveTo(760,953,722,937); c.closePath();},'#f5a54b','#5a2b50',8);
+    path(c=>{c.moveTo(726,835); c.lineTo(794,835); c.lineTo(786,922); c.quadraticCurveTo(760,932,734,922); c.closePath();},'#ffe3a0');
+    const flame=ctx.createRadialGradient(760,890,1,760,890,48); flame.addColorStop(0,'#fff6bf'); flame.addColorStop(.45,'#ffbc54'); flame.addColorStop(1,'rgba(255,104,47,0)'); ellipse(760,890,42,48,flame);
+    path(c=>{c.moveTo(760,913); c.quadraticCurveTo(735,900,753,878); c.quadraticCurveTo(758,871,758,858+Math.sin(t*8)*5); c.quadraticCurveTo(780,879,773,900); c.quadraticCurveTo(771,909,760,913);},'#ff7d39');
+    path(c=>{c.moveTo(760,910); c.quadraticCurveTo(750,899,760,885); c.quadraticCurveTo(771,900,760,910);},'#fff3a3');
+    line(710,821,810,821,'#5a2b50',9); line(722,937,798,937,'#5a2b50',9); line(760,827,760,846,'#784051',5);
+    ctx.restore();
+    // Pumpkins and foreground silhouettes.
+    function pumpkin(x,y,s){ctx.save();ctx.translate(x,y);ctx.scale(s,s); ellipse(0,0,65,43,'#d9653d'); ellipse(-27,0,35,42,'#ef8642'); ellipse(27,0,35,42,'#ef8642'); ellipse(0,0,34,43,'#ff9b47'); path(c=>{c.moveTo(-8,-41);c.quadraticCurveTo(-5,-65,9,-66);c.lineTo(13,-60);c.quadraticCurveTo(4,-56,7,-42);},'#66843d'); path(c=>{c.moveTo(-38,-5);c.lineTo(-20,-18);c.lineTo(-15,1);c.closePath(); c.moveTo(38,-5);c.lineTo(20,-18);c.lineTo(15,1);c.closePath(); c.moveTo(-36,13);c.quadraticCurveTo(0,39,36,13);c.lineTo(24,29);c.lineTo(15,24);c.lineTo(7,34);c.lineTo(-4,28);c.lineTo(-15,34);c.lineTo(-21,24);},'#5b2638');ctx.restore();}
+    pumpkin(117,988,1.05); pumpkin(936,1008,1.3);
+    for(let i=0;i<16;i++){let x=i*77-15, yy=1075; path(c=>{c.moveTo(x,yy); c.quadraticCurveTo(x-14,yy-39,x-22,yy-49); c.quadraticCurveTo(x+2,yy-35,x+7,yy); c.quadraticCurveTo(x+12,yy-42,x+26,yy-56); c.quadraticCurveTo(x+18,yy-25,x+19,yy);},'#100d20');}
+    motes.forEach(m=>{const y=(m.y-t*22*m.s+1080*10)%1080; const x=m.x+Math.sin(t*m.s+m.p)*22; ctx.globalAlpha=.3+.6*(.5+.5*Math.sin(t*2+m.p)); glow(x,y,m.r*5,'rgba(255,175,83,.4)'); ellipse(x,y,m.r,m.r,'#ffd28a');}); ctx.globalAlpha=1;
+    // Soft vignette draws the eye toward the portrait.
+    const vig=ctx.createRadialGradient(540,480,320,540,540,780); vig.addColorStop(0,'rgba(8,4,20,0)'); vig.addColorStop(1,'rgba(8,4,20,.55)'); ctx.fillStyle=vig; ctx.fillRect(0,0,1080,1080);
+    ctx.restore(); requestAnimationFrame(ms=>draw(ms/1000));
+  }
+  requestAnimationFrame(ms=>draw(ms/1000));
+
+  // A quiet, synthesized night soundscape: wind, lantern crackle and magical chimes.
+  let audio, started=false;
+  function startAudio() {
+    if (started) { if (audio && audio.state === 'suspended') audio.resume().catch(()=>{}); return; }
+    try {
+      const AC=window.AudioContext||window.webkitAudioContext; if(!AC) return;
+      audio=new AC(); started=true;
+      const master=audio.createGain(); master.gain.value=.16; master.connect(audio.destination);
+      const noise=audio.createBuffer(1,audio.sampleRate*2,audio.sampleRate); const data=noise.getChannelData(0); for(let i=0;i<data.length;i++) data[i]=Math.random()*2-1;
+      const wind=audio.createBufferSource(); wind.buffer=noise; wind.loop=true;
+      const filter=audio.createBiquadFilter(); filter.type='lowpass'; filter.frequency.value=370;
+      const windGain=audio.createGain(); windGain.gain.value=.12; wind.connect(filter).connect(windGain).connect(master); wind.start();
+      const lfo=audio.createOscillator(), lfoGain=audio.createGain(); lfo.frequency.value=.09; lfoGain.gain.value=.07; lfo.connect(lfoGain).connect(windGain.gain); lfo.start();
+      function chime() {
+        if (!audio) return; const now=audio.currentTime; const frequencies=[440,523.25,659.25,783.99,880]; const freq=frequencies[Math.floor(Math.random()*frequencies.length)];
+        [1,2.01].forEach((ratio,i)=>{const o=audio.createOscillator(), g=audio.createGain(); o.type='sine'; o.frequency.value=freq*ratio; g.gain.setValueAtTime(.0001,now); g.gain.exponentialRampToValueAtTime(i ? .025 : .065,now+.015); g.gain.exponentialRampToValueAtTime(.0001,now+(i ? 1.2 : 2.8)); o.connect(g).connect(master); o.start(now); o.stop(now+3);});
+        setTimeout(chime,3500+Math.random()*4500);
+      }
+      function crackle() { const now=audio.currentTime, src=audio.createBufferSource(), g=audio.createGain(), f=audio.createBiquadFilter(); src.buffer=noise; f.type='highpass'; f.frequency.value=1800; g.gain.setValueAtTime(.025+Math.random()*.04,now); g.gain.exponentialRampToValueAtTime(.0001,now+.025+Math.random()*.06); src.connect(f).connect(g).connect(master); src.start(now,Math.random()); src.stop(now+.1); setTimeout(crackle,300+Math.random()*1100); }
+      chime(); crackle(); audio.resume().catch(()=>{});
+    } catch (_) { started=false; }
+  }
+  startAudio();
+  addEventListener('pointerdown',startAudio,{passive:true}); addEventListener('keydown',startAudio);
+})();
+</script>
+</body>
+</html>

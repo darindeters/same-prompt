@@ -57,6 +57,7 @@ Note: Claude, Codex and Grok ran this one under the earlier 15-minute cap. All f
 
 | Model | Tool | Built in | Play it |
 |---|---|---|---|
+| Terra (GPT-6.1 Terra) | Codex CLI 0.163.0 | 0:41 | [open](https://darindeters.github.io/same-prompt/blossom/terra/) |
 | Claude (Fable 5.1) | Claude Code 2.1.303 | 10:23 | [open](https://darindeters.github.io/same-prompt/blossom/claude/) |
 | Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:46 | [open](https://darindeters.github.io/same-prompt/blossom/codex/) |
 | Gemini (4 Argon) | Antigravity CLI 1.4.5 | 3:56 | [open](https://darindeters.github.io/same-prompt/blossom/gemini/) |
@@ -68,6 +69,7 @@ Note: Claude, Codex and Grok ran this one under the earlier 15-minute cap. All f
 
 | Model | Tool | Built in | Play it |
 |---|---|---|---|
+| Terra (GPT-6.1 Terra) | Codex CLI 0.163.0 | 0:55 | [open](https://darindeters.github.io/same-prompt/lighthouse/terra/) |
 | Claude (Fable 5.1) | Claude Code 2.1.303 | 7:00 | [open](https://darindeters.github.io/same-prompt/lighthouse/claude/) |
 | Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 3:21 | [open](https://darindeters.github.io/same-prompt/lighthouse/codex/) |
 | Gemini (4 Argon) | Antigravity CLI 1.4.5 | 4:53 | [open](https://darindeters.github.io/same-prompt/lighthouse/gemini/) |
@@ -79,12 +81,13 @@ Note: Claude, Codex and Grok ran this one under the earlier 15-minute cap. All f
 
 | Model | Tool | Built in | Play it |
 |---|---|---|---|
+| Terra (GPT-6.1 Terra) | Codex CLI 0.163.0 | 0:45 | [open](https://darindeters.github.io/same-prompt/fireworks/terra/) |
 | Claude (Fable 5.1) | Claude Code 2.1.303 | 4:09 | [open](https://darindeters.github.io/same-prompt/fireworks/claude/) |
 | Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:31 | [open](https://darindeters.github.io/same-prompt/fireworks/codex/) |
 | Gemini (4 Argon) | Antigravity CLI 1.4.5 | 2:59 | [open](https://darindeters.github.io/same-prompt/fireworks/gemini/) |
 | Grok (4.7) | Grok Build 1.0.62 | 11:51 | [open](https://darindeters.github.io/same-prompt/fireworks/grok/) |
 
-Note: Rebuilt on Oct 23, 2026 with the current prompt, which adds the vivid-colors line. The first builds, made without it, are in this repo's git history.
+Note: Rebuilt on Oct 23, 2026 with the current prompt, which adds the vivid-colors line. The first builds, made without it, are in this repo's git history. Terra (GPT-6.1 Terra) was added on Oct 27, 2026 as a speed check against Sol. Sol's time here is from its earlier run, not a side-by-side run.
 
 ## Coral Reef Aquarium
 
@@ -92,6 +95,7 @@ Note: Rebuilt on Oct 23, 2026 with the current prompt, which adds the vivid-colo
 
 | Model | Tool | Built in | Play it |
 |---|---|---|---|
+| Terra (GPT-6.1 Terra) | Codex CLI 0.163.0 | 0:52 | [open](https://darindeters.github.io/same-prompt/aquarium/terra/) |
 | Claude (Fable 5.1) | Claude Code 2.1.303 | 3:52 | [open](https://darindeters.github.io/same-prompt/aquarium/claude/) |
 | Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:50 | [open](https://darindeters.github.io/same-prompt/aquarium/codex/) |
 | Gemini (4 Argon) | Antigravity CLI 1.4.5 | 4:45 | [open](https://darindeters.github.io/same-prompt/aquarium/gemini/) |
@@ -105,12 +109,13 @@ Note: Rebuilt on Oct 23, 2026 with the current prompt, which adds the vivid-colo
 
 | Model | Tool | Built in | Play it |
 |---|---|---|---|
+| Terra (GPT-6.1 Terra) | Codex CLI 0.163.0 | 0:40 | [open](https://darindeters.github.io/same-prompt/volcano/terra/) |
 | Claude (Fable 5.1) | Claude Code 2.1.303 | 2:37 | [open](https://darindeters.github.io/same-prompt/volcano/claude/) |
 | Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:04 | [open](https://darindeters.github.io/same-prompt/volcano/codex/) |
 | Gemini (4 Argon) | Antigravity CLI 1.4.5 | 2:57 | [open](https://darindeters.github.io/same-prompt/volcano/gemini/) |
 | Grok (4.7) | Grok Build 1.0.62 | 18:08 | [open](https://darindeters.github.io/same-prompt/volcano/grok/) |
 
-Note: Rebuilt on Oct 23, 2026 with the current prompt, which adds the vivid-colors line. The first builds, made without it, are in this repo's git history.
+Note: Rebuilt on Oct 23, 2026 with the current prompt, which adds the vivid-colors line. The first builds, made without it, are in this repo's git history. Terra (GPT-6.1 Terra) was added on Oct 27, 2026 as a speed check against Sol. Sol's time here is from its earlier run, not a side-by-side run.
 
 ## Solar System
 
@@ -118,6 +123,7 @@ Note: Rebuilt on Oct 23, 2026 with the current prompt, which adds the vivid-colo
 
 | Model | Tool | Built in | Play it |
 |---|---|---|---|
+| Terra (GPT-6.1 Terra) | Codex CLI 0.163.0 | 0:45 | [open](https://darindeters.github.io/same-prompt/solar-system/terra/) |
 | Claude (Fable 5.1) | Claude Code 2.1.303 | 4:10 | [open](https://darindeters.github.io/same-prompt/solar-system/claude/) |
 | Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:20 | [open](https://darindeters.github.io/same-prompt/solar-system/codex/) |
 | Gemini (4 Argon) | Antigravity CLI 1.4.5 | 2:30 | [open](https://darindeters.github.io/same-prompt/solar-system/gemini/) |
@@ -165,10 +171,13 @@ Note: Rebuilt on Oct 23, 2026 with the current prompt, which adds the vivid-colo
 
 | Model | Tool | Built in | Play it |
 |---|---|---|---|
+| Terra (GPT-6.1 Terra) | Codex CLI 0.163.0 | 0:36 | [open](https://darindeters.github.io/same-prompt/lava-lamp/terra/) |
 | Claude (Fable 5.1) | Claude Code 2.1.303 | 2:11 | [open](https://darindeters.github.io/same-prompt/lava-lamp/claude/) |
 | Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 1:39 | [open](https://darindeters.github.io/same-prompt/lava-lamp/codex/) |
 | Gemini (4 Argon) | Antigravity CLI 1.4.5 | 3:18 | [open](https://darindeters.github.io/same-prompt/lava-lamp/gemini/) |
 | Grok (4.7) | Grok Build 1.0.62 | 21:34 | [open](https://darindeters.github.io/same-prompt/lava-lamp/grok/) |
+
+Note: Terra (GPT-6.1 Terra) was added on Oct 27, 2026 as a speed check against Sol. Sol's time here is from its earlier run, not a side-by-side run.
 
 ## Domino Chain Reaction
 
@@ -176,6 +185,7 @@ Note: Rebuilt on Oct 23, 2026 with the current prompt, which adds the vivid-colo
 
 | Model | Tool | Built in | Play it |
 |---|---|---|---|
+| Terra (GPT-6.1 Terra) | Codex CLI 0.163.0 | 0:30 | [open](https://darindeters.github.io/same-prompt/dominoes/terra/) |
 | Claude (Fable 5.1) | Claude Code 2.1.303 | 4:00 | [open](https://darindeters.github.io/same-prompt/dominoes/claude/) |
 | Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:03 | [open](https://darindeters.github.io/same-prompt/dominoes/codex/) |
 | Gemini (4 Argon) | Antigravity CLI 1.4.5 | 2:25 | [open](https://darindeters.github.io/same-prompt/dominoes/gemini/) |
@@ -187,10 +197,13 @@ Note: Rebuilt on Oct 23, 2026 with the current prompt, which adds the vivid-colo
 
 | Model | Tool | Built in | Play it |
 |---|---|---|---|
+| Terra (GPT-6.1 Terra) | Codex CLI 0.163.0 | 0:40 | [open](https://darindeters.github.io/same-prompt/aurora/terra/) |
 | Claude (Fable 5.1) | Claude Code 2.1.303 | 3:47 | [open](https://darindeters.github.io/same-prompt/aurora/claude/) |
 | Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:27 | [open](https://darindeters.github.io/same-prompt/aurora/codex/) |
 | Gemini (4 Argon) | Antigravity CLI 1.4.5 | 2:27 | [open](https://darindeters.github.io/same-prompt/aurora/gemini/) |
 | Grok (4.7) | Grok Build 1.0.62 | 12:21 | [open](https://darindeters.github.io/same-prompt/aurora/grok/) |
+
+Note: Terra (GPT-6.1 Terra) was added on Oct 27, 2026 as a speed check against Sol. Sol's time here is from its earlier run, not a side-by-side run.
 
 ## Pendulum Wave
 
@@ -198,10 +211,13 @@ Note: Rebuilt on Oct 23, 2026 with the current prompt, which adds the vivid-colo
 
 | Model | Tool | Built in | Play it |
 |---|---|---|---|
+| Terra (GPT-6.1 Terra) | Codex CLI 0.163.0 | 0:24 | [open](https://darindeters.github.io/same-prompt/pendulum-wave/terra/) |
 | Claude (Fable 5.1) | Claude Code 2.1.303 | 0:57 | [open](https://darindeters.github.io/same-prompt/pendulum-wave/claude/) |
 | Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 1:26 | [open](https://darindeters.github.io/same-prompt/pendulum-wave/codex/) |
 | Gemini (4 Argon) | Antigravity CLI 1.4.5 | 3:08 | [open](https://darindeters.github.io/same-prompt/pendulum-wave/gemini/) |
 | Grok (4.7) | Grok Build 1.0.62 | 17:11 | [open](https://darindeters.github.io/same-prompt/pendulum-wave/grok/) |
+
+Note: Terra (GPT-6.1 Terra) was added on Oct 27, 2026 as a speed check against Sol. Sol's time here is from its earlier run, not a side-by-side run.
 
 ## Tornado
 
@@ -209,6 +225,7 @@ Note: Rebuilt on Oct 23, 2026 with the current prompt, which adds the vivid-colo
 
 | Model | Tool | Built in | Play it |
 |---|---|---|---|
+| Terra (GPT-6.1 Terra) | Codex CLI 0.163.0 | 0:41 | [open](https://darindeters.github.io/same-prompt/tornado/terra/) |
 | Claude (Fable 5.1) | Claude Code 2.1.303 | 4:52 | [open](https://darindeters.github.io/same-prompt/tornado/claude/) |
 | Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:01 | [open](https://darindeters.github.io/same-prompt/tornado/codex/) |
 | Gemini (4 Argon) | Antigravity CLI 1.4.5 | 3:08 | [open](https://darindeters.github.io/same-prompt/tornado/gemini/) |
@@ -220,6 +237,7 @@ Note: Rebuilt on Oct 23, 2026 with the current prompt, which adds the vivid-colo
 
 | Model | Tool | Built in | Play it |
 |---|---|---|---|
+| Terra (GPT-6.1 Terra) | Codex CLI 0.163.0 | 0:42 | [open](https://darindeters.github.io/same-prompt/ink/terra/) |
 | Claude (Fable 5.1) | Claude Code 2.1.303 | 3:22 | [open](https://darindeters.github.io/same-prompt/ink/claude/) |
 | Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 1:58 | [open](https://darindeters.github.io/same-prompt/ink/codex/) |
 | Gemini (4 Argon) | Antigravity CLI 1.4.5 | 3:39 | [open](https://darindeters.github.io/same-prompt/ink/gemini/) |
@@ -231,6 +249,7 @@ Note: Rebuilt on Oct 23, 2026 with the current prompt, which adds the vivid-colo
 
 | Model | Tool | Built in | Play it |
 |---|---|---|---|
+| Terra (GPT-6.1 Terra) | Codex CLI 0.163.0 | 0:45 | [open](https://darindeters.github.io/same-prompt/neon-city/terra/) |
 | Claude (Fable 5.1) | Claude Code 2.1.303 | 7:28 | [open](https://darindeters.github.io/same-prompt/neon-city/claude/) |
 | Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:29 | [open](https://darindeters.github.io/same-prompt/neon-city/codex/) |
 | Gemini (4 Argon) | Antigravity CLI 1.4.5 | 2:40 | [open](https://darindeters.github.io/same-prompt/neon-city/gemini/) |
@@ -269,17 +288,6 @@ Note: Rebuilt on Oct 23, 2026 with the current prompt, which adds the vivid-colo
 | Gemini (4 Argon) | Antigravity CLI 1.4.5 | 3:06 | [open](https://darindeters.github.io/same-prompt/marble-music/gemini/) |
 | Grok (4.7) | Grok Build 1.0.62 | 30:00 | [open](https://darindeters.github.io/same-prompt/marble-music/grok/) |
 
-## If AIs Were People
-
-> Build an animated portrait of yourself, the AI model writing this file, showing how you would look if you were a person, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give yourself a signature sound that fits who you are, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
-
-| Model | Tool | Built in | Play it |
-|---|---|---|---|
-| Claude (Fable 5.1) | Claude Code 2.1.303 | 6:07 | [open](https://darindeters.github.io/same-prompt/self-portrait/claude/) |
-| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:05 | [open](https://darindeters.github.io/same-prompt/self-portrait/codex/) |
-| Gemini (4 Argon) | Antigravity CLI 1.4.5 | 3:10 | [open](https://darindeters.github.io/same-prompt/self-portrait/gemini/) |
-| Grok (4.7) | Grok Build 1.0.62 | 15:44 | [open](https://darindeters.github.io/same-prompt/self-portrait/grok/) |
-
 ## Overgrown House Restoration
 
 > Build an animated restoration of an old, overgrown, run-down house, as one self-contained file named index.html in this folder. Four AI coding agents will build it in turn, one stage each, and you go first. The page plays a 36-second restoration on a loop: from 0 to 6 seconds the house sits overgrown and run-down; 6 to 12 seconds is stage 1, clearing the overgrowth; 12 to 20 seconds is stage 2, repairing the roof and the walls; 20 to 28 seconds is stage 3, landscaping the garden and yard; 28 to 34 seconds is stage 4, the interior and the lights coming on; 34 to 36 seconds holds the finished house, then it loops. Build the house in its overgrown state and stage 1: tangled vines, tall weeds and debris being cleared away, with satisfying sound effects for each piece that comes off. Leave stages 2, 3 and 4 as clearly marked, empty sections of the code, with their time slots wired in, so the next builders can fill them. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Sound effects for your stage must be generated in code with the Web Audio API, with no audio files, and start as soon as the page loads, or on the first click or key press if the browser blocks that. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
@@ -314,17 +322,6 @@ Note: Rebuilt on Oct 23, 2026 with the current prompt, which adds the vivid-colo
 
 ## Bouncing Balls Play Für Elise
 
-> Build dozens of colorful balls bouncing inside a slowly rotating circle, where every bounce plays the next note of Beethoven's Für Elise, so the bounces play the melody, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it sound effects that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
-
-| Model | Tool | Built in | Play it |
-|---|---|---|---|
-| Claude (Fable 5.1) | Claude Code 2.1.303 | 2:07 | [open](https://darindeters.github.io/same-prompt/bounce-melody/claude/) |
-| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:08 | [open](https://darindeters.github.io/same-prompt/bounce-melody/codex/) |
-| Gemini (4 Argon) | Antigravity CLI 1.4.7 | 2:52 | [open](https://darindeters.github.io/same-prompt/bounce-melody/gemini/) |
-| Grok (4.7) | Grok Build 1.0.62 | 28:47 | [open](https://darindeters.github.io/same-prompt/bounce-melody/grok/) |
-
-## Bouncing Balls Play Für Elise
-
 > Build dozens of colorful balls bouncing inside a slowly rotating circle, where every bounce plays the next note of Beethoven's Für Elise, so the bounces play the melody, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it playful sound effects with personality that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
 
 | Model | Tool | Built in | Play it |
@@ -333,17 +330,6 @@ Note: Rebuilt on Oct 23, 2026 with the current prompt, which adds the vivid-colo
 | Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 1:33 | [open](https://darindeters.github.io/same-prompt/bounce-melody-playful/codex/) |
 | Gemini (4 Argon) | Antigravity CLI 1.4.7 | 4:02 | [open](https://darindeters.github.io/same-prompt/bounce-melody-playful/gemini/) |
 | Grok (4.7) | Grok Build 1.0.62 | 16:41 | [open](https://darindeters.github.io/same-prompt/bounce-melody-playful/grok/) |
-
-## Pendulum Wave With Sound
-
-> Build a pendulum wave of fifteen pendulums with slightly different lengths, swinging in and out of mesmerizing patterns, where each pendulum plays its own musical note at the bottom of every swing, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it sound effects that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
-
-| Model | Tool | Built in | Play it |
-|---|---|---|---|
-| Claude (Fable 5.1) | Claude Code 2.1.303 | 3:15 | [open](https://darindeters.github.io/same-prompt/pendulum-notes/claude/) |
-| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 1:24 | [open](https://darindeters.github.io/same-prompt/pendulum-notes/codex/) |
-| Gemini (4 Argon) | Antigravity CLI 1.4.7 | 1:33 | [open](https://darindeters.github.io/same-prompt/pendulum-notes/gemini/) |
-| Grok (4.7) | Grok Build 1.0.62 | 15:59 | [open](https://darindeters.github.io/same-prompt/pendulum-notes/grok/) |
 
 ## House Restoration
 
@@ -377,23 +363,13 @@ Note: Rebuilt on Oct 23, 2026 with the current prompt, which adds the vivid-colo
 |---|---|---|---|
 | Gemini (4 Argon) | Antigravity CLI 1.4.7 | 17:45 | [open](https://darindeters.github.io/same-prompt/restore-real-4/gemini/) |
 
-## Rubik's Cube With Sound
-
-> Build a 3D Rubik's cube that scrambles itself and then solves itself, one turn at a time, with a crisp, satisfying click on every turn, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it sound effects that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
-
-| Model | Tool | Built in | Play it |
-|---|---|---|---|
-| Claude (Fable 5.1) | Claude Code 2.1.303 | 5:32 | [open](https://darindeters.github.io/same-prompt/rubiks-sound/claude/) |
-| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:07 | [open](https://darindeters.github.io/same-prompt/rubiks-sound/codex/) |
-| Gemini (4 Argon) | Antigravity CLI 1.4.7 | 3:21 | [open](https://darindeters.github.io/same-prompt/rubiks-sound/gemini/) |
-| Grok (4.7) | Grok Build 1.0.62 | 17:17 | [open](https://darindeters.github.io/same-prompt/rubiks-sound/grok/) |
-
 ## Pumpkin Carving Contest
 
 > Build your entry in a jack-o'-lantern carving contest: a pumpkin being carved in real time, the knife cutting out a face of your own design and the pieces popping out, then a candle lighting it from inside so it glows in the dark, all within about twenty seconds, then the glowing jack-o'-lantern holds before the carving starts again, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it sound effects that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
 
 | Model | Tool | Built in | Play it |
 |---|---|---|---|
+| Terra (GPT-6.1 Terra) | Codex CLI 0.163.0 | 0:54 | [open](https://darindeters.github.io/same-prompt/pumpkin/terra/) |
 | Claude (Fable 5.1) | Claude Code 2.1.303 | 8:11 | [open](https://darindeters.github.io/same-prompt/pumpkin/claude/) |
 | Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 3:14 | [open](https://darindeters.github.io/same-prompt/pumpkin/codex/) |
 | Gemini (4 Argon) | Antigravity CLI 1.4.7 | 3:49 | [open](https://darindeters.github.io/same-prompt/pumpkin/gemini/) |
@@ -407,18 +383,31 @@ Note: Gemini's page throws an error on load (a firefly's radius goes negative) a
 
 | Model | Tool | Built in | Play it |
 |---|---|---|---|
+| Terra (GPT-6.1 Terra) | Codex CLI 0.163.0 | 1:25 | [open](https://darindeters.github.io/same-prompt/costume/terra/) |
 | Claude (Fable 5.1) | Claude Code 2.1.303 | 4:36 | [open](https://darindeters.github.io/same-prompt/costume/claude/) |
 | Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 3:48 | [open](https://darindeters.github.io/same-prompt/costume/codex/) |
 | Gemini (4 Argon) | Antigravity CLI 1.4.7 | 3:12 | [open](https://darindeters.github.io/same-prompt/costume/gemini/) |
 | Grok (4.7) | Grok Build 1.0.62 | 20:47 | [open](https://darindeters.github.io/same-prompt/costume/grok/) |
 
-## Singing Tesla Coil
+## Flying Roadster
 
-> Build a singing Tesla coil on a dark stage whose lightning arcs play Flight of the Bumblebee: every note is a buzzing electric arc, timed to the melody, with the arcs flashing and branching in time with the music, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests. It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. Use vivid, saturated colors that read well on a phone screen. Give it sound effects that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
+> Build a sleek two-seat electric sports car, a roadster, that takes off using rocket thrusters, as one self-contained file named index.html in this folder. Use plain HTML, CSS and JavaScript only: no libraries, fonts, images or network requests.
+
+The car starts parked on the ground. Its thrusters fire, it lifts straight up, holds a steady hover, flies a short loop through the air, and comes back down for a soft landing, then the sequence repeats. The thrusters must visibly fire whenever the car is in the air, and the car must never float with them off.
+
+Make it look real, like a high-end 3D render: real 3D depth, a moving camera, materials, lighting, shadows and reflections, and natural motion. Use vivid, saturated colors that read well on a phone screen, with the color coming from light and real materials, not flat cartoon fills. No cartoon or flat 2D illustration style and no outlines.
+
+Give it sound effects that match what happens on screen, generated in code with the Web Audio API, with no audio files. Start the sound as soon as the page loads, and if the browser blocks that, start it on the first click or key press.
+
+Also keep a global object, window.carState, updated every frame with the car's height above the ground in meters (height) and whether the thrusters are firing (thrusters, true or false).
+
+It must start animating as soon as the page loads, with no clicks or key presses, fill the whole browser window, and look its best in a square 1080 by 1080 window. No on-screen text, buttons or controls. Do not open a browser or start a server. Stop when the file is finished.
 
 | Model | Tool | Built in | Play it |
 |---|---|---|---|
-| Claude (Fable 5.1) | Claude Code 2.1.303 | 5:42 | [open](https://darindeters.github.io/same-prompt/tesla-coil/claude/) |
-| Codex (GPT-6.1 Sol) | Codex CLI 0.163.0 | 2:52 | [open](https://darindeters.github.io/same-prompt/tesla-coil/codex/) |
-| Gemini (4 Argon) | Antigravity CLI 1.4.7 | 2:54 | [open](https://darindeters.github.io/same-prompt/tesla-coil/gemini/) |
-| Grok (4.7) | Grok Build 1.0.62 | 24:12 | [open](https://darindeters.github.io/same-prompt/tesla-coil/grok/) |
+| Terra (GPT-6.1 Terra) | Codex CLI 0.166.0 | 1:09 | [open](https://darindeters.github.io/same-prompt/roadster/terra/) |
+| Claude (Fable 5.1) | Claude Code 2.1.303 | 27:59 | [open](https://darindeters.github.io/same-prompt/roadster/claude/) |
+| Gemini (4 Argon) | Antigravity CLI 1.4.12 | 9:16 | [open](https://darindeters.github.io/same-prompt/roadster/gemini/) |
+| Grok (4.7) | Grok Build 1.0.62 | 30:01 | [open](https://darindeters.github.io/same-prompt/roadster/grok/) |
+
+Note: Claude's first attempt lost its connection to the model API 16 minutes in (a dropped stream with no response) and ran out the 30-minute cap without writing a file. It was rerun once from an empty folder under the same rules, and that run is the one shown here. Gemini ran with a working shell. An earlier setup had blocked its commands, which is now fixed.
